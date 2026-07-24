@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Enclose</string>
+    <string name="tracking_channel_name">Walk tracking</string>
+    <string name="tracking_notification_title">Enclose is tracking your walk</string>
+</resources>

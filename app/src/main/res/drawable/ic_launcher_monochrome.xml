@@ -1,0 +1,23 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Single-tint version of the Enclose loop for themed (monochrome) icons.
+         The system recolors it, so everything here is one color + alpha. -->
+
+    <path
+        android:fillColor="#000000"
+        android:fillAlpha="0.25"
+        android:pathData="M54,31 L80,46 L72,77 L39,79 L28,51 Z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#000000"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M54,31 L80,46 L72,77 L39,79 L28,51 Z" />
+    <path
+        android:fillColor="#000000"
+        android:pathData="M54,31 m-5.5,0 a5.5,5.5 0 1,0 11,0 a5.5,5.5 0 1,0 -11,0 Z" />
+</vector>
