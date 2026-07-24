@@ -25,6 +25,7 @@ import kotlinx.coroutines.delay
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng as MlLatLng
+import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.location.LocationComponentActivationOptions
 import org.maplibre.android.location.modes.CameraMode
 import org.maplibre.android.location.modes.RenderMode
@@ -89,10 +90,15 @@ fun EncloseMap(
     onMapTap: ((LatLng) -> Unit)? = null,
     /** Bumping this value re-centers the camera on the user's position. */
     recenterTrigger: Int = 0,
+    /** Bumping this value fits the camera to [focusPoints]. */
+    focusTrigger: Int = 0,
+    /** Points to frame when [focusTrigger] changes (e.g. a territory's ring). */
+    focusPoints: List<LatLng> = emptyList(),
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnMapTap by rememberUpdatedState(onMapTap)
+    val currentFocusPoints by rememberUpdatedState(focusPoints)
 
     val mapView = remember { MapView(context).apply { onCreate(null) } }
     var overlays by remember { mutableStateOf<Overlays?>(null) }
@@ -196,6 +202,13 @@ fun EncloseMap(
         if (locationEnabled) flyToUser(m)
     }
 
+    // Fit the camera to a selected territory when the list requests focus.
+    LaunchedEffect(focusTrigger) {
+        if (focusTrigger == 0) return@LaunchedEffect
+        val m = map ?: return@LaunchedEffect
+        fitToPoints(m, currentFocusPoints)
+    }
+
     // Redraw overlays whenever the walk or the claimed set changes.
     LaunchedEffect(overlays, walk, territories) {
         val o = overlays ?: return@LaunchedEffect
@@ -216,6 +229,21 @@ private fun lastKnownLocation(map: MapLibreMap): MlLatLng? {
  * Poll briefly for a GPS fix and animate the camera to it at street-level zoom.
  * Returns true once it has focused, false if no fix arrived in time.
  */
+/** Animate the camera to frame a set of points (e.g. a claimed territory). */
+private fun fitToPoints(map: MapLibreMap, points: List<LatLng>) {
+    when {
+        points.size >= 2 -> {
+            val builder = LatLngBounds.Builder()
+            points.forEach { builder.include(MlLatLng(it.lat, it.lng)) }
+            map.animateCamera(CameraUpdateFactory.newLatLngBounds(builder.build(), FIT_PADDING_PX), FIT_ANIM_MS)
+        }
+        points.size == 1 -> {
+            val p = points.first()
+            map.animateCamera(CameraUpdateFactory.newLatLngZoom(MlLatLng(p.lat, p.lng), FOCUS_ZOOM), FIT_ANIM_MS)
+        }
+    }
+}
+
 private suspend fun flyToUser(map: MapLibreMap): Boolean {
     repeat(FOCUS_POLL_ATTEMPTS) {
         val loc = lastKnownLocation(map)
@@ -306,6 +334,10 @@ private const val FOCUS_POLL_INTERVAL_MS = 500L
 private const val ZOOM_STEP = 0.6
 private const val ZOOM_ANIM_MS = 120
 
+// Framing a selected territory.
+private const val FIT_PADDING_PX = 140
+private const val FIT_ANIM_MS = 800
+
 // --- GeoJSON builders --------------------------------------------------------
 
 private fun point(p: LatLng): Point = Point.fromLngLat(p.lng, p.lat)
@@ -347,7 +379,7 @@ private fun closeZoneFeature(walk: TrackingManager.WalkState): FeatureCollection
     if (!walk.isTracking || start == null) {
         return FeatureCollection.fromFeatures(emptyList())
     }
-    val ring = Geo.circlePolygon(start, TrackingManager.CLOSURE_RADIUS_METERS)
+    val ring = Geo.circlePolygon(start, TrackingManager.closureRadiusMeters)
         .map(::point)
         .toMutableList()
         .apply { add(first()) }

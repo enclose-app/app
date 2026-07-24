@@ -3,6 +3,7 @@ package io.app.enclose
 import android.app.Application
 import io.app.enclose.data.EncloseDatabase
 import io.app.enclose.data.TerritoryRepository
+import io.app.enclose.data.WalkRepository
 import io.app.enclose.sync.NoBackendSyncApi
 import io.app.enclose.sync.RemoteSyncApi
 import org.maplibre.android.MapLibre
@@ -16,6 +17,9 @@ class EncloseApp : Application() {
 
     val database by lazy { EncloseDatabase.get(this) }
     val repository by lazy { TerritoryRepository(database.territoryDao()) }
+
+    /** Every successful closed-loop walk, persisted locally (offline-first). */
+    val walkRepository by lazy { WalkRepository(database.walkDao()) }
 
     /** Swap [NoBackendSyncApi] for your real backend client when ready. */
     val remoteSyncApi: RemoteSyncApi by lazy { NoBackendSyncApi() }

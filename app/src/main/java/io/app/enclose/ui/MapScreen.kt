@@ -1,8 +1,18 @@
 package io.app.enclose.ui
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,12 +21,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.PlayArrow
@@ -24,11 +38,16 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -37,6 +56,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,17 +66,29 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.app.enclose.data.SyncStatus
 import io.app.enclose.data.Territory
+import io.app.enclose.geo.LatLng
 import io.app.enclose.tracking.TrackingManager
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.math.cos
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 @Composable
@@ -73,6 +105,10 @@ fun MapScreen(
     val scope = rememberCoroutineScope()
     // Incremented by the recenter button to signal EncloseMap to fly to the user.
     var recenterTick by remember { mutableStateOf(0) }
+    // Territory list sheet + map focus.
+    var showList by remember { mutableStateOf(false) }
+    var focusTick by remember { mutableStateOf(0) }
+    var focusPoints by remember { mutableStateOf<List<io.app.enclose.geo.LatLng>>(emptyList()) }
 
     // Celebrate each claimed loop.
     androidx.compose.runtime.LaunchedEffect(Unit) {
@@ -91,12 +127,15 @@ fun MapScreen(
                 hasLocationPermission = hasLocationPermission,
                 onMapTap = if (testMode) viewModel::addTestPoint else null,
                 recenterTrigger = recenterTick,
+                focusTrigger = focusTick,
+                focusPoints = focusPoints,
                 modifier = Modifier.fillMaxSize(),
             )
 
-            // Top-left: territory count.
+            // Top-left: territory count — tap to open the list of claims.
             TerritoryBadge(
                 count = territories.size,
+                onClick = { showList = true },
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(padding)
@@ -137,6 +176,20 @@ fun MapScreen(
                 onDiscard = viewModel::discardClaim,
             )
         }
+
+        if (showList) {
+            TerritoryListSheet(
+                territories = territories,
+                onDismiss = { showList = false },
+                onSelect = { territory ->
+                    focusPoints = territory.ring
+                    focusTick++
+                    showList = false
+                },
+                onRename = viewModel::renameTerritory,
+                onDelete = viewModel::deleteTerritory,
+            )
+        }
     }
 }
 
@@ -149,6 +202,30 @@ private val CLAIM_PALETTE = listOf(
     "#E53935", // red
     "#00897B", // teal
 )
+
+/** The flowing purple→amber gradient used to signal a ready / successful loop. */
+@Composable
+private fun rememberFlowingGradient(): Brush {
+    val transition = rememberInfiniteTransition(label = "flowGrad")
+    val shift by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1500, easing = LinearEasing), RepeatMode.Restart),
+        label = "shift",
+    )
+    val span = 480f
+    val x = shift * span
+    return Brush.linearGradient(
+        colors = listOf(
+            MaterialTheme.colorScheme.primary,
+            MaterialTheme.colorScheme.secondary,
+            MaterialTheme.colorScheme.primary,
+        ),
+        start = Offset(x - span, 0f),
+        end = Offset(x, 0f),
+        tileMode = TileMode.Mirror,
+    )
+}
 
 @Composable
 private fun ClaimDialog(
@@ -163,6 +240,7 @@ private fun ClaimDialog(
 
     Dialog(onDismissRequest = onDiscard) {
         Surface(
+            modifier = Modifier.border(BorderStroke(3.dp, rememberFlowingGradient()), shape),
             shape = shape,
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 6.dp,
@@ -338,9 +416,9 @@ private fun ColorSwatch(hex: String, selected: Boolean, onClick: () -> Unit) {
 private fun hexColor(hex: String): Color = Color(android.graphics.Color.parseColor(hex))
 
 @Composable
-private fun TerritoryBadge(count: Int, modifier: Modifier = Modifier) {
+private fun TerritoryBadge(count: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Surface(
-        modifier = modifier,
+        modifier = modifier.clickable(onClick = onClick),
         shape = RoundedCornerShape(50),
         color = MaterialTheme.colorScheme.primary,
         contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -359,6 +437,240 @@ private fun TerritoryBadge(count: Int, modifier: Modifier = Modifier) {
         }
     }
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TerritoryListSheet(
+    territories: List<Territory>,
+    onDismiss: () -> Unit,
+    onSelect: (Territory) -> Unit,
+    onRename: (String, String) -> Unit,
+    onDelete: (String) -> Unit,
+) {
+    var renaming by remember { mutableStateOf<Territory?>(null) }
+    var deleting by remember { mutableStateOf<Territory?>(null) }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 24.dp),
+        ) {
+            Text(
+                "Claimed territories",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "${territories.size} claimed · ${formatArea(territories.sumOf { it.areaSqMeters })} total",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+
+            if (territories.isEmpty()) {
+                Text(
+                    "No claims yet. Close a loop to claim your first territory!",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 24.dp),
+                )
+            } else {
+                LazyColumn(
+                    Modifier.heightIn(max = 460.dp),
+                ) {
+                    items(territories, key = { it.id }) { t ->
+                        TerritoryRow(
+                            territory = t,
+                            onClick = { onSelect(t) },
+                            onEdit = { renaming = t },
+                            onDelete = { deleting = t },
+                        )
+                        HorizontalDivider()
+                    }
+                }
+            }
+        }
+    }
+
+    renaming?.let { target ->
+        RenameDialog(
+            currentName = target.name,
+            onConfirm = { newName ->
+                onRename(target.id, newName)
+                renaming = null
+            },
+            onDismiss = { renaming = null },
+        )
+    }
+
+    deleting?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete territory?") },
+            text = {
+                Text("“${target.name}” will be removed for good. This can't be undone.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDelete(target.id)
+                        deleting = null
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+@Composable
+private fun RenameDialog(
+    currentName: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by remember { mutableStateOf(currentName) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename territory") },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Name") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(name) }, enabled = name.isNotBlank()) {
+                Text("Save")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** A tiny filled drawing of the territory's shape, scaled to fit the box. */
+@Composable
+private fun PolygonThumbnail(territory: Territory, modifier: Modifier = Modifier) {
+    val color = hexColor(territory.colorHex)
+    val rings = territory.polygons.flatten().ifEmpty { listOf(territory.ring) }
+    Canvas(modifier) {
+        val pts = rings.flatten()
+        if (pts.size < 3) return@Canvas
+        val minLat = pts.minOf { it.lat }
+        val maxLat = pts.maxOf { it.lat }
+        val minLng = pts.minOf { it.lng }
+        val maxLng = pts.maxOf { it.lng }
+        // Correct longitude for latitude so the shape isn't horizontally stretched.
+        val cosLat = cos(Math.toRadians((minLat + maxLat) / 2.0)).toFloat().coerceAtLeast(0.01f)
+        val spanLat = (maxLat - minLat).toFloat().coerceAtLeast(1e-7f)
+        val spanLng = ((maxLng - minLng).toFloat() * cosLat).coerceAtLeast(1e-7f)
+
+        val pad = size.minDimension * 0.16f
+        val boxW = size.width - 2 * pad
+        val boxH = size.height - 2 * pad
+        val scale = min(boxW / spanLng, boxH / spanLat)
+        val drawW = spanLng * scale
+        val drawH = spanLat * scale
+        val offX = pad + (boxW - drawW) / 2f
+        val offY = pad + (boxH - drawH) / 2f
+
+        fun project(p: LatLng): Offset {
+            val x = offX + ((p.lng - minLng).toFloat() * cosLat) * scale
+            val y = offY + ((maxLat - p.lat).toFloat()) * scale // flip: north is up
+            return Offset(x, y)
+        }
+
+        val path = Path().apply {
+            fillType = PathFillType.EvenOdd // holes render as holes
+            rings.forEach { ring ->
+                if (ring.size >= 3) {
+                    val first = project(ring.first())
+                    moveTo(first.x, first.y)
+                    ring.drop(1).forEach { val o = project(it); lineTo(o.x, o.y) }
+                    close()
+                }
+            }
+        }
+        drawPath(path, color.copy(alpha = 0.35f))
+        drawPath(path, color, style = Stroke(width = size.minDimension * 0.07f))
+    }
+}
+
+@Composable
+private fun TerritoryRow(
+    territory: Territory,
+    onClick: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        // Mini snapshot of the claimed shape.
+        Box(
+            Modifier
+                .size(44.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            PolygonThumbnail(territory, Modifier.fillMaxSize())
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                territory.name,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "${formatArea(territory.areaSqMeters)} · ${formatDistance(territory.perimeterMeters)} around · ${territory.ring.size} pts",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "${formatDate(territory.claimedAtEpochMs)} · ${syncLabel(territory.syncStatus)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        IconButton(onClick = onEdit) {
+            Icon(
+                Icons.Filled.Edit,
+                contentDescription = "Rename ${territory.name}",
+            )
+        }
+        IconButton(onClick = onDelete) {
+            Icon(
+                Icons.Filled.Delete,
+                contentDescription = "Delete ${territory.name}",
+                tint = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+}
+
+private fun syncLabel(status: SyncStatus): String =
+    if (status == SyncStatus.SYNCED) "Synced" else "Not synced"
+
+private fun formatDate(epochMs: Long): String =
+    SimpleDateFormat("MMM d, yyyy · HH:mm", Locale.getDefault()).format(Date(epochMs))
 
 @Composable
 private fun TestToggle(
@@ -397,9 +709,20 @@ private fun ControlPanel(
     onRecenter: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val shape = RoundedCornerShape(20.dp)
+    // When the loop is ready, flow the same gradient border used by the claim
+    // modal to invite the user to press Stop and claim.
+    val readyBorder = if (walk.readyToClose) {
+        Modifier.border(BorderStroke(3.dp, rememberFlowingGradient()), shape)
+    } else {
+        Modifier
+    }
+
     Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
+        modifier = modifier.fillMaxWidth().then(readyBorder),
+        shape = shape,
+        // Match the claim modal's background (surface + 6dp tonal overlay).
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
     ) {
         Column(
@@ -408,7 +731,7 @@ private fun ControlPanel(
         ) {
             if (testMode) {
                 Text(
-                    "Test mode on — tap the map to drop points. Tap back near your first point to close the loop.",
+                    "Test mode on — tap the map to drop points. Return near your start, then press Close loop.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.secondary,
                     fontWeight = FontWeight.Medium,
@@ -436,7 +759,15 @@ private fun ControlPanel(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (walk.isTracking) {
+                if (walk.isTracking && walk.readyToClose) {
+                    Button(
+                        onClick = onStop,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Filled.Flag, contentDescription = null)
+                        Text("  Close loop")
+                    }
+                } else if (walk.isTracking) {
                     Button(
                         onClick = onStop,
                         modifier = Modifier.weight(1f),
@@ -486,12 +817,14 @@ private fun LiveStats(walk: TrackingManager.WalkState) {
 
     // Explain exactly what still blocks closing, so it's never a mystery.
     val remainingPerimeter =
-        (TrackingManager.MIN_PERIMETER_METERS - walk.distanceMeters).roundToInt()
+        (TrackingManager.minPerimeterMeters - walk.distanceMeters).roundToInt()
     val hint = when {
+        walk.readyToClose ->
+            "You're back at the start — press Close loop to claim it!"
         walk.canCloseLoop ->
-            "Head into the start zone to claim — ${walk.distanceToStartMeters?.roundToInt() ?: 0} m away"
+            "Head into the start zone, then press Stop to claim — ${walk.distanceToStartMeters?.roundToInt() ?: 0} m away"
         !walk.hasLeftStart ->
-            "Move at least ${TrackingManager.LEAVE_START_RADIUS_METERS.roundToInt()} m from your start to begin the loop"
+            "Move at least ${TrackingManager.leaveStartRadiusMeters.roundToInt()} m from your start to begin the loop"
         else ->
             "Keep going — about $remainingPerimeter m more before you can close"
     }

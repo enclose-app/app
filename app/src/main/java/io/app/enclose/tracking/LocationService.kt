@@ -34,8 +34,8 @@ class LocationService : Service() {
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
             val loc = result.lastLocation ?: return
-            val closed = TrackingManager.onLocation(LatLng(loc.latitude, loc.longitude))
-            if (closed) stopSelf()
+            // Just record the fix; the loop is closed only when the user stops.
+            TrackingManager.onLocation(LatLng(loc.latitude, loc.longitude))
         }
     }
 

@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import io.app.enclose.EncloseApp
 import io.app.enclose.data.SyncStatus
 import io.app.enclose.data.Territory
+import io.app.enclose.data.Walk
 import io.app.enclose.geo.Geo
 import io.app.enclose.geo.GeoClip
 import io.app.enclose.geo.LatLng
@@ -20,11 +21,21 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import java.util.UUID
 
 class EncloseViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repository = (app as EncloseApp).repository
+    private val walkRepository = (app as EncloseApp).walkRepository
+
+    init {
+        // Persist EVERY successful closed loop the moment it closes — offline,
+        // in local SQLite — whether or not the user goes on to claim it.
+        viewModelScope.launch {
+            TrackingManager.pendingClaim.collect { pending ->
+                if (pending != null) walkRepository.saveClosed(pending.toWalk(claimed = false))
+            }
+        }
+    }
 
     /** Live walk state (path, distance, whether the loop can close). */
     val walk: StateFlow<TrackingManager.WalkState> = TrackingManager.walk
@@ -52,8 +63,9 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     fun confirmClaim(name: String, colorHex: String) {
         val pending = TrackingManager.pendingClaim.value ?: return
         val newRing = pending.ring
+        // Share the id with the persisted walk so the two are linked.
         val territory = Territory(
-            id = UUID.randomUUID().toString(),
+            id = pending.id,
             name = name.ifBlank { pending.suggestedName },
             ring = newRing,
             polygons = Territory.polygonsFromRing(newRing),
@@ -66,6 +78,8 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         val existing = territories.value
         TrackingManager.clearPending()
         viewModelScope.launch {
+            // Mark the already-recorded walk as claimed (race-safe upsert).
+            walkRepository.saveClaimed(pending.toWalk(claimed = true))
             // The new claim conquers overlapping land: carve it out of older claims.
             for (other in existing) {
                 if (!GeoClip.overlaps(other.polygons, newRing)) continue
@@ -92,14 +106,16 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     fun discardClaim() = TrackingManager.clearPending()
 
     fun startWalk() {
-        TrackingManager.startWalk()
+        // Test walks use relaxed thresholds so a tap-built loop can close.
+        TrackingManager.startWalk(relaxedThresholds = _testMode.value)
         // In test mode we feed points from map taps, so skip the GPS service.
         if (!_testMode.value) LocationService.start(getApplication())
     }
 
     fun stopWalk() {
         if (!_testMode.value) LocationService.stop(getApplication())
-        TrackingManager.cancelWalk()
+        // Claims the loop if it's ready to close; otherwise abandons the walk.
+        TrackingManager.finishWalk()
     }
 
     fun setTestMode(enabled: Boolean) {
@@ -115,7 +131,29 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         TrackingManager.onLocation(point)
     }
 
+    fun renameTerritory(id: String, newName: String) {
+        val name = newName.trim()
+        if (name.isEmpty()) return
+        val territory = territories.value.firstOrNull { it.id == id } ?: return
+        viewModelScope.launch {
+            // Name changed → re-sync it.
+            repository.claim(territory.copy(name = name, syncStatus = SyncStatus.PENDING))
+            SyncScheduler.requestSync(getApplication())
+        }
+    }
+
     fun deleteTerritory(id: String) {
         viewModelScope.launch { repository.delete(id) }
     }
+
+    private fun TrackingManager.PendingClaim.toWalk(claimed: Boolean) = Walk(
+        id = id,
+        ring = ring,
+        areaSqMeters = areaSqMeters,
+        perimeterMeters = perimeterMeters,
+        distanceToStartMeters = distanceToStartMeters,
+        closedAtEpochMs = closedAtEpochMs,
+        claimed = claimed,
+        syncStatus = SyncStatus.PENDING,
+    )
 }

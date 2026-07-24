@@ -6,11 +6,17 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 
-@Database(entities = [TerritoryEntity::class], version = 3, exportSchema = false)
+@Database(
+    entities = [TerritoryEntity::class, WalkEntity::class],
+    version = 4,
+    exportSchema = false,
+)
 @TypeConverters(Converters::class)
 abstract class EncloseDatabase : RoomDatabase() {
 
     abstract fun territoryDao(): TerritoryDao
+
+    abstract fun walkDao(): WalkDao
 
     companion object {
         @Volatile
