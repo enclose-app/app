@@ -4,11 +4,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import io.app.enclose.data.SyncStatus
 import io.app.enclose.data.Territory
+import io.app.enclose.geo.LatLng
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
@@ -24,6 +26,16 @@ import kotlin.math.roundToInt
 internal fun formatArea(sqMeters: Double): String =
     if (sqMeters >= 1_000_000) String.format(Locale.US, "%.2f km²", sqMeters / 1_000_000.0)
     else "${sqMeters.roundToInt()} m²"
+
+/**
+ * A coordinate as "37.98380° N, 23.72750° E". Five decimals is about a metre —
+ * past the point where more digits say anything a GPS fix can back up.
+ */
+internal fun formatCoordinates(point: LatLng): String {
+    val lat = String.format(Locale.US, "%.5f° %s", abs(point.lat), if (point.lat >= 0) "N" else "S")
+    val lng = String.format(Locale.US, "%.5f° %s", abs(point.lng), if (point.lng >= 0) "E" else "W")
+    return "$lat, $lng"
+}
 
 /** Distance as "1.24 km" past a km, otherwise whole "840 m". */
 internal fun formatDistance(meters: Double): String =

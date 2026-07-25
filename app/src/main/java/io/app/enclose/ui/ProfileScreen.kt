@@ -1,6 +1,7 @@
 package io.app.enclose.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -17,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.CropSquare
@@ -24,12 +27,16 @@ import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.material.icons.filled.Loop
+import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -38,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -48,10 +56,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import io.app.enclose.data.CityCoverage
 import io.app.enclose.data.Profile
 import io.app.enclose.ui.theme.PillShape
 import kotlin.math.roundToInt
@@ -68,6 +79,7 @@ fun ProfileScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf(false) }
+    var showCities by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -148,7 +160,25 @@ fun ProfileScreen(
                 }
             }
 
-            CoverageCard(percent = stats.cityCoveragePercent)
+            CoverageCard(
+                cities = stats.cities,
+                top = stats.topCity,
+                onOpenCities = { showCities = true },
+            )
+
+            // Only worth a section once something has actually fallen.
+            if (state.fallen.isNotEmpty()) {
+                SectionCard(title = "Fallen claims") {
+                    Text(
+                        "Ground you took back with a later walk. These left the map " +
+                            "but the walks that earned them are kept.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    state.fallen.forEach { fallen -> FallenClaimRow(fallen) }
+                }
+            }
 
             SectionCard(title = "Highlights") {
                 if (stats.territoryCount == 0) {
@@ -182,6 +212,13 @@ fun ProfileScreen(
 
             Spacer(Modifier.height(8.dp))
         }
+    }
+
+    if (showCities && state.stats.cities.isNotEmpty()) {
+        CityCoverageSheet(
+            cities = state.stats.cities,
+            onDismiss = { showCities = false },
+        )
     }
 
     // Guarded on a loaded profile so the fields are never pre-filled from null.
@@ -256,17 +293,75 @@ private fun ProfileHeader(
     }
 }
 
+/** One absorbed territory: what it was, how big, and what took it. */
+@Composable
+private fun FallenClaimRow(fallen: FallenClaim) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Filled.History,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                fallen.name,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                // The claim that took it may have been deleted since; say what
+                // happened either way rather than showing a dangling name.
+                fallen.takenByName
+                    ?.let { "Absorbed by $it · ${formatRelativeDay(fallen.conqueredAtEpochMs)}" }
+                    ?: "Absorbed ${formatRelativeDay(fallen.conqueredAtEpochMs)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(
+            formatArea(fallen.areaSqMeters),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 /**
- * How densely the walker has filled in the region they roam. The metric needs
- * explaining, so the explanation sits with it rather than in a tooltip.
+ * How densely the walker has filled in their strongest city, and the way into
+ * the rest. The metric needs explaining, so the explanation sits with it rather
+ * than in a tooltip.
  */
 @Composable
-private fun CoverageCard(percent: Double) {
+private fun CoverageCard(
+    cities: List<CityCoverage>,
+    top: CityCoverage?,
+    onOpenCities: () -> Unit,
+) {
+    val percent = top?.percent ?: 0.0
+    val hasCities = cities.isNotEmpty()
+    // Unplaced claims are a group, not a city, so they don't get counted as one.
+    val namedCityCount = cities.count { !it.isUnknown }
     Surface(
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.primaryContainer,
         contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                enabled = hasCities,
+                onClickLabel = "See every city you've walked",
+                role = Role.Button,
+                onClick = onOpenCities,
+            ),
     ) {
         Column(Modifier.padding(18.dp)) {
             Row(
@@ -274,7 +369,34 @@ private fun CoverageCard(percent: Double) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Region filled in", style = MaterialTheme.typography.titleMedium)
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Filled.LocationCity,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            // No claims yet, or none placed: don't name a city
+                            // we don't know — say what the number measures.
+                            top?.displayName ?: "Region filled in",
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (top != null) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "Filled in",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                .copy(alpha = 0.75f),
+                        )
+                    }
+                }
+                Spacer(Modifier.width(12.dp))
                 Text(
                     "${percent.roundToInt()}%",
                     style = MaterialTheme.typography.headlineSmall,
@@ -288,12 +410,134 @@ private fun CoverageCard(percent: Double) {
             )
             Spacer(Modifier.height(10.dp))
             Text(
-                "Your claimed area as a share of the box that contains all of your " +
-                    "claims — how completely you've taken the ground you roam.",
+                "Your claimed area there as a share of the box that contains your " +
+                    "claims in that city — how completely you've taken the ground " +
+                    "you roam.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
             )
+            if (hasCities) {
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (namedCityCount > 1) {
+                            "See all $namedCityCount cities"
+                        } else {
+                            "See the breakdown"
+                        },
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
         }
+    }
+}
+
+/**
+ * Every city the walker has claimed in, strongest first.
+ *
+ * Each city is measured against its own bounding box rather than one box around
+ * everything: two cities are mostly the countryside between them, which would
+ * drag every percentage towards zero and make travelling look like a loss.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CityCoverageSheet(
+    cities: List<CityCoverage>,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Cap the list instead of forcing the sheet tall, so two cities produce a
+    // compact sheet and a well-travelled walker still scrolls.
+    val listMaxHeight = LocalConfiguration.current.screenHeightDp.dp * 0.6f
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 16.dp),
+        ) {
+            Text("Where you've walked", style = MaterialTheme.typography.headlineSmall)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "How much of each city you've filled in.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(16.dp))
+
+            Column(
+                Modifier
+                    .heightIn(max = listMaxHeight)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                cities.forEach { city -> CityCoverageRow(city) }
+            }
+
+            if (cities.any { it.isUnknown }) {
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "Claims are placed when there's a connection. Anything walked " +
+                        "offline is named the next time you open this screen.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CityCoverageRow(city: CityCoverage) {
+    val accent = if (city.isUnknown) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        MaterialTheme.colorScheme.primary
+    }
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (city.isUnknown) Icons.Filled.TravelExplore else Icons.Filled.LocationCity,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    city.displayName,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "${city.percent.roundToInt()}%",
+                style = MaterialTheme.typography.titleMedium,
+                color = accent,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        ProgressTrack(progress = (city.percent / 100.0).toFloat(), color = accent)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "${city.territoryCount} ${if (city.territoryCount == 1) "claim" else "claims"} · " +
+                formatArea(city.claimedAreaSqMeters),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

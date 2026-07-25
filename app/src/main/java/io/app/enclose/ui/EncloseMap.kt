@@ -22,6 +22,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import io.app.enclose.data.MapCamera
 import io.app.enclose.data.Territory
 import io.app.enclose.geo.Geo
 import io.app.enclose.geo.LatLng
@@ -170,17 +171,28 @@ fun EncloseMap(
     topInsetPx: Int = 0,
     /** Which basemap to draw; changing it swaps the style in place. */
     basemap: BasemapStyle = BasemapStyle.SYSTEM,
+    /** Where to open the map, or null to start on the world view. */
+    initialCamera: MapCamera? = null,
+    /** Called when the camera settles, so the framing can be remembered. */
+    onCameraIdle: (MapCamera) -> Unit = {},
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnMapTap by rememberUpdatedState(onMapTap)
+    val currentOnCameraIdle by rememberUpdatedState(onCameraIdle)
+    // The listener below is registered once, so it has to read the latest value
+    // rather than close over the one this composition happened to start with.
+    val restoredCamera by rememberUpdatedState(initialCamera)
     val accents = LocalEncloseAccents.current
     val styleUrl = if (basemap.isDark(isSystemInDarkTheme())) STYLE_URL_DARK else STYLE_URL_LIGHT
 
     val mapView = remember { MapView(context).apply { onCreate(null) } }
     var overlays by remember { mutableStateOf<Overlays?>(null) }
     var style by remember { mutableStateOf<Style?>(null) }
-    var didInitialFocus by remember { mutableStateOf(false) }
+    // A restored camera counts as the initial focus already having happened:
+    // flying to the user a second later would throw away the framing the user
+    // themselves chose, which is the whole point of remembering it.
+    var didInitialFocus by remember { mutableStateOf(initialCamera != null) }
 
     // Forward Compose lifecycle to the MapView.
     DisposableEffect(lifecycleOwner) {
@@ -218,10 +230,39 @@ fun EncloseMap(
             if (controller.map == null) {
                 view.getMapAsync { mlMap ->
                     controller.map = mlMap
-                    mlMap.cameraPosition = CameraPosition.Builder()
-                        .target(MlLatLng(20.0, 0.0))
-                        .zoom(2.0)
-                        .build()
+                    // Open where the user left off. Without a saved camera this
+                    // is the world view, which the first GPS fix then replaces.
+                    val saved = restoredCamera
+                    mlMap.cameraPosition = if (saved != null) {
+                        CameraPosition.Builder()
+                            .target(MlLatLng(saved.lat, saved.lng))
+                            .zoom(saved.zoom)
+                            .bearing(saved.bearing)
+                            .tilt(saved.tilt)
+                            .build()
+                    } else {
+                        CameraPosition.Builder()
+                            .target(MlLatLng(WORLD_LAT, WORLD_LNG))
+                            .zoom(WORLD_ZOOM)
+                            .build()
+                    }
+                    // Fires once movement settles, however it was caused —
+                    // gesture, zoom button, wheel, or a programmatic fly-to.
+                    mlMap.addOnCameraIdleListener {
+                        val position = mlMap.cameraPosition
+                        val target = position.target
+                        if (target != null) {
+                            currentOnCameraIdle(
+                                MapCamera(
+                                    lat = target.latitude,
+                                    lng = target.longitude,
+                                    zoom = position.zoom,
+                                    bearing = position.bearing,
+                                    tilt = position.tilt,
+                                ),
+                            )
+                        }
+                    }
                     mlMap.addOnMapClickListener { point ->
                         val handler = currentOnMapTap
                         if (handler != null) {
@@ -446,6 +487,11 @@ private fun enableUserLocation(map: MapLibreMap, style: Style, context: android.
     // during map teardown and calls getSourceAs on an invalidated style → crash.
     component.renderMode = RenderMode.NORMAL
 }
+
+// Opening view before anything has been saved and before the first GPS fix.
+private const val WORLD_LAT = 20.0
+private const val WORLD_LNG = 0.0
+private const val WORLD_ZOOM = 2.0
 
 private const val FOCUS_ZOOM = 16.0
 private const val FOCUS_ANIM_MS = 1200

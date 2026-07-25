@@ -4,11 +4,11 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.app.enclose.EncloseApp
+import io.app.enclose.data.CityCoverage
+import io.app.enclose.data.Coverage
 import io.app.enclose.data.Profile
 import io.app.enclose.data.Territory
 import io.app.enclose.data.Walk
-import io.app.enclose.geo.Geo
-import io.app.enclose.geo.LatLng
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -25,16 +25,26 @@ class ProfileViewModel(app: Application) : AndroidViewModel(app) {
     private val profileRepository = (app as EncloseApp).profileRepository
     private val repository = (app as EncloseApp).repository
     private val walkRepository = (app as EncloseApp).walkRepository
+    private val cityTagger = (app as EncloseApp).cityTagger
+
+    init {
+        // Catch up on claims with no city yet — ones walked offline, or made
+        // before claims were placed at all. Cities are shown on this screen, so
+        // opening it is exactly when it's worth spending the lookups.
+        viewModelScope.launch { cityTagger.backfill() }
+    }
 
     val state: StateFlow<ProfileUiState> =
         combine(
             profileRepository.profile,
             repository.territories,
             walkRepository.walks,
-        ) { profile, territories, walks ->
+            repository.conquered,
+        ) { profile, territories, walks, conquered ->
             ProfileUiState(
                 profile = profile,
                 stats = computeStats(territories, walks),
+                fallen = fallenClaims(conquered, territories),
                 loading = false,
             )
         }.stateIn(
@@ -50,6 +60,27 @@ class ProfileViewModel(app: Application) : AndroidViewModel(app) {
 
     fun regenerateName() {
         viewModelScope.launch { profileRepository.regenerate() }
+    }
+
+    /**
+     * Conquered claims, resolved into something displayable. The claim that took
+     * each one may itself have fallen since, so names are looked up across both
+     * lists — a chain of absorptions still reads correctly.
+     */
+    private fun fallenClaims(
+        conquered: List<Territory>,
+        active: List<Territory>,
+    ): List<FallenClaim> {
+        val namesById = (active + conquered).associate { it.id to it.name }
+        return conquered.map { territory ->
+            FallenClaim(
+                id = territory.id,
+                name = territory.name,
+                areaSqMeters = territory.areaSqMeters,
+                conqueredAtEpochMs = territory.conqueredAtEpochMs ?: 0L,
+                takenByName = territory.conqueredById?.let { namesById[it] },
+            )
+        }
     }
 
     private fun computeStats(territories: List<Territory>, walks: List<Walk>): ProfileStats {
@@ -68,48 +99,28 @@ class ProfileViewModel(app: Application) : AndroidViewModel(app) {
             biggestTerritoryAreaSqMeters = biggest?.areaSqMeters ?: 0.0,
             longestWalkMeters = longestWalk?.perimeterMeters ?: 0.0,
             firstClaimEpochMs = firstClaim,
-            cityCoveragePercent = cityCoverage(territories, totalArea),
+            cities = Coverage.byCity(territories),
         )
-    }
-
-    /**
-     * "% of your city explored".
-     *
-     * "City" is undefined, so we use a concrete, self-explanatory proxy:
-     * coverage of your OWN claimed region. We take the geographic bounding box
-     * of every claim's points (min/max lat/lng, projected to meters at the mean
-     * latitude) as the "region you've been active in", and report claimed area
-     * as a fraction of that box. It answers "how densely have I filled in the
-     * area I roam?" and is always between 0 and 100%. Guarded against empty
-     * input and a zero-area box (single point / colinear claims).
-     */
-    private fun cityCoverage(territories: List<Territory>, totalArea: Double): Double {
-        val points: List<LatLng> = territories.flatMap { it.ring }
-        if (points.size < 3 || totalArea <= 0.0) return 0.0
-
-        val minLat = points.minOf { it.lat }
-        val maxLat = points.maxOf { it.lat }
-        val minLng = points.minOf { it.lng }
-        val maxLng = points.maxOf { it.lng }
-
-        // Bounding box as a closed ring, area via the same projection as claims.
-        val boxRing = listOf(
-            LatLng(minLat, minLng),
-            LatLng(minLat, maxLng),
-            LatLng(maxLat, maxLng),
-            LatLng(maxLat, minLng),
-        )
-        val boxArea = Geo.polygonAreaSqMeters(boxRing)
-        if (boxArea <= 0.0) return 0.0
-
-        return (totalArea / boxArea * 100.0).coerceIn(0.0, 100.0)
     }
 }
 
 data class ProfileUiState(
     val profile: Profile? = null,
     val stats: ProfileStats = ProfileStats(),
+    /** Claims a later walk swallowed whole, most recently fallen first. */
+    val fallen: List<FallenClaim> = emptyList(),
     val loading: Boolean = true,
+)
+
+/** A territory that was absorbed by a later claim, ready to display. */
+data class FallenClaim(
+    val id: String,
+    val name: String,
+    /** The area it held at the moment it fell. */
+    val areaSqMeters: Double,
+    val conqueredAtEpochMs: Long,
+    /** Name of the claim that took it, if that claim is still on record. */
+    val takenByName: String?,
 )
 
 data class ProfileStats(
@@ -121,6 +132,15 @@ data class ProfileStats(
     val biggestTerritoryAreaSqMeters: Double = 0.0,
     val longestWalkMeters: Double = 0.0,
     val firstClaimEpochMs: Long? = null,
-    /** Coverage of your claimed region's bounding box; see [ProfileViewModel]. */
-    val cityCoveragePercent: Double = 0.0,
-)
+    /** Per-city coverage, biggest first. See [Coverage] for what the % means. */
+    val cities: List<CityCoverage> = emptyList(),
+) {
+    /**
+     * The city the walker has taken the most ground in — their home turf.
+     * Prefers a named city over the unplaced group even when the unplaced
+     * claims are larger: a headline that reads "Unplaced claims" tells the user
+     * nothing while a real city name is sitting right underneath it.
+     */
+    val topCity: CityCoverage?
+        get() = cities.firstOrNull { !it.isUnknown } ?: cities.firstOrNull()
+}

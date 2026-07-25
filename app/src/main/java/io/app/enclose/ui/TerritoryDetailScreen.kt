@@ -61,8 +61,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import io.app.enclose.EncloseApp
 import io.app.enclose.data.Territory
 import io.app.enclose.export.GeoExporter
+import io.app.enclose.geo.Geo
+import io.app.enclose.geo.Place
 import io.app.enclose.ui.theme.PillShape
 import kotlinx.coroutines.launch
 import java.io.File
@@ -186,6 +189,8 @@ fun TerritoryDetailScreen(
                 Spacer(Modifier.height(6.dp))
                 SyncBadge(territory.syncStatus)
             }
+
+            LocationCard(territory)
 
             SectionCard(title = "Color") {
                 ColorPickerRow(
@@ -344,6 +349,68 @@ private fun TerritoryHero(territory: Territory, accent: Color) {
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * Where this loop was walked: the coordinates it encloses, and the place names
+ * for them when they can be had.
+ *
+ * Everything here is best effort and nothing blocks the screen. The coordinates
+ * are computed locally and always shown. The city already stored on the claim
+ * appears immediately, so an offline visit still says something; the live
+ * lookup then fills in area and country when the geocoder can reach them.
+ * Fields that don't resolve are left out rather than shown empty — the platform
+ * geocoder routinely names a country but not a city, and a row reading "—"
+ * would suggest the walk lacks something it doesn't.
+ */
+@Composable
+private fun LocationCard(territory: Territory) {
+    val context = LocalContext.current
+    val center = remember(territory.id) {
+        territory.ring.takeIf { it.isNotEmpty() }?.let { Geo.centroid(it) }
+    }
+
+    // Seeded from the claim's stored city so there's something to read before
+    // (and without) a network round trip.
+    var place by remember(territory.id) {
+        mutableStateOf(Place(city = territory.city.takeIf { it.isNotBlank() }))
+    }
+    var resolving by remember(territory.id) { mutableStateOf(center != null) }
+
+    LaunchedEffect(territory.id) {
+        val point = center ?: return@LaunchedEffect
+        val resolved = (context.applicationContext as EncloseApp)
+            .cityResolver
+            .resolvePlace(point)
+        // Keep the stored city if the lookup came back without one.
+        if (resolved != null) place = resolved.copy(city = resolved.city ?: place.city)
+        resolving = false
+    }
+
+    SectionCard(title = "Location") {
+        if (center != null) {
+            DetailRow("Coordinates", formatCoordinates(center))
+        }
+        place.city?.let { DetailRow("City", it) }
+        place.area?.let { DetailRow("Area", it) }
+        place.country?.let {
+            DetailRow("Country", place.countryCode?.let { code -> "$it ($code)" } ?: it)
+        }
+
+        if (place.isEmpty) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (resolving) {
+                    "Looking up the place names…"
+                } else {
+                    "Place names need a connection — they'll fill in next time " +
+                        "you open this with one."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

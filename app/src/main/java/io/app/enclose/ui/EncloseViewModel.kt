@@ -1,15 +1,14 @@
 package io.app.enclose.ui
 
 import android.app.Application
-import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.app.enclose.EncloseApp
+import io.app.enclose.data.Conquest
+import io.app.enclose.data.MapCamera
 import io.app.enclose.data.SyncStatus
 import io.app.enclose.data.Territory
 import io.app.enclose.data.Walk
-import io.app.enclose.geo.Geo
-import io.app.enclose.geo.GeoClip
 import io.app.enclose.geo.LatLng
 import io.app.enclose.sync.SyncScheduler
 import io.app.enclose.tracking.ActivityType
@@ -22,16 +21,19 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class EncloseViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repository = (app as EncloseApp).repository
     private val walkRepository = (app as EncloseApp).walkRepository
+    private val cityTagger = (app as EncloseApp).cityTagger
 
-    /** Small bag of UI-only preferences (what the user has already been shown). */
-    private val prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    /** Everything remembered between launches. See [UserSettings]. */
+    private val settings = (app as EncloseApp).settings
 
     init {
         // Persist EVERY successful closed loop the moment it closes — offline,
@@ -72,14 +74,14 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
      * single tap. It tightens the motion checks — see [ActivityType].
      */
     private val _activityType = MutableStateFlow(
-        runCatching { ActivityType.valueOf(prefs.getString(KEY_ACTIVITY, null) ?: "") }
+        runCatching { ActivityType.valueOf(settings.activityTypeName ?: "") }
             .getOrDefault(ActivityType.WALK),
     )
     val activityType: StateFlow<ActivityType> = _activityType.asStateFlow()
 
     fun setActivityType(type: ActivityType) {
         _activityType.value = type
-        prefs.edit().putString(KEY_ACTIVITY, type.name).apply()
+        settings.activityTypeName = type.name
     }
 
     /**
@@ -88,18 +90,47 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
      * separate concern from whether they want a dark app.
      */
     private val _basemapStyle = MutableStateFlow(
-        runCatching { BasemapStyle.valueOf(prefs.getString(KEY_BASEMAP, null) ?: "") }
+        runCatching { BasemapStyle.valueOf(settings.basemapStyleName ?: "") }
             .getOrDefault(BasemapStyle.SYSTEM),
     )
     val basemapStyle: StateFlow<BasemapStyle> = _basemapStyle.asStateFlow()
 
     fun setBasemapStyle(style: BasemapStyle) {
         _basemapStyle.value = style
-        prefs.edit().putString(KEY_BASEMAP, style.name).apply()
+        settings.basemapStyleName = style.name
+    }
+
+    /**
+     * Where the map should open, read fresh at each call rather than cached.
+     *
+     * A rotation destroys and rebuilds the map, so it re-reads this — a value
+     * snapshotted at construction would send the user back to wherever they
+     * were when the app launched instead of where they just panned to. It is
+     * deliberately not a flow: the map owns the live camera and reports it back
+     * through [saveCamera], and feeding it back in would fight the gesture that
+     * just moved it.
+     */
+    fun lastCamera(): MapCamera? = settings.camera
+
+    /** Remember the framing the user panned/zoomed to. */
+    fun saveCamera(camera: MapCamera) {
+        settings.camera = camera
+    }
+
+    /** How the territory list is ordered. Remembered between launches. */
+    private val _territorySort = MutableStateFlow(
+        runCatching { TerritorySort.valueOf(settings.territorySortName ?: "") }
+            .getOrDefault(TerritorySort.RECENT),
+    )
+    val territorySort: StateFlow<TerritorySort> = _territorySort.asStateFlow()
+
+    fun setTerritorySort(sort: TerritorySort) {
+        _territorySort.value = sort
+        settings.territorySortName = sort.name
     }
 
     /** Test mode: tap the map to inject points instead of walking with GPS. */
-    private val _testMode = MutableStateFlow(false)
+    private val _testMode = MutableStateFlow(settings.testMode)
     val testMode: StateFlow<Boolean> = _testMode.asStateFlow()
 
     /**
@@ -121,7 +152,7 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
      * launch — the walk-a-loop-to-claim-it mechanic isn't discoverable from a map
      * with a Start button — and is reachable from the map menu afterwards.
      */
-    private val _showHowItWorks = MutableStateFlow(!prefs.getBoolean(KEY_SEEN_INTRO, false))
+    private val _showHowItWorks = MutableStateFlow(!settings.seenIntro)
     val showHowItWorks: StateFlow<Boolean> = _showHowItWorks.asStateFlow()
 
     fun openHowItWorks() {
@@ -130,7 +161,7 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
 
     fun dismissHowItWorks() {
         _showHowItWorks.value = false
-        prefs.edit().putBoolean(KEY_SEEN_INTRO, true).apply()
+        settings.seenIntro = true
     }
 
     /** User confirmed the modal: persist with their chosen name/color and sync. */
@@ -154,25 +185,19 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             // Mark the already-recorded walk as claimed (race-safe upsert).
             walkRepository.saveClaimed(pending.toWalk(claimed = true))
-            // The new claim conquers overlapping land: carve it out of older claims.
-            for (other in existing) {
-                if (!GeoClip.overlaps(other.polygons, newRing)) continue
-                val reduced = GeoClip.subtract(other.polygons, newRing)
-                if (reduced.isEmpty()) {
-                    repository.delete(other.id)
-                } else {
-                    repository.claim(
-                        other.copy(
-                            polygons = reduced,
-                            areaSqMeters = Geo.areaOfPolygons(reduced),
-                            syncStatus = SyncStatus.PENDING,
-                        ),
-                    )
-                }
+            // JTS boolean geometry runs once per existing claim and gets slower
+            // as the map fills up — far too much to put on the frame clock.
+            val carved = withContext(Dispatchers.Default) {
+                Conquest.carve(existing, territory, territory.claimedAtEpochMs)
             }
-            repository.claim(territory)
+            // One transaction: carving is justified by the new claim, so the two
+            // must never be able to land apart.
+            repository.applyClaim(territory, carved)
             SyncScheduler.requestSync(getApplication())
             _claimEvents.tryEmit(territory)
+            // Name the city afterwards: it needs a network, and the claim — the
+            // thing the user actually walked for — must never wait on one.
+            cityTagger.tag(territory.id, newRing)
         }
     }
 
@@ -207,6 +232,7 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setTestMode(enabled: Boolean) {
         _testMode.value = enabled
+        settings.testMode = enabled
         // Leaving test mode abandons any tap-built walk in progress.
         if (!enabled && walk.value.isTracking) TrackingManager.cancelWalk()
     }
@@ -259,13 +285,6 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
             repository.claim(territory.copy(colorHex = colorHex, syncStatus = SyncStatus.PENDING))
             SyncScheduler.requestSync(getApplication())
         }
-    }
-
-    private companion object {
-        const val PREFS_NAME = "enclose_ui"
-        const val KEY_SEEN_INTRO = "seen_intro"
-        const val KEY_ACTIVITY = "activity_type"
-        const val KEY_BASEMAP = "basemap_style"
     }
 
     private fun TrackingManager.PendingClaim.toWalk(claimed: Boolean) = Walk(

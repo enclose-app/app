@@ -44,6 +44,14 @@ kotlin {
     }
 }
 
+ksp {
+    // Room writes each schema version to app/schemas. These are checked in on
+    // purpose: the database carries walked territories and ships no destructive
+    // fallback, so every future migration has to be written against the real
+    // previous schema rather than a remembered one.
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 dependencies {
     implementation(libs.core.ktx)
     implementation(libs.activity.compose)

@@ -50,8 +50,8 @@ import androidx.compose.ui.unit.dp
 import io.app.enclose.data.Territory
 import io.app.enclose.ui.theme.PillShape
 
-/** Ways to order the claim list. */
-private enum class TerritorySort(val label: String) {
+/** Ways to order the claim list. Persisted by name — see [io.app.enclose.data.UserSettings]. */
+enum class TerritorySort(val label: String) {
     RECENT("Recent"),
     LARGEST("Largest"),
     NAME("A–Z"),
@@ -72,6 +72,9 @@ private const val SEARCH_THRESHOLD = 6
 @Composable
 fun TerritoryListSheet(
     territories: List<Territory>,
+    /** Hoisted so the choice outlives the sheet — and the app session. */
+    sort: TerritorySort,
+    onSortChange: (TerritorySort) -> Unit,
     onDismiss: () -> Unit,
     onSelect: (Territory) -> Unit,
     onShowOnMap: (Territory) -> Unit,
@@ -80,8 +83,9 @@ fun TerritoryListSheet(
 ) {
     var renaming by remember { mutableStateOf<Territory?>(null) }
     var deleting by remember { mutableStateOf<Territory?>(null) }
+    // The search box stays local on purpose: a query is about the moment, not a
+    // preference, and reopening the list pre-filtered would hide claims.
     var query by rememberSaveable { mutableStateOf("") }
-    var sort by rememberSaveable { mutableStateOf(TerritorySort.RECENT) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val now = rememberNow()
 
@@ -162,7 +166,7 @@ fun TerritoryListSheet(
                 TerritorySort.entries.forEach { option ->
                     FilterChip(
                         selected = sort == option,
-                        onClick = { sort = option },
+                        onClick = { onSortChange(option) },
                         label = { Text(option.label) },
                         shape = PillShape,
                         // Brand purple for selection; the default amber-ish

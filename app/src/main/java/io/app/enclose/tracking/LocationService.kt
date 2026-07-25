@@ -1,5 +1,6 @@
 package io.app.enclose.tracking
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,6 +8,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 import android.os.SystemClock
@@ -18,9 +20,15 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import io.app.enclose.EncloseApp
 import io.app.enclose.MainActivity
 import io.app.enclose.R
 import io.app.enclose.geo.LatLng
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 /**
  * Foreground service that records the walk. It keeps a high-accuracy location
@@ -31,6 +39,17 @@ import io.app.enclose.geo.LatLng
 class LocationService : Service() {
 
     private lateinit var fused: FusedLocationProviderClient
+
+    /** Cancelled in [onDestroy], so nothing outlives the service. */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    private val progressRepository by lazy {
+        (application as EncloseApp).walkProgressRepository
+    }
+    private val recorder by lazy { WalkProgressRecorder(progressRepository) }
+
+    /** Guards against a second onStartCommand re-running the setup. */
+    private var started = false
 
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -68,20 +87,104 @@ class LocationService : Service() {
             buildNotification(),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
         )
-        requestUpdates()
+
+        if (!started) {
+            started = true
+            scope.launch { beginRecording() }
+        }
         return START_STICKY
     }
 
-    @Suppress("MissingPermission") // Permission is checked before the service is started.
-    private fun requestUpdates() {
+    /**
+     * Start (or resume) recording. Because this service is START_STICKY, the
+     * system restarts it after a low-memory kill — and the [TrackingManager] it
+     * feeds is process state, so it comes back empty. Without the restore below,
+     * every fix after such a restart was silently dropped by the manager's
+     * `isTracking` guard while the notification still said "recording": GPS
+     * draining, nothing being kept, an hour of walking lost with no error.
+     */
+    private suspend fun beginRecording() {
+        if (!TrackingManager.walk.value.isTracking) {
+            val resumed = restoreInterruptedWalk()
+            if (!resumed) {
+                // Nothing to record. Showing a recording notification and burning
+                // battery for fixes nobody will keep is worse than stopping.
+                stopSelf()
+                return
+            }
+        }
+        if (!requestUpdates()) {
+            stopSelf()
+            return
+        }
+        recorder.record(TrackingManager.walk)
+    }
+
+    /** True if a walk left behind by a dead process was picked back up. */
+    private suspend fun restoreInterruptedWalk(): Boolean {
+        val saved = progressRepository.load() ?: return false
+        val activityType = runCatching { ActivityType.valueOf(saved.activityTypeName) }
+            .getOrDefault(ActivityType.WALK)
+        val restored = TrackingManager.restore(
+            path = saved.path,
+            startedAtMs = saved.startedAtEpochMs,
+            activityType = activityType,
+        )
+        if (!restored) {
+            progressRepository.clear()
+            return false
+        }
+        // The path is already on disk; don't write it a second time.
+        recorder.adopt(saved.path.size)
+        return true
+    }
+
+    /**
+     * Ask for fixes, reporting whether it worked.
+     *
+     * Permission is checked here rather than trusted from the caller: a
+     * START_STICKY restart re-enters this with no UI involved, and the user can
+     * revoke location from system settings mid-walk. Either way the request
+     * throws, and an uncaught SecurityException would take the service down.
+     */
+    // Lint can't follow the check into hasLocationPermission(), and the
+    // runCatching below covers the race it's really warning about.
+    @Suppress("MissingPermission")
+    private fun requestUpdates(): Boolean {
+        if (!hasLocationPermission()) return false
         val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, UPDATE_INTERVAL_MS)
             .setMinUpdateIntervalMillis(MIN_UPDATE_INTERVAL_MS)
             .setMinUpdateDistanceMeters(0f)
             .build()
-        fused.requestLocationUpdates(request, callback, mainLooper)
+        return runCatching {
+            fused.requestLocationUpdates(request, callback, mainLooper)
+        }.isSuccess
     }
 
+    private fun hasLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+            ) == PackageManager.PERMISSION_GRANTED
+
     override fun onDestroy() {
+        // A stopped service with no walk in progress means the walk ended
+        // normally — the ViewModel stops the service and finishes the walk in
+        // whichever order, and the recorder's own tidy-up may be cancelled by
+        // scope.cancel() below before it runs. Clearing on a scope that outlives
+        // the service is what stops a finished walk being offered back as an
+        // unfinished one. If a walk *is* still in progress, this is a kill we
+        // want to survive, so the record stays exactly where it is.
+        if (!TrackingManager.walk.value.isTracking) {
+            (application as EncloseApp).applicationScope.launch {
+                progressRepository.clear()
+            }
+        }
+        scope.cancel()
         fused.removeLocationUpdates(callback)
         ActivityMonitor.stop(this)
         super.onDestroy()

@@ -22,6 +22,12 @@ data class TerritoryEntity(
     val colorHex: String,
     /** Free-form user notes about this territory. */
     val notes: String = "",
+    /** Reverse-geocoded city, or blank until it resolves. */
+    val city: String = "",
+    /** Set when a later claim swallowed this one whole; null while it stands. */
+    val conqueredAtEpochMs: Long? = null,
+    /** The territory that took this one. */
+    val conqueredById: String? = null,
     val syncStatus: SyncStatus,
 ) {
     fun toDomain(): Territory = Territory(
@@ -36,6 +42,9 @@ data class TerritoryEntity(
         // so any stored legacy-green value is an old auto-default — show it purple.
         colorHex = if (colorHex == LEGACY_GREEN) Territory.DEFAULT_COLOR else colorHex,
         notes = notes,
+        city = city,
+        conqueredAtEpochMs = conqueredAtEpochMs,
+        conqueredById = conqueredById,
         syncStatus = syncStatus,
     )
 
@@ -53,6 +62,9 @@ data class TerritoryEntity(
             claimedAtEpochMs = t.claimedAtEpochMs,
             colorHex = t.colorHex,
             notes = t.notes,
+            city = t.city,
+            conqueredAtEpochMs = t.conqueredAtEpochMs,
+            conqueredById = t.conqueredById,
             syncStatus = t.syncStatus,
         )
 

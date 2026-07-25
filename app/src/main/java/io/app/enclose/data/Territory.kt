@@ -26,8 +26,25 @@ data class Territory(
     val colorHex: String = DEFAULT_COLOR,
     /** Free-form user notes about this territory (shown on the detail screen). */
     val notes: String = "",
+    /**
+     * City this claim sits in, resolved by reverse geocoding after the claim is
+     * saved. Blank until it resolves (offline, or no geocoder on the device) —
+     * claiming never waits on it.
+     */
+    val city: String = "",
+    /**
+     * When a later claim swallowed this one whole, if it has. Conquered
+     * territories leave the map but are never deleted — [ring] and the geometry
+     * frozen at the moment they fell stay as a record of the walk.
+     */
+    val conqueredAtEpochMs: Long? = null,
+    /** The territory that took this one, when [conqueredAtEpochMs] is set. */
+    val conqueredById: String? = null,
     val syncStatus: SyncStatus = SyncStatus.PENDING,
 ) {
+    /** True while this claim is still standing — i.e. still on the map. */
+    val isActive: Boolean get() = conqueredAtEpochMs == null
+
     companion object {
         const val DEFAULT_COLOR = "#7B1FA2"
 

@@ -11,12 +11,28 @@ import kotlinx.coroutines.flow.map
  */
 class TerritoryRepository(private val dao: TerritoryDao) {
 
+    /** Claims still standing. Conquered ones are excluded — see [conquered]. */
     val territories: Flow<List<Territory>> =
-        dao.observeAll().map { list -> list.map { it.toDomain() } }
+        dao.observeActive().map { list -> list.map { it.toDomain() } }
+
+    /** Claims swallowed whole by a later walk, most recently fallen first. */
+    val conquered: Flow<List<Territory>> =
+        dao.observeConquered().map { list -> list.map { it.toDomain() } }
 
     /** Persist a newly claimed territory (starts life as PENDING sync). */
     suspend fun claim(territory: Territory) {
         dao.upsert(TerritoryEntity.fromDomain(territory))
+    }
+
+    /**
+     * Persist a new claim and everything it took ground from, atomically.
+     * See [TerritoryDao.applyClaim] for why these can't be separate writes.
+     */
+    suspend fun applyClaim(claim: Territory, carved: List<Territory>) {
+        dao.applyClaim(
+            claim = TerritoryEntity.fromDomain(claim),
+            carved = carved.map { TerritoryEntity.fromDomain(it) },
+        )
     }
 
     suspend fun delete(id: String) = dao.delete(id)
@@ -24,4 +40,9 @@ class TerritoryRepository(private val dao: TerritoryDao) {
     suspend fun pending(): List<Territory> = dao.pendingSync().map { it.toDomain() }
 
     suspend fun markSynced(ids: List<String>) = dao.markSynced(ids)
+
+    /** Claims whose city hasn't been resolved yet (see [io.app.enclose.geo.CityResolver]). */
+    suspend fun withoutCity(): List<Territory> = dao.withoutCity().map { it.toDomain() }
+
+    suspend fun setCity(id: String, city: String) = dao.updateCity(id, city)
 }

@@ -149,6 +149,7 @@ fun MapScreen(
     val showHowItWorks by viewModel.showHowItWorks.collectAsStateWithLifecycle()
     val voidedWalk by viewModel.voidedWalk.collectAsStateWithLifecycle()
     val basemapStyle by viewModel.basemapStyle.collectAsStateWithLifecycle()
+    val territorySort by viewModel.territorySort.collectAsStateWithLifecycle()
     val profile by profileViewModel.state.collectAsStateWithLifecycle()
 
     val snackbarHost = remember { SnackbarHostState() }
@@ -222,6 +223,10 @@ fun MapScreen(
             bottomInsetPx = panelHeightPx,
             topInsetPx = topBarHeightPx,
             basemap = basemapStyle,
+            // Read once per composition: stable while the map lives, refreshed
+            // when a rotation rebuilds it.
+            initialCamera = remember { viewModel.lastCamera() },
+            onCameraIdle = viewModel::saveCamera,
             modifier = Modifier.fillMaxSize(),
         )
 
@@ -447,6 +452,8 @@ fun MapScreen(
     if (showList) {
         TerritoryListSheet(
             territories = territories,
+            sort = territorySort,
+            onSortChange = viewModel::setTerritorySort,
             onDismiss = { showList = false },
             onSelect = { territory ->
                 showList = false

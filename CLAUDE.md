@@ -25,8 +25,11 @@ Gradle's configuration cache is on (`gradle.properties`); adding
 configuration-phase side effects to build scripts will break it. `minSdk` is 35,
 so a device/emulator on API 35+ is required.
 
-`MotionGateTest` is the only meaningful test. `ExampleUnitTest.java` and
-`ExampleInstrumentedTest.java` are leftover template files.
+Unit tests cover the pure logic that decides what happens to user data:
+`MotionGateTest` (anti-cheat thresholds), `ConquestTest` (what a new claim does
+to older ones), `CoverageTest` (per-city percentages), `TrackingManagerRestoreTest`
+and `WalkProgressRecorderTest` (surviving process death). `ExampleUnitTest.java`
+and `ExampleInstrumentedTest.java` are leftover template files.
 
 ## Architecture
 
@@ -67,9 +70,49 @@ Two consequences to preserve when editing:
   decides whether to claim it (`init` block collecting `pendingClaim`).
   `confirmClaim` then re-saves it with `claimed = true` using the *same id*,
   which is also the `Territory` id — walks and territories are linked by id.
-- **`confirmClaim` carves overlaps**: for every existing territory that
-  `GeoClip.overlaps` the new ring, it subtracts the ring; an emptied territory is
-  deleted, a reduced one is re-saved with recomputed area and `PENDING` status.
+- **`confirmClaim` carves overlaps** via `Conquest.carve` (pure, tested): a
+  partly-covered territory is re-saved with reduced geometry and recomputed area;
+  a completely covered one is marked **conquered**, not deleted. The whole result
+  is written with `repository.applyClaim`, which is one Room `@Transaction` —
+  carving is justified by the new claim, so the two must never land apart. The
+  JTS work runs on `Dispatchers.Default`; it is far too slow for the frame clock.
+
+### Nothing the user walked for is ever destroyed
+
+Three separate paths used to lose territories, and all three are now closed.
+Treat this as a standing constraint rather than a past fix:
+
+- **Conquest archives, never deletes.** A swallowed claim keeps its `ring` and
+  the geometry it held when it fell, plus `conqueredAtEpochMs`/`conqueredById`.
+  `observeActive()` hides it from the map; `observeConquered()` feeds the
+  "Fallen claims" history on the profile screen. Only an explicit user delete
+  (which has an undo) removes a row.
+- **The claim write is atomic** — see `applyClaim` above.
+- **The walk in progress is on disk** — see below.
+
+A walked territory can't be re-created from the couch, which is what makes these
+different from ordinary state. Weigh any change here accordingly.
+
+### Surviving process death
+
+`LocationService` is `START_STICKY`, so the system restarts it after a
+low-memory kill — but `TrackingManager` is an in-memory `object`, so it comes
+back empty and its `isTracking` guard silently drops every subsequent fix while
+the notification still claims to be recording.
+
+`WalkProgressRecorder` therefore mirrors the path to `walk_progress` /
+`walk_progress_points` as it is walked (append-only: one small insert per fix,
+so cost doesn't grow with the length of the walk). It watches `TrackingManager`
+from the outside, which is what keeps the manager free of Android and DB types.
+On restart `LocationService.beginRecording` rehydrates via
+`TrackingManager.restore` and calls `recorder.adopt(...)` so the restored path
+isn't written twice; with nothing to restore it stops itself rather than burning
+battery on fixes nobody will keep.
+
+`restore` recomputes distance, `hasLeftStart` and `canCloseLoop` from the path
+rather than storing them, so restored state can't disagree with its own points.
+`readyToClose` deliberately starts false — the last stored point says where the
+walker *was*, not where they are.
 
 ### Anti-cheat: `MotionGate`
 
@@ -106,15 +149,49 @@ before touching the numbers.
 
 ### Persistence
 
-Room (KSP), database version 5, three entities: `territories`, `walks`, and a
+Room (KSP), database version 8, five entities: `territories`, `walks`, a
 single-row `profile` (`id = "me"`, auto-created with a random guest name on
-first access). Geometry is stored as **hand-rolled JSON strings** in
+first access), and the `walk_progress` / `walk_progress_points` pair backing the
+walk in progress. Geometry is stored as **hand-rolled JSON strings** in
 `ringJson`/`geometryJson`, converted in the entity companions — the only Room
 `TypeConverter` is for `SyncStatus`.
 
-`fallbackToDestructiveMigration(dropAllTables = true)` is set: **any schema
-change wipes user data.** That is intentional pre-release, but bumping the
-version silently destroys local territories, so say so when you do it.
+`TerritoryDao` and `WalkProgressDao` are abstract classes rather than interfaces
+so they can host `@Transaction` methods.
+
+**There is no destructive-migration fallback, and none may be added.** A
+territory is a walk someone went out and did — it can't be re-entered from the
+couch — so dropping tables to land a schema change is never an acceptable
+trade, pre-release included.
+
+The rule that follows: **every version bump ships a `Migration`.**
+`EncloseDatabase` has three worked examples — `MIGRATION_5_6` (add a column),
+`MIGRATION_6_7` (add nullable columns), `MIGRATION_7_8` (create tables, with the
+`CREATE TABLE` copied verbatim from the exported JSON so Room's validation
+passes). Without one, Room
+throws when opening the database instead of quietly emptying it — loud in
+development, and impossible to silently lose data in the field.
+
+Schemas are exported to `app/schemas/` (`exportSchema = true` plus the
+`room.schemaLocation` KSP arg) and checked in, so each migration can be written
+against the real previous schema. Bump the version and the next build writes the
+new JSON alongside it; commit that with the migration.
+
+### City tagging
+
+`Territory.city` is filled in by reverse geocoding *after* the claim is saved —
+never before, since geocoding needs a network and claiming must not. Blank means
+unresolved, and `CityTagger.backfill()` (mutex-guarded, shared via `EncloseApp`,
+triggered from `ProfileViewModel.init`) catches up on anything walked offline.
+`CityResolver` wraps the platform `Geocoder`, so there is no API key and no
+extra dependency, and it returns null rather than failing when the device has no
+geocoder or no network.
+
+The profile screen's headline percentage is **per city** (`Coverage.byCity`,
+pure and unit-tested in `CoverageTest`): claimed area over the bounding box of
+that city's claims. Measuring across all claims at once — as it did originally —
+collapses towards zero the moment someone walks in a second city, because the
+box between two cities is mostly countryside.
 
 ### Sync
 

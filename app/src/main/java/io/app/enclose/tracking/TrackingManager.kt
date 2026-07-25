@@ -107,6 +107,55 @@ object TrackingManager {
         _walk.value = WalkState(isTracking = true, activityType = activityType)
     }
 
+    /**
+     * Resume a walk that outlived the process that was recording it.
+     *
+     * Only the path, its start time, and the declared activity are handed back;
+     * distance, whether the start zone was left and whether the loop may close
+     * are all recomputed from the path, so restored state can't disagree with
+     * the points it came from.
+     *
+     * [WalkState.readyToClose] deliberately starts false: closing means being
+     * within the closing radius *now*, and the last recorded point is only
+     * evidence of where the walker was before the process died. The next fix
+     * settles it. The motion gate starts clean for the same reason — its speed
+     * window describes movement nobody is still observing.
+     *
+     * Returns false (changing nothing) when there's no usable path to resume.
+     */
+    fun restore(
+        path: List<LatLng>,
+        startedAtMs: Long,
+        activityType: ActivityType,
+    ): Boolean {
+        if (path.isEmpty()) return false
+
+        relaxed = false
+        motionGate.reset(activityType)
+        lastFix = null
+        lastFixAtElapsedMs = null
+
+        val start = path.first()
+        val last = path.last()
+        val distance = Geo.pathLengthMeters(path)
+        val leftStart = path.any { Geo.distanceMeters(start, it) > leaveStartRadiusMeters }
+
+        _walk.value = WalkState(
+            isTracking = true,
+            path = path,
+            start = start,
+            current = last,
+            distanceMeters = distance,
+            distanceToStartMeters = Geo.distanceMeters(start, last),
+            hasLeftStart = leftStart,
+            canCloseLoop = leftStart && distance >= minPerimeterMeters,
+            readyToClose = false,
+            startedAtMs = startedAtMs,
+            activityType = activityType,
+        )
+        return true
+    }
+
     /** Called from the UI to abandon the current walk without claiming. */
     fun cancelWalk() {
         _walk.value = WalkState(isTracking = false)
