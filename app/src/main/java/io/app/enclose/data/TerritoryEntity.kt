@@ -20,6 +20,8 @@ data class TerritoryEntity(
     val perimeterMeters: Double,
     val claimedAtEpochMs: Long,
     val colorHex: String,
+    /** Free-form user notes about this territory. */
+    val notes: String = "",
     val syncStatus: SyncStatus,
 ) {
     fun toDomain(): Territory = Territory(
@@ -33,6 +35,7 @@ data class TerritoryEntity(
         // The brand switched from green to purple; green is no longer selectable,
         // so any stored legacy-green value is an old auto-default — show it purple.
         colorHex = if (colorHex == LEGACY_GREEN) Territory.DEFAULT_COLOR else colorHex,
+        notes = notes,
         syncStatus = syncStatus,
     )
 
@@ -49,6 +52,7 @@ data class TerritoryEntity(
             perimeterMeters = t.perimeterMeters,
             claimedAtEpochMs = t.claimedAtEpochMs,
             colorHex = t.colorHex,
+            notes = t.notes,
             syncStatus = t.syncStatus,
         )
 

@@ -3,16 +3,21 @@ package io.app.enclose.ui
 import android.annotation.SuppressLint
 import android.view.InputDevice
 import android.view.MotionEvent
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -21,7 +26,11 @@ import io.app.enclose.data.Territory
 import io.app.enclose.geo.Geo
 import io.app.enclose.geo.LatLng
 import io.app.enclose.tracking.TrackingManager
+import io.app.enclose.ui.theme.EncloseAccents
+import io.app.enclose.ui.theme.LocalEncloseAccents
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng as MlLatLng
@@ -45,8 +54,29 @@ import org.maplibre.geojson.MultiPolygon
 import org.maplibre.geojson.Point
 import org.maplibre.geojson.Polygon
 
-/** Free OpenStreetMap vector style — no API key required. */
-private const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
+/** Free OpenStreetMap vector styles — no API key required. */
+private const val STYLE_URL_LIGHT = "https://tiles.openfreemap.org/styles/liberty"
+private const val STYLE_URL_DARK = "https://tiles.openfreemap.org/styles/dark"
+
+/**
+ * Which basemap to draw. Defaults to [SYSTEM] (follow light/dark), but the map
+ * has its own toggle: the dark basemap is hard to read in bright sunlight or
+ * when you're looking for street detail, and that's independent of whether the
+ * user wants a dark *app*.
+ */
+enum class BasemapStyle {
+    SYSTEM,
+    LIGHT,
+    DARK,
+    ;
+
+    /** Resolves to an actual basemap, given the current system theme. */
+    fun isDark(systemInDarkTheme: Boolean): Boolean = when (this) {
+        SYSTEM -> systemInDarkTheme
+        LIGHT -> false
+        DARK -> true
+    }
+}
 
 private const val SRC_CLAIMED = "src-claimed"
 private const val SRC_PATH = "src-path"
@@ -56,14 +86,9 @@ private const val LYR_CLAIMED_LINE = "lyr-claimed-line"
 private const val SRC_CLOSE_ZONE = "src-close-zone"
 private const val LYR_CLOSE_ZONE_FILL = "lyr-close-zone-fill"
 private const val LYR_CLOSE_ZONE_LINE = "lyr-close-zone-line"
+private const val LYR_PATH_CASING = "lyr-path-casing"
 private const val LYR_PATH = "lyr-path"
 private const val LYR_START = "lyr-start"
-
-private const val PATH_COLOR = "#F2A65A"
-private const val START_COLOR = "#F2A65A"
-// Closing zone: purple once the loop can close, grey while conditions aren't met.
-private const val ZONE_READY = "#7B1FA2"
-private const val ZONE_WAITING = "#9E9E9E"
 
 /** Holds references to the GeoJSON sources so overlays can be updated cheaply. */
 private class Overlays(
@@ -74,9 +99,59 @@ private class Overlays(
 )
 
 /**
- * MapLibre map with three overlays driven by app state:
+ * Imperative handle on the map, owned by the caller.
+ *
+ * This replaces the previous "bump an Int to trigger a camera move" parameters
+ * (`recenterTrigger`, `focusTrigger`), which silently did nothing before the map
+ * finished loading and could not report success. [isStyleLoaded] and
+ * [canLocate] let the UI disable controls that aren't usable yet instead of
+ * offering buttons that no-op.
+ */
+@Stable
+class MapController {
+    internal var map: MapLibreMap? by mutableStateOf(null)
+    internal var scope: CoroutineScope? = null
+
+    /** True once the basemap style is up; the map is blank before this. */
+    var isStyleLoaded: Boolean by mutableStateOf(false)
+        internal set
+
+    /** True once the "you are here" component is live and can be followed. */
+    var canLocate: Boolean by mutableStateOf(false)
+        internal set
+
+    /** Animate to the user's position, waiting briefly for a first GPS fix. */
+    fun recenter() {
+        val m = map ?: return
+        scope?.launch { flyToUser(m) }
+    }
+
+    /** Zoom by whole-ish steps from the zoom controls. */
+    fun zoomBy(delta: Double) {
+        val m = map ?: return
+        runCatching { m.animateCamera(CameraUpdateFactory.zoomBy(delta), ZOOM_BUTTON_ANIM_MS) }
+    }
+
+    /** Frame a set of points, e.g. a territory selected from the list. */
+    fun fitTo(points: List<LatLng>) {
+        val m = map ?: return
+        fitToPoints(m, points)
+    }
+}
+
+@Composable
+fun rememberMapController(): MapController {
+    val controller = remember { MapController() }
+    val scope = rememberCoroutineScope()
+    controller.scope = scope
+    return controller
+}
+
+/**
+ * MapLibre map with overlays driven by app state:
  *  - claimed territories (filled polygons),
- *  - the live walk path (line),
+ *  - the closing zone around the walk's start,
+ *  - the live walk path (line, with a casing so it reads over any basemap),
  *  - the walk's start anchor (dot).
  * The user's own position is shown via MapLibre's LocationComponent.
  */
@@ -85,26 +160,26 @@ fun EncloseMap(
     walk: TrackingManager.WalkState,
     territories: List<Territory>,
     hasLocationPermission: Boolean,
+    controller: MapController,
     modifier: Modifier = Modifier,
     /** When non-null, map taps are forwarded here (test mode) and consumed. */
     onMapTap: ((LatLng) -> Unit)? = null,
-    /** Bumping this value re-centers the camera on the user's position. */
-    recenterTrigger: Int = 0,
-    /** Bumping this value fits the camera to [focusPoints]. */
-    focusTrigger: Int = 0,
-    /** Points to frame when [focusTrigger] changes (e.g. a territory's ring). */
-    focusPoints: List<LatLng> = emptyList(),
+    /** Space (px) reserved at the bottom by UI, so map ornaments clear it. */
+    bottomInsetPx: Int = 0,
+    /** Space (px) reserved at the top by UI, so the compass clears it. */
+    topInsetPx: Int = 0,
+    /** Which basemap to draw; changing it swaps the style in place. */
+    basemap: BasemapStyle = BasemapStyle.SYSTEM,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnMapTap by rememberUpdatedState(onMapTap)
-    val currentFocusPoints by rememberUpdatedState(focusPoints)
+    val accents = LocalEncloseAccents.current
+    val styleUrl = if (basemap.isDark(isSystemInDarkTheme())) STYLE_URL_DARK else STYLE_URL_LIGHT
 
     val mapView = remember { MapView(context).apply { onCreate(null) } }
     var overlays by remember { mutableStateOf<Overlays?>(null) }
-    var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var style by remember { mutableStateOf<Style?>(null) }
-    var locationEnabled by remember { mutableStateOf(false) }
     var didInitialFocus by remember { mutableStateOf(false) }
 
     // Forward Compose lifecycle to the MapView.
@@ -121,6 +196,17 @@ fun EncloseMap(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            // Cancel the location component's animators before tearing down the
+            // map; otherwise a pending frame can touch an invalidated style and
+            // crash on the main thread.
+            runCatching {
+                controller.map?.locationComponent
+                    ?.takeIf { it.isLocationComponentActivated }
+                    ?.let { it.isLocationComponentEnabled = false }
+            }
+            controller.map = null
+            controller.isStyleLoaded = false
+            controller.canLocate = false
             mapView.onDestroy()
         }
     }
@@ -129,9 +215,9 @@ fun EncloseMap(
         modifier = modifier,
         factory = { mapView },
         update = { view ->
-            if (map == null) {
+            if (controller.map == null) {
                 view.getMapAsync { mlMap ->
-                    map = mlMap
+                    controller.map = mlMap
                     mlMap.cameraPosition = CameraPosition.Builder()
                         .target(MlLatLng(20.0, 0.0))
                         .zoom(2.0)
@@ -161,94 +247,116 @@ fun EncloseMap(
                             false
                         }
                     }
-                    mlMap.setStyle(Style.Builder().fromUri(STYLE_URL)) { loaded ->
-                        overlays = installOverlays(loaded)
-                        style = loaded
-                    }
                 }
             }
         },
     )
 
-    // Turn on the "you are here" dot as soon as the map is ready and we have
-    // permission — whether it was granted before or after the map loaded.
-    LaunchedEffect(map, style, hasLocationPermission) {
-        val m = map ?: return@LaunchedEffect
-        val s = style ?: return@LaunchedEffect
-        if (hasLocationPermission && !locationEnabled) {
-            enableUserLocation(m, s, context)
-            locationEnabled = true
+    // (Re)load the basemap style. Keyed on the URL so an in-session light/dark
+    // change swaps the basemap instead of leaving a dark map in a light app.
+    LaunchedEffect(controller.map, styleUrl) {
+        val m = controller.map ?: return@LaunchedEffect
+        controller.isStyleLoaded = false
+        overlays = null
+        m.setStyle(Style.Builder().fromUri(styleUrl)) { loaded ->
+            overlays = installOverlays(loaded, accents)
+            style = loaded
+            controller.isStyleLoaded = true
         }
     }
 
+    // Keep the map's own ornaments (logo, attribution, compass) clear of the
+    // floating UI. Attribution is a license requirement, so it must stay visible.
+    // Margins are in pixels, so the dp values are converted for this display.
+    val density = LocalDensity.current
+    val marginPx = with(density) { ORNAMENT_MARGIN.roundToPx() }
+    val logoWidthPx = with(density) { LOGO_WIDTH.roundToPx() }
+    LaunchedEffect(controller.map, bottomInsetPx, topInsetPx, marginPx) {
+        val m = controller.map ?: return@LaunchedEffect
+        runCatching {
+            m.uiSettings.apply {
+                setLogoMargins(marginPx, 0, 0, bottomInsetPx + marginPx)
+                setAttributionMargins(marginPx + logoWidthPx, 0, 0, bottomInsetPx + marginPx)
+                setCompassMargins(0, topInsetPx + marginPx, marginPx, 0)
+            }
+        }
+    }
+
+    // Turn on the "you are here" dot as soon as the map is ready and we have
+    // permission — whether it was granted before or after the map loaded. Also
+    // re-runs after a style swap, which the location component requires.
+    LaunchedEffect(controller.map, style, hasLocationPermission) {
+        val m = controller.map ?: return@LaunchedEffect
+        val s = style ?: return@LaunchedEffect
+        if (!hasLocationPermission) return@LaunchedEffect
+        val ok = runCatching { enableUserLocation(m, s, context) }.isSuccess
+        controller.canLocate = ok
+    }
+
     // Focus the camera on the user once the first GPS fix is acquired (once).
-    LaunchedEffect(locationEnabled) {
-        if (!locationEnabled || didInitialFocus) return@LaunchedEffect
-        val m = map ?: return@LaunchedEffect
+    LaunchedEffect(controller.canLocate) {
+        if (!controller.canLocate || didInitialFocus) return@LaunchedEffect
+        val m = controller.map ?: return@LaunchedEffect
         if (flyToUser(m)) didInitialFocus = true
     }
 
     // Re-center on the walker each time a walk starts, so it begins framed on them.
     LaunchedEffect(walk.isTracking) {
         if (!walk.isTracking) return@LaunchedEffect
-        val m = map ?: return@LaunchedEffect
+        val m = controller.map ?: return@LaunchedEffect
         flyToUser(m)
-    }
-
-    // Re-center on the user when the recenter button is pressed.
-    LaunchedEffect(recenterTrigger) {
-        if (recenterTrigger == 0) return@LaunchedEffect
-        val m = map ?: return@LaunchedEffect
-        if (locationEnabled) flyToUser(m)
-    }
-
-    // Fit the camera to a selected territory when the list requests focus.
-    LaunchedEffect(focusTrigger) {
-        if (focusTrigger == 0) return@LaunchedEffect
-        val m = map ?: return@LaunchedEffect
-        fitToPoints(m, currentFocusPoints)
     }
 
     // Redraw overlays whenever the walk or the claimed set changes.
     LaunchedEffect(overlays, walk, territories) {
         val o = overlays ?: return@LaunchedEffect
         o.claimed.setGeoJson(territoriesToFeatures(territories))
-        o.closeZone.setGeoJson(closeZoneFeature(walk))
+        o.closeZone.setGeoJson(closeZoneFeature(walk, accents))
         o.path.setGeoJson(pathToFeature(walk.path))
         o.start.setGeoJson(pointToFeature(walk.start))
     }
 }
 
-@SuppressLint("MissingPermission") // Only called after locationEnabled (permission checked).
+@SuppressLint("MissingPermission") // Only called after canLocate (permission checked).
 private fun lastKnownLocation(map: MapLibreMap): MlLatLng? {
-    val loc = map.locationComponent.lastKnownLocation ?: return null
+    val loc = runCatching { map.locationComponent.lastKnownLocation }.getOrNull() ?: return null
     return MlLatLng(loc.latitude, loc.longitude)
+}
+
+/** Animate the camera to frame a set of points (e.g. a claimed territory). */
+private fun fitToPoints(map: MapLibreMap, points: List<LatLng>) {
+    runCatching {
+        when {
+            points.size >= 2 -> {
+                val builder = LatLngBounds.Builder()
+                points.forEach { builder.include(MlLatLng(it.lat, it.lng)) }
+                map.animateCamera(
+                    CameraUpdateFactory.newLatLngBounds(builder.build(), FIT_PADDING_PX),
+                    FIT_ANIM_MS,
+                )
+            }
+            points.size == 1 -> {
+                val p = points.first()
+                map.animateCamera(
+                    CameraUpdateFactory.newLatLngZoom(MlLatLng(p.lat, p.lng), FOCUS_ZOOM),
+                    FIT_ANIM_MS,
+                )
+            }
+        }
+    }
 }
 
 /**
  * Poll briefly for a GPS fix and animate the camera to it at street-level zoom.
  * Returns true once it has focused, false if no fix arrived in time.
  */
-/** Animate the camera to frame a set of points (e.g. a claimed territory). */
-private fun fitToPoints(map: MapLibreMap, points: List<LatLng>) {
-    when {
-        points.size >= 2 -> {
-            val builder = LatLngBounds.Builder()
-            points.forEach { builder.include(MlLatLng(it.lat, it.lng)) }
-            map.animateCamera(CameraUpdateFactory.newLatLngBounds(builder.build(), FIT_PADDING_PX), FIT_ANIM_MS)
-        }
-        points.size == 1 -> {
-            val p = points.first()
-            map.animateCamera(CameraUpdateFactory.newLatLngZoom(MlLatLng(p.lat, p.lng), FOCUS_ZOOM), FIT_ANIM_MS)
-        }
-    }
-}
-
 private suspend fun flyToUser(map: MapLibreMap): Boolean {
     repeat(FOCUS_POLL_ATTEMPTS) {
         val loc = lastKnownLocation(map)
         if (loc != null) {
-            map.animateCamera(CameraUpdateFactory.newLatLngZoom(loc, FOCUS_ZOOM), FOCUS_ANIM_MS)
+            runCatching {
+                map.animateCamera(CameraUpdateFactory.newLatLngZoom(loc, FOCUS_ZOOM), FOCUS_ANIM_MS)
+            }
             return true
         }
         delay(FOCUS_POLL_INTERVAL_MS)
@@ -256,7 +364,7 @@ private suspend fun flyToUser(map: MapLibreMap): Boolean {
     return false
 }
 
-private fun installOverlays(style: Style): Overlays {
+private fun installOverlays(style: Style, accents: EncloseAccents): Overlays {
     val claimed = GeoJsonSource(SRC_CLAIMED)
     val closeZone = GeoJsonSource(SRC_CLOSE_ZONE)
     val path = GeoJsonSource(SRC_PATH)
@@ -270,20 +378,21 @@ private fun installOverlays(style: Style): Overlays {
         FillLayer(LYR_CLAIMED_FILL, SRC_CLAIMED).withProperties(
             // Per-feature color from the "color" property set in territoriesToFeatures.
             PropertyFactory.fillColor(Expression.get("color")),
-            PropertyFactory.fillOpacity(0.35f),
+            PropertyFactory.fillOpacity(0.32f),
         ),
     )
     style.addLayer(
         LineLayer(LYR_CLAIMED_LINE, SRC_CLAIMED).withProperties(
             PropertyFactory.lineColor(Expression.get("color")),
             PropertyFactory.lineWidth(2.5f),
+            PropertyFactory.lineJoin("round"),
         ),
     )
     // Closing zone around the start (drawn under the live path).
     style.addLayer(
         FillLayer(LYR_CLOSE_ZONE_FILL, SRC_CLOSE_ZONE).withProperties(
             PropertyFactory.fillColor(Expression.get("color")),
-            PropertyFactory.fillOpacity(0.12f),
+            PropertyFactory.fillOpacity(0.14f),
         ),
     )
     style.addLayer(
@@ -293,20 +402,31 @@ private fun installOverlays(style: Style): Overlays {
             PropertyFactory.lineDasharray(arrayOf(2f, 2f)),
         ),
     )
+    // Casing under the trail: keeps the amber line legible over both pale
+    // pavement and dark parkland.
+    style.addLayer(
+        LineLayer(LYR_PATH_CASING, SRC_PATH).withProperties(
+            PropertyFactory.lineColor(accents.trail.toHexString()),
+            PropertyFactory.lineOpacity(0.28f),
+            PropertyFactory.lineWidth(10f),
+            PropertyFactory.lineCap("round"),
+            PropertyFactory.lineJoin("round"),
+        ),
+    )
     style.addLayer(
         LineLayer(LYR_PATH, SRC_PATH).withProperties(
-            PropertyFactory.lineColor(PATH_COLOR),
-            PropertyFactory.lineWidth(4f),
+            PropertyFactory.lineColor(accents.trail.toHexString()),
+            PropertyFactory.lineWidth(4.5f),
             PropertyFactory.lineCap("round"),
             PropertyFactory.lineJoin("round"),
         ),
     )
     style.addLayer(
         CircleLayer(LYR_START, SRC_START).withProperties(
-            PropertyFactory.circleColor(START_COLOR),
+            PropertyFactory.circleColor(accents.anchor.toHexString()),
             PropertyFactory.circleRadius(7f),
             PropertyFactory.circleStrokeColor("#FFFFFF"),
-            PropertyFactory.circleStrokeWidth(2f),
+            PropertyFactory.circleStrokeWidth(2.5f),
         ),
     )
     return Overlays(claimed, closeZone, path, start)
@@ -322,7 +442,9 @@ private fun enableUserLocation(map: MapLibreMap, style: Style, context: android.
     // Show the dot but leave the camera free after the initial focus, so the
     // user can pan/zoom the map without it snapping back.
     component.cameraMode = CameraMode.NONE
-    component.renderMode = RenderMode.COMPASS
+    // NORMAL (plain dot), NOT COMPASS: the compass-bearing animator keeps ticking
+    // during map teardown and calls getSourceAs on an invalidated style → crash.
+    component.renderMode = RenderMode.NORMAL
 }
 
 private const val FOCUS_ZOOM = 16.0
@@ -334,9 +456,22 @@ private const val FOCUS_POLL_INTERVAL_MS = 500L
 private const val ZOOM_STEP = 0.6
 private const val ZOOM_ANIM_MS = 120
 
+// On-screen zoom buttons.
+internal const val ZOOM_BUTTON_STEP = 1.0
+private const val ZOOM_BUTTON_ANIM_MS = 220
+
 // Framing a selected territory.
 private const val FIT_PADDING_PX = 140
 private const val FIT_ANIM_MS = 800
+
+// Map ornament placement: the attribution (ⓘ) is offset past the logo so the two
+// don't overlap in the bottom-left corner. The MapLibre logo asset is 88dp wide
+// (maplibre_logo_icon is 88x23 at mdpi) — anything less than that pushed the ⓘ on
+// top of the wordmark. 4dp of clearance follows, matching MapLibre's own default
+// offset of 92dp. The attribution must stay visible and tappable: it carries the
+// OpenStreetMap data credit, so it can't simply be hidden.
+private val ORNAMENT_MARGIN = 12.dp
+private val LOGO_WIDTH = 88.dp + 4.dp
 
 // --- GeoJSON builders --------------------------------------------------------
 
@@ -373,8 +508,11 @@ private fun pointToFeature(p: LatLng?): FeatureCollection {
     return FeatureCollection.fromFeatures(listOf(Feature.fromGeometry(point(p))))
 }
 
-/** The 60 m closing zone around the start, shown only while tracking. */
-private fun closeZoneFeature(walk: TrackingManager.WalkState): FeatureCollection {
+/** The closing zone around the start, shown only while tracking. */
+private fun closeZoneFeature(
+    walk: TrackingManager.WalkState,
+    accents: EncloseAccents,
+): FeatureCollection {
     val start = walk.start
     if (!walk.isTracking || start == null) {
         return FeatureCollection.fromFeatures(emptyList())
@@ -383,9 +521,9 @@ private fun closeZoneFeature(walk: TrackingManager.WalkState): FeatureCollection
         .map(::point)
         .toMutableList()
         .apply { add(first()) }
-    val color = if (walk.canCloseLoop) ZONE_READY else ZONE_WAITING
+    val color = if (walk.canCloseLoop) accents.zoneReady else accents.zoneWaiting
     val feature = Feature.fromGeometry(Polygon.fromLngLats(listOf(ring))).apply {
-        addStringProperty("color", color)
+        addStringProperty("color", color.toHexString())
     }
     return FeatureCollection.fromFeatures(listOf(feature))
 }

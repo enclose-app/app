@@ -2,6 +2,7 @@ package io.app.enclose
 
 import android.app.Application
 import io.app.enclose.data.EncloseDatabase
+import io.app.enclose.data.ProfileRepository
 import io.app.enclose.data.TerritoryRepository
 import io.app.enclose.data.WalkRepository
 import io.app.enclose.sync.NoBackendSyncApi
@@ -20,6 +21,9 @@ class EncloseApp : Application() {
 
     /** Every successful closed-loop walk, persisted locally (offline-first). */
     val walkRepository by lazy { WalkRepository(database.walkDao()) }
+
+    /** Local, offline-first user profile (random guest name until sign-in). */
+    val profileRepository by lazy { ProfileRepository(database.profileDao()) }
 
     /** Swap [NoBackendSyncApi] for your real backend client when ready. */
     val remoteSyncApi: RemoteSyncApi by lazy { NoBackendSyncApi() }

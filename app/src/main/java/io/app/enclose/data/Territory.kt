@@ -24,6 +24,8 @@ data class Territory(
     val claimedAtEpochMs: Long,
     /** Fill/outline color as a hex string, e.g. "#7B1FA2". */
     val colorHex: String = DEFAULT_COLOR,
+    /** Free-form user notes about this territory (shown on the detail screen). */
+    val notes: String = "",
     val syncStatus: SyncStatus = SyncStatus.PENDING,
 ) {
     companion object {

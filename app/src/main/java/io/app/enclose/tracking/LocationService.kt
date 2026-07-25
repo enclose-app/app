@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.FusedLocationProviderClient
@@ -35,7 +36,15 @@ class LocationService : Service() {
         override fun onLocationResult(result: LocationResult) {
             val loc = result.lastLocation ?: return
             // Just record the fix; the loop is closed only when the user stops.
-            TrackingManager.onLocation(LatLng(loc.latitude, loc.longitude))
+            // Speed and the current activity ride along so the manager can reject
+            // movement that isn't human-powered (see MotionGate).
+            TrackingManager.onLocation(
+                point = LatLng(loc.latitude, loc.longitude),
+                accuracyMeters = if (loc.hasAccuracy()) loc.accuracy else null,
+                speedMps = if (loc.hasSpeed()) loc.speed else null,
+                atElapsedMs = SystemClock.elapsedRealtime(),
+                motion = ActivityMonitor.latest.value,
+            )
         }
     }
 
@@ -43,6 +52,9 @@ class LocationService : Service() {
         super.onCreate()
         fused = LocationServices.getFusedLocationProviderClient(this)
         createChannel()
+        // Classifies walking / running / cycling / in-vehicle. No-op when the
+        // physical-activity permission was declined; the speed checks still run.
+        ActivityMonitor.start(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -71,6 +83,7 @@ class LocationService : Service() {
 
     override fun onDestroy() {
         fused.removeLocationUpdates(callback)
+        ActivityMonitor.stop(this)
         super.onDestroy()
     }
 

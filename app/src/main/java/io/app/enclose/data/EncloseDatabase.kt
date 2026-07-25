@@ -7,8 +7,8 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 
 @Database(
-    entities = [TerritoryEntity::class, WalkEntity::class],
-    version = 4,
+    entities = [TerritoryEntity::class, WalkEntity::class, ProfileEntity::class],
+    version = 5,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)
@@ -17,6 +17,8 @@ abstract class EncloseDatabase : RoomDatabase() {
     abstract fun territoryDao(): TerritoryDao
 
     abstract fun walkDao(): WalkDao
+
+    abstract fun profileDao(): ProfileDao
 
     companion object {
         @Volatile
