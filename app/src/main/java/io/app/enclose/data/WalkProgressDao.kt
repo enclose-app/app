@@ -21,6 +21,12 @@ abstract class WalkProgressDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     abstract suspend fun upsertSession(session: WalkProgressEntity)
 
+    @Query(
+        "UPDATE walk_progress SET elevationGainMeters = :gain, movingMs = :movingMs " +
+            "WHERE id = '${WalkProgressEntity.SINGLETON_ID}'",
+    )
+    abstract suspend fun updateTotals(gain: Double, movingMs: Long)
+
     @Query("DELETE FROM walk_progress")
     abstract suspend fun deleteSession()
 

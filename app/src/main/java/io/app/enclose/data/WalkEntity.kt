@@ -15,6 +15,11 @@ data class WalkEntity(
     val perimeterMeters: Double,
     val distanceToStartMeters: Double,
     val closedAtEpochMs: Long,
+    /** Null for walks recorded before the start time was kept. */
+    val startedAtEpochMs: Long? = null,
+    val elevationGainMeters: Double = 0.0,
+    /** Null for walks recorded before moving time was measured. */
+    val movingMs: Long? = null,
     val claimed: Boolean,
     val syncStatus: SyncStatus,
 ) {
@@ -25,6 +30,9 @@ data class WalkEntity(
         perimeterMeters = perimeterMeters,
         distanceToStartMeters = distanceToStartMeters,
         closedAtEpochMs = closedAtEpochMs,
+        startedAtEpochMs = startedAtEpochMs,
+        elevationGainMeters = elevationGainMeters,
+        movingMs = movingMs,
         claimed = claimed,
         syncStatus = syncStatus,
     )
@@ -37,6 +45,9 @@ data class WalkEntity(
             perimeterMeters = w.perimeterMeters,
             distanceToStartMeters = w.distanceToStartMeters,
             closedAtEpochMs = w.closedAtEpochMs,
+            startedAtEpochMs = w.startedAtEpochMs,
+            elevationGainMeters = w.elevationGainMeters,
+            movingMs = w.movingMs,
             claimed = w.claimed,
             syncStatus = w.syncStatus,
         )

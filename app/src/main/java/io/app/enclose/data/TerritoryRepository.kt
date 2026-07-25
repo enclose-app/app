@@ -41,8 +41,9 @@ class TerritoryRepository(private val dao: TerritoryDao) {
 
     suspend fun markSynced(ids: List<String>) = dao.markSynced(ids)
 
-    /** Claims whose city hasn't been resolved yet (see [io.app.enclose.geo.CityResolver]). */
-    suspend fun withoutCity(): List<Territory> = dao.withoutCity().map { it.toDomain() }
+    /** Claims whose place isn't fully resolved (see [io.app.enclose.geo.CityResolver]). */
+    suspend fun withoutPlace(): List<Territory> = dao.withoutPlace().map { it.toDomain() }
 
-    suspend fun setCity(id: String, city: String) = dao.updateCity(id, city)
+    suspend fun setPlace(id: String, city: String, country: String) =
+        dao.updatePlace(id, city, country)
 }

@@ -24,6 +24,8 @@ data class TerritoryEntity(
     val notes: String = "",
     /** Reverse-geocoded city, or blank until it resolves. */
     val city: String = "",
+    /** Reverse-geocoded country, or blank until it resolves. */
+    val country: String = "",
     /** Set when a later claim swallowed this one whole; null while it stands. */
     val conqueredAtEpochMs: Long? = null,
     /** The territory that took this one. */
@@ -43,6 +45,7 @@ data class TerritoryEntity(
         colorHex = if (colorHex == LEGACY_GREEN) Territory.DEFAULT_COLOR else colorHex,
         notes = notes,
         city = city,
+        country = country,
         conqueredAtEpochMs = conqueredAtEpochMs,
         conqueredById = conqueredById,
         syncStatus = syncStatus,
@@ -63,6 +66,7 @@ data class TerritoryEntity(
             colorHex = t.colorHex,
             notes = t.notes,
             city = t.city,
+            country = t.country,
             conqueredAtEpochMs = t.conqueredAtEpochMs,
             conqueredById = t.conqueredById,
             syncStatus = t.syncStatus,

@@ -9,27 +9,65 @@ loop; when the loop closes you claim the enclosed area as a "territory". A new
 claim **conquers** overlapping older claims — their geometry is carved away.
 Everything works fully offline; sync to a backend is an unimplemented seam.
 
+## Skills
+
+Three project skills in `.claude/skills/` carry the procedures that are easy to
+get wrong. Prefer them over improvising:
+
+- **`room-migration`** — any change to an entity, column, or table. The no-data-loss
+  policy is strict and the procedure has steps that fail silently if skipped.
+- **`verify`** — build, test, lint, and how to read the results.
+- **`device-check`** — install, mock GPS, read the on-device DB, and simulate the
+  process kill the walk-restore path exists for.
+
 ## Commands
 
 ```bash
-./gradlew assembleDebug                 # build
-./gradlew installDebug                  # build + install on a connected device
-./gradlew testDebugUnitTest             # JVM unit tests
-./gradlew testDebugUnitTest --tests "io.app.enclose.tracking.MotionGateTest"
-./gradlew testDebugUnitTest --tests "*.MotionGateTest.driving speed is blocked on speed alone"
-./gradlew lint                          # Android lint (no ktlint/detekt configured)
-./gradlew connectedDebugAndroidTest     # instrumented tests (needs a device)
+./gradlew testDebugUnitTest assembleDebug   # the everyday check
+./gradlew installDebug                      # build + install on a connected device
+./gradlew testDebugUnitTest --tests "io.app.enclose.data.ConquestTest"
+./gradlew testDebugUnitTest --tests "*.ConquestTest.a claim never conquers itself"
+./gradlew lintDebug                         # Android lint (no ktlint/detekt configured)
+./gradlew connectedDebugAndroidTest         # instrumented tests (needs a device)
 ```
+
+**Lint fails on this repo by design.** The baseline is 3 errors / 31 warnings,
+all pre-existing `MissingPermission` in `ActivityMonitor.kt` (×2) and
+`EncloseMap.kt`. Those three are not yours and are not to be "fixed" in passing;
+a fourth is. Compare by file and issue id, never line number — see the `verify`
+skill.
 
 Gradle's configuration cache is on (`gradle.properties`); adding
 configuration-phase side effects to build scripts will break it. `minSdk` is 35,
 so a device/emulator on API 35+ is required.
 
-Unit tests cover the pure logic that decides what happens to user data:
-`MotionGateTest` (anti-cheat thresholds), `ConquestTest` (what a new claim does
-to older ones), `CoverageTest` (per-city percentages), `TrackingManagerRestoreTest`
-and `WalkProgressRecorderTest` (surviving process death). `ExampleUnitTest.java`
-and `ExampleInstrumentedTest.java` are leftover template files.
+## Testing conventions
+
+Unit tests are plain JVM JUnit4 and there is **no Robolectric**, so nothing
+touching `Context`, `SharedPreferences`, Room, or Play Services can be unit
+tested. The established response is to *extract the decision into pure Kotlin and
+test that*, leaving the Android shell thin:
+
+| Pure unit | Tested by | Kept testable by |
+|---|---|---|
+| `MotionGate` | `MotionGateTest` | normalising Play Services types into `MotionSample` |
+| `Conquest` | `ConquestTest` | taking domain objects, returning what changed |
+| `Coverage` | `CoverageTest` | no Android or DB types |
+| `Place` | `PlaceTest` | separated from the `Geocoder` call |
+| `WalkProgressRecorder` | `WalkProgressRecorderTest` | the `WalkProgressStore` interface seam |
+| `TrackingManager.restore` | `TrackingManagerRestoreTest` | manager has no Android/DB deps |
+| `ElevationAccumulator` | `ElevationAccumulatorTest` | altitude in, metres out — no Location |
+| `PauseTracker` | `PauseTrackerTest` | takes the normalised `MotionSample` |
+| `Passport` | `PassportTest` | takes domain objects only |
+| `OfflineTilePlanner` | `OfflineTilePlannerTest` | policy split from the MapLibre calls |
+
+JTS is pure Java and works fine in JVM tests. `TrackingManager` is a singleton
+`object`, so tests touching it must reset state in `@After`.
+
+**What unit tests cannot reach:** the location service, the geocoder, the map,
+migrations, and anything in `UserSettings`. When a change lands there, say so and
+use `device-check` — don't imply the suite covered it. `ExampleUnitTest.java` and
+`ExampleInstrumentedTest.java` are leftover template files.
 
 ## Architecture
 
@@ -39,10 +77,18 @@ everything. Package = layer, under `app/src/main/java/io/app/enclose/`.
 ### Dependency wiring
 
 `EncloseApp` is a hand-rolled service locator: it lazily builds the Room database
-and the three repositories, and `MapLibre.getInstance()` runs in `onCreate`
-(required before any `MapView` exists). ViewModels are `AndroidViewModel`s that
-cast `application as EncloseApp` to reach repositories — there is no DI
-framework, so new dependencies get added as a `by lazy` on `EncloseApp`.
+and everything shared — the territory, walk, profile and walk-progress
+repositories, `UserSettings`, `CityResolver`, `CityTagger` — and
+`MapLibre.getInstance()` runs in `onCreate` (required before any `MapView`
+exists). ViewModels are `AndroidViewModel`s that cast `application as EncloseApp`
+to reach them; there is no DI framework, so new dependencies get added as a
+`by lazy` there. Shared singletons matter here beyond convenience: one
+`CityResolver` means one geocoder cache, and one `CityTagger` means competing
+backfills can't run.
+
+`applicationScope` is for work that must outlive the component that started it —
+clearing the finished walk while `LocationService` is being torn down, whose own
+scope would cancel it halfway.
 
 ### The walk → claim pipeline
 
@@ -149,10 +195,10 @@ before touching the numbers.
 
 ### Persistence
 
-Room (KSP), database version 8, five entities: `territories`, `walks`, a
+Room (KSP), database version 11, six entities: `territories`, `walks`, a
 single-row `profile` (`id = "me"`, auto-created with a random guest name on
 first access), and the `walk_progress` / `walk_progress_points` pair backing the
-walk in progress. Geometry is stored as **hand-rolled JSON strings** in
+walk in progress, and `offline_regions`. Geometry is stored as **hand-rolled JSON strings** in
 `ringJson`/`geometryJson`, converted in the entity companions — the only Room
 `TypeConverter` is for `SyncStatus`.
 
@@ -165,12 +211,14 @@ couch — so dropping tables to land a schema change is never an acceptable
 trade, pre-release included.
 
 The rule that follows: **every version bump ships a `Migration`.**
-`EncloseDatabase` has three worked examples — `MIGRATION_5_6` (add a column),
+`EncloseDatabase` has six worked examples — `MIGRATION_5_6` (add a column),
 `MIGRATION_6_7` (add nullable columns), `MIGRATION_7_8` (create tables, with the
 `CREATE TABLE` copied verbatim from the exported JSON so Room's validation
-passes). Without one, Room
-throws when opening the database instead of quietly emptying it — loud in
-development, and impossible to silently lose data in the field.
+passes), `MIGRATION_8_9` and `MIGRATION_9_10` (a `NOT NULL` column needs a SQL `DEFAULT`
+for existing rows even when the Kotlin property has one — a constructor default
+is not a column default). Without one, Room throws when opening the database instead of quietly
+emptying it — loud in development, and impossible to silently lose data in the
+field. The `room-migration` skill has the full procedure.
 
 Schemas are exported to `app/schemas/` (`exportSchema = true` plus the
 `room.schemaLocation` KSP arg) and checked in, so each migration can be written
@@ -185,13 +233,68 @@ unresolved, and `CityTagger.backfill()` (mutex-guarded, shared via `EncloseApp`,
 triggered from `ProfileViewModel.init`) catches up on anything walked offline.
 `CityResolver` wraps the platform `Geocoder`, so there is no API key and no
 extra dependency, and it returns null rather than failing when the device has no
-geocoder or no network.
+geocoder or no network. A 10s timeout caps each lookup.
+
+`resolvePlace()` returns a `Place` whose `city`/`area`/`country` fields are
+**each independently nullable** — the geocoder routinely names a country but no
+city. Show what resolved and omit what didn't; a placeholder row implies the
+walk was missing something. `Place.groupingName` (`city ?: area ?: country`) is
+the single name a claim is filed under, and `CityTagger` and `Coverage` depend on
+that fallback order — `PlaceTest` pins it. The territory detail screen's Location
+card seeds from the stored `city` so an offline visit still says something, then
+only ever *adds* to it from the live lookup.
 
 The profile screen's headline percentage is **per city** (`Coverage.byCity`,
 pure and unit-tested in `CoverageTest`): claimed area over the bounding box of
 that city's claims. Measuring across all claims at once — as it did originally —
 collapses towards zero the moment someone walks in a second city, because the
 box between two cities is mostly countryside.
+
+### Remembered preferences
+
+`UserSettings` (SharedPreferences, file `enclose_ui`) holds **every** preference:
+seen-intro, activity type, basemap, territory sort, test mode, and the map
+camera. It exists as one class because the previous ad-hoc `prefs.getString(...)`
+calls scattered through `EncloseViewModel` are exactly why the camera and two
+toggles went unpersisted for so long — there was nowhere to notice the gap. Add
+new preferences here, not inline.
+
+Two non-obvious rules:
+
+- `lastCamera()` is read fresh per composition, never cached in the ViewModel. A
+  rotation rebuilds the map and re-reads it; a snapshot taken at construction
+  would teleport the user back to wherever they were at launch. It is
+  deliberately not a flow — the map owns the live camera and reports back via
+  `saveCamera`, and feeding it back would fight the gesture that just moved it.
+- Camera components are stored as separate floats, so a partial write reads as
+  "no saved camera" rather than failing to parse.
+
+The territory list's *search query* is deliberately transient: reopening the
+list pre-filtered would hide claims.
+
+Stats need no persistence work — every figure on the profile screen derives from
+Room, so they are durable by construction.
+
+### Offline tiles
+
+The basemap streams from OpenFreeMap, so walking out of signal used to leave a
+grey screen in an app that is otherwise strictly offline-first.
+`OfflineTilePlanner` (pure, tested) decides **what**: one region per city with
+claims, padded by 1.5 km and clamped to a 20 km span, because tile count grows
+with area and unclamped claims spread across a country would be tens of
+gigabytes. `OfflineTileCache` wraps MapLibre's callback API and holds no policy,
+which is what keeps the decisions testable without a device.
+
+Downloads run only from `OfflineTilesWorker`, constrained to **unmetered
+network, storage-not-low, battery-not-low**. Spending someone's mobile data
+because they claimed a loop would be indefensible, so if those are never
+satisfied the download simply never happens and the map streams as before.
+
+Eviction is **least-visited first**, tie-broken on the older visit, down to a
+300 MB budget (`DEFAULT_BUDGET_BYTES`). A visit is counted when the map camera
+settles inside a cached region, so the metric is where the user actually goes,
+not where they once claimed something. Regions in the current plan are never
+evicted — deleting one would only queue an immediate re-download.
 
 ### Sync
 
@@ -219,8 +322,7 @@ uploads walks.
   otherwise silently no-op. Basemaps are free OpenFreeMap styles — no API key.
 - `BasemapStyle` is deliberately **independent of the app theme**: light/dark
   legibility outdoors is a different question from whether the user wants a dark
-  app. It's persisted in `SharedPreferences` alongside `ActivityType` and the
-  "seen intro" flag.
+  app.
 - Theming: `EncloseTheme` sets fully explicit M3 light/dark schemes (M3 baseline
   generation was rejected — it mixed the brand purple with stock lavender greys)
   plus `LocalEncloseAccents`, a `CompositionLocal` of semantic colors (trail,

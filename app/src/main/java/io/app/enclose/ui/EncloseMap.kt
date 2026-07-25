@@ -60,6 +60,12 @@ private const val STYLE_URL_LIGHT = "https://tiles.openfreemap.org/styles/libert
 private const val STYLE_URL_DARK = "https://tiles.openfreemap.org/styles/dark"
 
 /**
+ * The style the map would draw right now. The offline downloader needs the same
+ * URL the map uses, and a worker has no composition to read it from.
+ */
+fun basemapStyleUrl(dark: Boolean): String = if (dark) STYLE_URL_DARK else STYLE_URL_LIGHT
+
+/**
  * Which basemap to draw. Defaults to [SYSTEM] (follow light/dark), but the map
  * has its own toggle: the dark basemap is hard to read in bright sunlight or
  * when you're looking for street detail, and that's independent of whether the

@@ -8,6 +8,8 @@ data class WalkInProgress(
     val startedAtEpochMs: Long,
     /** Raw [io.app.enclose.tracking.ActivityType] name as it was stored. */
     val activityTypeName: String,
+    val elevationGainMeters: Double,
+    val movingMs: Long,
 )
 
 /**
@@ -18,6 +20,7 @@ data class WalkInProgress(
 interface WalkProgressStore {
     suspend fun begin(startedAtEpochMs: Long, activityTypeName: String)
     suspend fun append(points: List<LatLng>)
+    suspend fun setTotals(elevationGainMeters: Double, movingMs: Long)
     suspend fun clear()
 }
 
@@ -56,8 +59,14 @@ class WalkProgressRepository(private val dao: WalkProgressDao) : WalkProgressSto
             path = points.map { it.toLatLng() },
             startedAtEpochMs = session.startedAtEpochMs,
             activityTypeName = session.activityType,
+            elevationGainMeters = session.elevationGainMeters,
+            movingMs = session.movingMs,
         )
     }
+
+    /** Store the running totals, which can't be recomputed from the path. */
+    override suspend fun setTotals(elevationGainMeters: Double, movingMs: Long) =
+        dao.updateTotals(elevationGainMeters, movingMs)
 
     /** Forget the walk in progress: it finished, was abandoned, or was voided. */
     override suspend fun clear() = dao.clear()

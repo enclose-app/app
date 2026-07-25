@@ -3,6 +3,7 @@ package io.app.enclose.data
 import io.app.enclose.geo.CityResolver
 import io.app.enclose.geo.Geo
 import io.app.enclose.geo.LatLng
+import io.app.enclose.geo.Place
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -24,11 +25,25 @@ class CityTagger(
 
     private val lock = Mutex()
 
-    /** Resolve and store the city for one claim. Silent no-op on failure. */
+    /** Resolve and store the place for one claim. Silent no-op on failure. */
     suspend fun tag(territoryId: String, ring: List<LatLng>) {
         if (ring.isEmpty() || !resolver.isAvailable) return
-        val city = resolver.resolve(Geo.centroid(ring)) ?: return
-        repository.setCity(territoryId, city)
+        val place = resolver.resolvePlace(Geo.centroid(ring)) ?: return
+        store(territoryId, place)
+    }
+
+    /**
+     * Write whatever resolved. The city falls back down the hierarchy (see
+     * [io.app.enclose.geo.Place.groupingName]) so a claim in open country still
+     * groups somewhere, while the country is stored only when actually named —
+     * guessing it from a region name would put false stamps in the passport.
+     */
+    private suspend fun store(territoryId: String, place: Place) {
+        repository.setPlace(
+            id = territoryId,
+            city = place.groupingName.orEmpty(),
+            country = place.country.orEmpty(),
+        )
     }
 
     /**
@@ -47,15 +62,15 @@ class CityTagger(
         if (!lock.tryLock()) return
         try {
             var consecutiveFailures = 0
-            for (territory in repository.withoutCity()) {
+            for (territory in repository.withoutPlace()) {
                 if (territory.ring.isEmpty()) continue
-                val city = resolver.resolve(Geo.centroid(territory.ring))
-                if (city == null) {
+                val place = resolver.resolvePlace(Geo.centroid(territory.ring))
+                if (place == null) {
                     if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) return
                     continue
                 }
                 consecutiveFailures = 0
-                repository.setCity(territory.id, city)
+                store(territory.id, place)
             }
         } finally {
             lock.unlock()

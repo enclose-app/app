@@ -9,6 +9,8 @@ import io.app.enclose.data.UserSettings
 import io.app.enclose.data.WalkProgressRepository
 import io.app.enclose.data.WalkRepository
 import io.app.enclose.geo.CityResolver
+import io.app.enclose.offline.OfflineTileCache
+import io.app.enclose.offline.OfflineTileSync
 import io.app.enclose.sync.NoBackendSyncApi
 import io.app.enclose.sync.RemoteSyncApi
 import kotlinx.coroutines.CoroutineScope
@@ -53,6 +55,19 @@ class EncloseApp : Application() {
 
     /** Everything the app remembers between launches. */
     val settings by lazy { UserSettings(this) }
+
+    /**
+     * Keeps map tiles for claimed cities on the device, so walking out of
+     * signal doesn't leave a grey screen. Shared so the worker and the map
+     * agree on which regions exist.
+     */
+    val offlineTileSync by lazy {
+        OfflineTileSync(
+            territories = repository,
+            dao = database.offlineRegionDao(),
+            cache = OfflineTileCache(this),
+        )
+    }
 
     /** Swap [NoBackendSyncApi] for your real backend client when ready. */
     val remoteSyncApi: RemoteSyncApi by lazy { NoBackendSyncApi() }

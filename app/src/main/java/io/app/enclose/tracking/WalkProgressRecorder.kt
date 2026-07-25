@@ -22,14 +22,20 @@ class WalkProgressRecorder(private val repository: WalkProgressStore) {
     private var persisted = 0
     private var sessionOpen = false
 
+    /** Last totals written, so unchanged ones don't cost a write per fix. */
+    private var persistedGainMeters = 0.0
+    private var persistedMovingMs = 0L
+
     /**
      * Take ownership of a session just restored from disk. Without this the
      * recorder would treat the restored path as brand new and write every point
      * a second time.
      */
-    fun adopt(pointCount: Int) {
+    fun adopt(pointCount: Int, elevationGainMeters: Double = 0.0, movingMs: Long = 0L) {
         sessionOpen = true
         persisted = pointCount
+        persistedGainMeters = elevationGainMeters
+        persistedMovingMs = movingMs
     }
 
     /** Follow [states] until cancelled, keeping storage in step with it. */
@@ -45,6 +51,8 @@ class WalkProgressRecorder(private val repository: WalkProgressStore) {
             if (sessionOpen) {
                 sessionOpen = false
                 persisted = 0
+                persistedGainMeters = 0.0
+                persistedMovingMs = 0L
                 repository.clear()
             }
             return
@@ -61,11 +69,22 @@ class WalkProgressRecorder(private val repository: WalkProgressStore) {
             )
             sessionOpen = true
             persisted = 0
+            persistedGainMeters = 0.0
+            persistedMovingMs = 0L
         }
 
         if (state.path.size > persisted) {
             repository.append(state.path.subList(persisted, state.path.size))
             persisted = state.path.size
+        }
+
+        // Only when something actually moves: the elevation noise gate leaves
+        // most fixes unchanged, and a stationary walker's moving time doesn't
+        // advance either — neither should cost a write.
+        if (state.elevationGainMeters != persistedGainMeters || state.movingMs != persistedMovingMs) {
+            repository.setTotals(state.elevationGainMeters, state.movingMs)
+            persistedGainMeters = state.elevationGainMeters
+            persistedMovingMs = state.movingMs
         }
     }
 }

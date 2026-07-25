@@ -5,7 +5,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.app.enclose.EncloseApp
 import io.app.enclose.data.CityCoverage
+import io.app.enclose.data.CountryStamp
 import io.app.enclose.data.Coverage
+import io.app.enclose.data.Passport
 import io.app.enclose.data.Profile
 import io.app.enclose.data.Territory
 import io.app.enclose.data.Walk
@@ -100,6 +102,7 @@ class ProfileViewModel(app: Application) : AndroidViewModel(app) {
             longestWalkMeters = longestWalk?.perimeterMeters ?: 0.0,
             firstClaimEpochMs = firstClaim,
             cities = Coverage.byCity(territories),
+            stamps = Passport.stamps(territories),
         )
     }
 }
@@ -134,6 +137,8 @@ data class ProfileStats(
     val firstClaimEpochMs: Long? = null,
     /** Per-city coverage, biggest first. See [Coverage] for what the % means. */
     val cities: List<CityCoverage> = emptyList(),
+    /** Countries walked, oldest stamp first. See [Passport]. */
+    val stamps: List<CountryStamp> = emptyList(),
 ) {
     /**
      * The city the walker has taken the most ground in — their home turf.

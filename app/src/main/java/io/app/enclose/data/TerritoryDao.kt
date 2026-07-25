@@ -37,17 +37,24 @@ abstract class TerritoryDao {
     @Query("UPDATE territories SET syncStatus = 'SYNCED' WHERE id IN (:ids)")
     abstract suspend fun markSynced(ids: List<String>)
 
-    /** Claims still waiting on reverse geocoding, oldest first. */
-    @Query("SELECT * FROM territories WHERE city = '' ORDER BY claimedAtEpochMs ASC")
-    abstract suspend fun withoutCity(): List<TerritoryEntity>
+    /**
+     * Claims still waiting on reverse geocoding, oldest first. Catches a missing
+     * country as well as a missing city, so claims placed before countries were
+     * stored get picked up by the same backfill rather than needing their own.
+     */
+    @Query(
+        "SELECT * FROM territories WHERE city = '' OR country = '' " +
+            "ORDER BY claimedAtEpochMs ASC",
+    )
+    abstract suspend fun withoutPlace(): List<TerritoryEntity>
 
     /**
-     * Deliberately leaves syncStatus alone: the city is derived locally from
+     * Deliberately leaves syncStatus alone: the place is derived locally from
      * coordinates the backend already has, so resolving it is not an edit the
      * user made and shouldn't queue an upload.
      */
-    @Query("UPDATE territories SET city = :city WHERE id = :id")
-    abstract suspend fun updateCity(id: String, city: String)
+    @Query("UPDATE territories SET city = :city, country = :country WHERE id = :id")
+    abstract suspend fun updatePlace(id: String, city: String, country: String)
 
     @Query("DELETE FROM territories WHERE id = :id")
     abstract suspend fun delete(id: String)

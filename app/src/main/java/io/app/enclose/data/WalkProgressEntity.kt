@@ -19,6 +19,13 @@ data class WalkProgressEntity(
     val startedAtEpochMs: Long,
     /** [io.app.enclose.tracking.ActivityType] name; unknown values fall back to WALK. */
     val activityType: String,
+    /**
+     * Running climb. Unlike distance this can't be recomputed from the stored
+     * path, because altitude isn't kept per point — so it's carried here.
+     */
+    val elevationGainMeters: Double = 0.0,
+    /** Running moving time; like climb, it can't be recomputed from the path. */
+    val movingMs: Long = 0L,
 ) {
     companion object {
         /** The fixed primary key of the one-and-only in-progress walk row. */

@@ -10,6 +10,7 @@ import io.app.enclose.data.SyncStatus
 import io.app.enclose.data.Territory
 import io.app.enclose.data.Walk
 import io.app.enclose.geo.LatLng
+import io.app.enclose.offline.OfflineTilesScheduler
 import io.app.enclose.sync.SyncScheduler
 import io.app.enclose.tracking.ActivityType
 import io.app.enclose.tracking.VoidReason
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -31,6 +33,7 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     private val repository = (app as EncloseApp).repository
     private val walkRepository = (app as EncloseApp).walkRepository
     private val cityTagger = (app as EncloseApp).cityTagger
+    private val offlineTileSync = (app as EncloseApp).offlineTileSync
 
     /** Everything remembered between launches. See [UserSettings]. */
     private val settings = (app as EncloseApp).settings
@@ -63,6 +66,20 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = emptyList(),
         )
+
+    /**
+     * The recorded walks, keyed by id. A claim shares its id with the walk that
+     * produced it, so the detail screen can show how the ground was actually
+     * covered — duration, pace, climb — none of which the territory itself knows.
+     */
+    val walksById: StateFlow<Map<String, Walk>> =
+        walkRepository.walks
+            .map { walks -> walks.associateBy { it.id } }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = emptyMap(),
+            )
 
     /** One-shot "you claimed a territory!" events for the UI to celebrate. */
     private val _claimEvents = MutableSharedFlow<Territory>(extraBufferCapacity = 4)
@@ -115,6 +132,35 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     /** Remember the framing the user panned/zoomed to. */
     fun saveCamera(camera: MapCamera) {
         settings.camera = camera
+        // Where the map is pointed is the honest measure of which cached city
+        // earns its disk space, so the camera settling is what counts a visit.
+        viewModelScope.launch {
+            offlineTileSync.recordVisit(LatLng(camera.lat, camera.lng))
+        }
+    }
+
+    /**
+     * Ask for the cached map to catch up with the claims. Needs the style and
+     * screen density, which only the map knows, so they're passed in from there.
+     */
+    fun requestOfflineTiles(styleUrl: String, pixelRatio: Float) {
+        settings.offlineStyleUrl = styleUrl
+        settings.offlinePixelRatio = pixelRatio
+        OfflineTilesScheduler.request(getApplication(), styleUrl, pixelRatio)
+    }
+
+    /**
+     * The same request from somewhere with no map on screen — after a claim, for
+     * instance. Uses whatever the map last reported; before it ever has, there
+     * are no claims to cache either, so skipping is correct.
+     */
+    private fun requestOfflineTiles() {
+        val styleUrl = settings.offlineStyleUrl ?: return
+        OfflineTilesScheduler.request(
+            getApplication(),
+            styleUrl,
+            settings.offlinePixelRatio,
+        )
     }
 
     /** How the territory list is ordered. Remembered between launches. */
@@ -198,6 +244,9 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
             // Name the city afterwards: it needs a network, and the claim — the
             // thing the user actually walked for — must never wait on one.
             cityTagger.tag(territory.id, newRing)
+            // Now that the claim has a city, its map may be worth keeping. The
+            // worker waits for Wi-Fi, so nothing downloads on mobile data.
+            requestOfflineTiles()
         }
     }
 
@@ -294,6 +343,9 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         perimeterMeters = perimeterMeters,
         distanceToStartMeters = distanceToStartMeters,
         closedAtEpochMs = closedAtEpochMs,
+        startedAtEpochMs = startedAtEpochMs,
+        elevationGainMeters = elevationGainMeters,
+        movingMs = movingMs,
         claimed = claimed,
         syncStatus = SyncStatus.PENDING,
     )

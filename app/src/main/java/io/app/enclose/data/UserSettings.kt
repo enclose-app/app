@@ -62,6 +62,19 @@ class UserSettings(context: Context) {
         set(value) = prefs.edit { putBoolean(KEY_TEST_MODE, value) }
 
     /**
+     * The basemap style and screen density the offline downloader should use.
+     * Recorded by the map, because a background worker has neither a map nor a
+     * window to ask.
+     */
+    var offlineStyleUrl: String?
+        get() = prefs.getString(KEY_OFFLINE_STYLE, null)
+        set(value) = prefs.edit { putString(KEY_OFFLINE_STYLE, value) }
+
+    var offlinePixelRatio: Float
+        get() = prefs.getFloat(KEY_OFFLINE_RATIO, 1f)
+        set(value) = prefs.edit { putFloat(KEY_OFFLINE_RATIO, value) }
+
+    /**
      * Where the map was last left, or null before the first pan.
      *
      * Zoom is the point of this: reopening the app on a world view after the
@@ -114,6 +127,8 @@ class UserSettings(context: Context) {
 
         const val KEY_TERRITORY_SORT = "territory_sort"
         const val KEY_TEST_MODE = "test_mode"
+        const val KEY_OFFLINE_STYLE = "offline_style_url"
+        const val KEY_OFFLINE_RATIO = "offline_pixel_ratio"
         const val KEY_CAM_LAT = "camera_lat"
         const val KEY_CAM_LNG = "camera_lng"
         const val KEY_CAM_ZOOM = "camera_zoom"

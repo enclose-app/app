@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.material.icons.filled.Loop
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -63,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.app.enclose.data.CityCoverage
+import io.app.enclose.data.CountryStamp
 import io.app.enclose.data.Profile
 import io.app.enclose.ui.theme.PillShape
 import kotlin.math.roundToInt
@@ -165,6 +167,24 @@ fun ProfileScreen(
                 top = stats.topCity,
                 onOpenCities = { showCities = true },
             )
+
+            // Countries only become interesting once one has been stamped, and
+            // the section stays hidden until a lookup has actually resolved one.
+            if (stats.stamps.isNotEmpty()) {
+                SectionCard(title = "Passport") {
+                    Text(
+                        if (stats.stamps.size == 1) {
+                            "One country walked."
+                        } else {
+                            "${stats.stamps.size} countries walked."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    stats.stamps.forEach { stamp -> CountryStampRow(stamp) }
+                }
+            }
 
             // Only worth a section once something has actually fallen.
             if (state.fallen.isNotEmpty()) {
@@ -293,6 +313,50 @@ private fun ProfileHeader(
     }
 }
 
+/** One country stamp: when it was first walked, and which cities in it. */
+@Composable
+private fun CountryStampRow(stamp: CountryStamp) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Filled.Public,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.tertiary,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                stamp.country,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                // Cities are the interesting detail, but a claim can resolve a
+                // country without a city, so fall back to the count and date.
+                if (stamp.cities.isEmpty()) {
+                    "${stamp.territoryCount} claims · since ${formatDay(stamp.firstClaimedAtEpochMs)}"
+                } else {
+                    stamp.cities.joinToString(", ")
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(
+            formatArea(stamp.claimedAreaSqMeters),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 /** One absorbed territory: what it was, how big, and what took it. */
 @Composable
 private fun FallenClaimRow(fallen: FallenClaim) {
@@ -410,9 +474,16 @@ private fun CoverageCard(
             )
             Spacer(Modifier.height(10.dp))
             Text(
-                "Your claimed area there as a share of the box that contains your " +
-                    "claims in that city — how completely you've taken the ground " +
-                    "you roam.",
+                // "there" and "that city" only mean something once a city is
+                // named; before the first claim they refer to nothing.
+                if (top == null) {
+                    "Once you claim your first loop, this shows how completely " +
+                        "you've filled in the city you walk."
+                } else {
+                    "Your claimed area there as a share of the box that contains " +
+                        "your claims in that city — how completely you've taken " +
+                        "the ground you roam."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
             )

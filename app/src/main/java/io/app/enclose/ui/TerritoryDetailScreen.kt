@@ -63,6 +63,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.app.enclose.EncloseApp
 import io.app.enclose.data.Territory
+import io.app.enclose.data.Walk
 import io.app.enclose.export.GeoExporter
 import io.app.enclose.geo.Geo
 import io.app.enclose.geo.Place
@@ -85,6 +86,7 @@ fun TerritoryDetailScreen(
     viewModel: EncloseViewModel = viewModel(),
 ) {
     val territories by viewModel.territories.collectAsStateWithLifecycle()
+    val walksById by viewModel.walksById.collectAsStateWithLifecycle()
     val territory = territories.firstOrNull { it.id == territoryId }
 
     // Leave only once we know the territory is really gone. The flow starts
@@ -189,6 +191,8 @@ fun TerritoryDetailScreen(
                 Spacer(Modifier.height(6.dp))
                 SyncBadge(territory.syncStatus)
             }
+
+            WalkCard(walksById[territory.id])
 
             LocationCard(territory)
 
@@ -365,6 +369,39 @@ private fun TerritoryHero(territory: Territory, accent: Color) {
  * geocoder routinely names a country but not a city, and a row reading "—"
  * would suggest the walk lacks something it doesn't.
  */
+/**
+ * How the ground was covered, as opposed to what was won. Every row is
+ * conditional: walks recorded before these were captured have no start time and
+ * no altitude, and an old claim showing "0 m climb" would be a lie rather than a
+ * gap. The card disappears entirely when there is nothing true to say.
+ */
+@Composable
+private fun WalkCard(walk: Walk?) {
+    if (walk == null) return
+    val duration = walk.durationMs
+    val moving = walk.movingMs?.takeIf { it > 0 }
+    val pacing = walk.pacingMs
+    val hasClimb = walk.elevationGainMeters > 0.0
+    if (duration == null && !hasClimb) return
+
+    SectionCard(title = "The walk") {
+        if (duration != null) {
+            DetailRow("Duration", formatElapsed(duration))
+            // Only worth its own row when it differs enough to notice; on a walk
+            // with no stops it would just repeat the duration.
+            if (moving != null && duration - moving >= NOTABLE_PAUSE_MS) {
+                DetailRow("Moving", formatElapsed(moving))
+            }
+        }
+        if (pacing != null) {
+            DetailRow("Pace", formatPace(walk.perimeterMeters, pacing))
+        }
+        if (hasClimb) {
+            DetailRow("Elevation gain", formatDistance(walk.elevationGainMeters))
+        }
+    }
+}
+
 @Composable
 private fun LocationCard(territory: Territory) {
     val context = LocalContext.current
@@ -496,3 +533,9 @@ private fun shareTerritory(
     )
     null
 }.getOrElse { "Couldn't share as ${format.label}" }
+
+/**
+ * Below this, the difference between elapsed and moving time is noise from a
+ * couple of slow steps rather than a stop worth reporting.
+ */
+private const val NOTABLE_PAUSE_MS = 30_000L

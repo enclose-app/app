@@ -33,6 +33,11 @@ data class Territory(
      */
     val city: String = "",
     /**
+     * Country this claim sits in, resolved alongside [city]. Blank until it
+     * resolves, or when the geocoder named a city but no country.
+     */
+    val country: String = "",
+    /**
      * When a later claim swallowed this one whole, if it has. Conquered
      * territories leave the map but are never deleted — [ring] and the geometry
      * frozen at the moment they fell stay as a record of the walk.

@@ -63,6 +63,7 @@ class LocationService : Service() {
                 speedMps = if (loc.hasSpeed()) loc.speed else null,
                 atElapsedMs = SystemClock.elapsedRealtime(),
                 motion = ActivityMonitor.latest.value,
+                altitudeMeters = if (loc.hasAltitude()) loc.altitude else null,
             )
         }
     }
@@ -129,13 +130,15 @@ class LocationService : Service() {
             path = saved.path,
             startedAtMs = saved.startedAtEpochMs,
             activityType = activityType,
+            elevationGainMeters = saved.elevationGainMeters,
+            movingMs = saved.movingMs,
         )
         if (!restored) {
             progressRepository.clear()
             return false
         }
-        // The path is already on disk; don't write it a second time.
-        recorder.adopt(saved.path.size)
+        // The path and totals are already on disk; don't write them again.
+        recorder.adopt(saved.path.size, saved.elevationGainMeters, saved.movingMs)
         return true
     }
 

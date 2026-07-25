@@ -176,6 +176,15 @@ fun MapScreen(
         }
     }
 
+    // Tell the downloader which basemap to cache. Runs whenever the style
+    // changes, since a dark-mode switch means different tiles entirely.
+    LaunchedEffect(basemapDark) {
+        viewModel.requestOfflineTiles(
+            styleUrl = basemapStyleUrl(basemapDark),
+            pixelRatio = density.density,
+        )
+    }
+
     // Consume a one-shot focus request (e.g. "Show on map" from the detail screen).
     LaunchedEffect(pendingFocus, controller.isStyleLoaded) {
         val pts = pendingFocus

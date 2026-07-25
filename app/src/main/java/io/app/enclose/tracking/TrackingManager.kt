@@ -49,6 +49,10 @@ object TrackingManager {
         val blockedSinceElapsedMs: Long? = null,
         /** What the user set out to do; sets the speed ceiling and the wording. */
         val activityType: ActivityType = ActivityType.WALK,
+        /** Confirmed climb so far, in metres. Noise-gated — see [ElevationAccumulator]. */
+        val elevationGainMeters: Double = 0.0,
+        /** Time actually spent moving, excluding stops — see [PauseTracker]. */
+        val movingMs: Long = 0L,
     ) {
         /** True while a vehicle (or implausible speed) is suspending recording. */
         val motionBlocked: Boolean get() = blockedReason != null
@@ -64,6 +68,11 @@ object TrackingManager {
         /** How far the closing point landed from the start (the closing gap). */
         val distanceToStartMeters: Double,
         val closedAtEpochMs: Long,
+        /** When the first fix landed, so the walk's duration and pace survive. */
+        val startedAtEpochMs: Long?,
+        val elevationGainMeters: Double,
+        /** Time spent moving, excluding stops, so pace reflects the walking. */
+        val movingMs: Long,
         val suggestedName: String,
     )
 
@@ -87,6 +96,12 @@ object TrackingManager {
     /** Rejects vehicle movement; state is per-walk, so it's reset on start. */
     private val motionGate = MotionGate()
 
+    /** Running climb; like the gate, its state belongs to a single walk. */
+    private val elevation = ElevationAccumulator()
+
+    /** Moving time, so pace isn't diluted by waiting at crossings. */
+    private val pause = PauseTracker()
+
     /**
      * The previous fix, accepted or not. Segment speed is measured against this
      * rather than the last recorded point, so one rejected fix can't make the
@@ -102,6 +117,8 @@ object TrackingManager {
     ) {
         relaxed = relaxedThresholds
         motionGate.reset(activityType)
+        elevation.reset()
+        pause.reset()
         lastFix = null
         lastFixAtElapsedMs = null
         _walk.value = WalkState(isTracking = true, activityType = activityType)
@@ -127,11 +144,21 @@ object TrackingManager {
         path: List<LatLng>,
         startedAtMs: Long,
         activityType: ActivityType,
+        /** Climb accumulated before the process died; altitude isn't stored per point. */
+        elevationGainMeters: Double = 0.0,
+        /** Moving time accumulated before the process died. */
+        movingMs: Long = 0L,
     ): Boolean {
         if (path.isEmpty()) return false
 
         relaxed = false
         motionGate.reset(activityType)
+        // Resume the running totals, but not the references they were measured
+        // against: the first fix after a restore would otherwise read as a jump
+        // from wherever the walker was when the process died, and the interval
+        // since then is time nobody observed.
+        elevation.reset(elevationGainMeters)
+        pause.reset(movingMs)
         lastFix = null
         lastFixAtElapsedMs = null
 
@@ -152,6 +179,8 @@ object TrackingManager {
             readyToClose = false,
             startedAtMs = startedAtMs,
             activityType = activityType,
+            elevationGainMeters = elevationGainMeters,
+            movingMs = movingMs,
         )
         return true
     }
@@ -176,6 +205,8 @@ object TrackingManager {
         atElapsedMs: Long? = null,
         /** Latest activity classification, when available. */
         motion: MotionSample? = null,
+        /** Altitude in metres, when the provider reports one. */
+        altitudeMeters: Double? = null,
     ) {
         var state = _walk.value
         if (!state.isTracking) return
@@ -219,6 +250,9 @@ object TrackingManager {
                         }
                         state = state.copy(blockedReason = null, blockedSinceElapsedMs = null)
                     }
+                    // Credited only once the movement is accepted: time spent
+                    // being rejected as a vehicle is not walking time.
+                    state = state.copy(movingMs = pause.update(atElapsedMs, speed, motion))
                 }
             }
         }
@@ -226,6 +260,11 @@ object TrackingManager {
         // Very poor fixes shouldn't shape the claimed loop. Once the walk has
         // an anchor, keep the live marker fresh but skip building the path.
         val poorFix = accuracyMeters != null && accuracyMeters > MAX_ACCURACY_METERS
+
+        // Climb is credited on any usable fix, including ones too close to the
+        // previous point to extend the path: height can change without covering
+        // ground — stairs, or a switchback tighter than MIN_MOVE_METERS.
+        val climb = if (poorFix) state.elevationGainMeters else elevation.add(altitudeMeters)
 
         // First fix of the walk sets the anchor.
         if (state.path.isEmpty()) {
@@ -241,6 +280,7 @@ object TrackingManager {
                 distanceToStartMeters = 0.0,
                 startedAtMs = System.currentTimeMillis(),
                 accuracyMeters = accuracyMeters,
+                elevationGainMeters = climb,
             )
             return
         }
@@ -256,6 +296,7 @@ object TrackingManager {
                 distanceToStartMeters = toStart,
                 accuracyMeters = accuracyMeters,
                 readyToClose = state.canCloseLoop && toStart <= closureRadiusMeters,
+                elevationGainMeters = climb,
             )
             return
         }
@@ -274,6 +315,7 @@ object TrackingManager {
             canCloseLoop = canClose,
             accuracyMeters = accuracyMeters,
             readyToClose = canClose && toStart <= closureRadiusMeters,
+            elevationGainMeters = climb,
         )
     }
 
@@ -284,13 +326,14 @@ object TrackingManager {
     fun finishWalk() {
         val state = _walk.value
         if (state.readyToClose && state.path.size >= 3) {
-            closeLoop(state.path)
+            closeLoop(state)
         } else {
             cancelWalk()
         }
     }
 
-    private fun closeLoop(path: List<LatLng>) {
+    private fun closeLoop(state: WalkState) {
+        val path = state.path
         val start = path.first()
         // The closing gap: how far the triggering GPS fix was from the start.
         val closingGap = Geo.distanceMeters(path.last(), start)
@@ -307,6 +350,9 @@ object TrackingManager {
             perimeterMeters = perimeter,
             distanceToStartMeters = closingGap,
             closedAtEpochMs = System.currentTimeMillis(),
+            startedAtEpochMs = state.startedAtMs,
+            elevationGainMeters = state.elevationGainMeters,
+            movingMs = state.movingMs,
             suggestedName = NameGenerator.random(),
         )
     }
@@ -334,6 +380,8 @@ object TrackingManager {
     /** Throw the walk away: the recorded path no longer reflects a real trip. */
     private fun voidWalk(reason: VoidReason) {
         motionGate.reset()
+        elevation.reset()
+        pause.reset()
         lastFix = null
         lastFixAtElapsedMs = null
         _walk.value = WalkState(isTracking = false)

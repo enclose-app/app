@@ -17,7 +17,33 @@ data class Walk(
     /** Closing gap: how far the triggering fix was from the start. */
     val distanceToStartMeters: Double,
     val closedAtEpochMs: Long,
+    /**
+     * When the first fix landed. Null for walks recorded before this was kept,
+     * which is why [durationMs] is nullable rather than a subtraction at the
+     * call site.
+     */
+    val startedAtEpochMs: Long? = null,
+    /** Confirmed climb in metres; see [io.app.enclose.tracking.ElevationAccumulator]. */
+    val elevationGainMeters: Double = 0.0,
+    /**
+     * Time spent actually moving, excluding stops. Null for walks recorded
+     * before this was measured — distinct from zero, which would claim the
+     * walker never moved.
+     */
+    val movingMs: Long? = null,
     /** Whether this walk was claimed as a territory. */
     val claimed: Boolean,
     val syncStatus: SyncStatus = SyncStatus.PENDING,
-)
+) {
+    /** How long the walk took end to end, or null when the start wasn't recorded. */
+    val durationMs: Long?
+        get() = startedAtEpochMs?.let { (closedAtEpochMs - it).takeIf { d -> d > 0 } }
+
+    /**
+     * The duration pace should be measured against: moving time when it was
+     * recorded, otherwise the wall-clock duration. Falling back keeps old walks
+     * showing a pace rather than nothing.
+     */
+    val pacingMs: Long?
+        get() = movingMs?.takeIf { it > 0 } ?: durationMs
+}
