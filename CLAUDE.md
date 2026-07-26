@@ -177,6 +177,36 @@ since the intervening ground was never recorded. The extensive KDoc in
 `MotionGate.kt` explains why each threshold has the value it does — read it
 before touching the numbers.
 
+**Silence is not evidence of speed.** A backgrounded or dozing device stops
+delivering fixes and then hands the missed stretch over in a burst on wake. Three
+rules in `TrackingManager.onLocation` keep that from being mistaken for a drive,
+and they are load-bearing:
+
+- Fixes worse than `MAX_ACCURACY_METERS` return **before** the gate runs. A
+  reacquisition fix lands hundreds of metres out; feeding it to the speed window
+  was on its own enough to void an honest walk.
+- Losing the signal has **two shapes, and only one of them is silence.** More
+  than `SIGNAL_GAP_MS` with no fix covers the dozing device. The commoner one is
+  a *frozen* fix: the provider keeps reporting the last position it was sure of,
+  at the normal interval, then snaps to the true one — nothing looks wrong until
+  the snap, so the silence rule never sees it. That is caught instead by a
+  segment faster than `REACQUISITION_SPEED_MPS` (55 m/s ≈ 200 km/h), which no
+  road vehicle reaches, so ordinary driving is still judged as driving. Both
+  shapes reset the speed window and the grace countdown, drop the speed baseline
+  so the jump never becomes a sample, and flag `WalkState.hadSignalGap`.
+- Neither clears `blockedReason` — a walk already being rejected as a vehicle
+  when the signal went still has to answer for the ground in between, which is
+  what keeps the anti-cheat honest across a gap.
+- The gap is **reported, not punished**: the live panel and the claim dialog say
+  part of the route is a straight line across unobserved ground. Discarding an
+  hour on foot because the device went to sleep is the worse error by a wide
+  margin — see "Nothing the user walked for is ever destroyed".
+
+`LocationService` must timestamp each fix by its own `elapsedRealtimeNanos`, not
+by delivery time, and must iterate `result.locations` rather than taking
+`lastLocation`. Timing a batch by delivery reads as hundreds of metres per second;
+taking only the newest throws the walked ground away.
+
 ### Geometry conventions (`geo/`)
 
 - **Rings are implicitly closed**: the last point is *not* a duplicate of the
@@ -337,3 +367,38 @@ A dev affordance on the map: taps inject points instead of GPS. It uses relaxed
 distance thresholds (`TrackingManager`'s `*_TEST_METERS` constants), skips
 starting `LocationService`, and bypasses `MotionGate` entirely — tapped points
 teleport and would always read as a vehicle.
+
+**GPX import** (`EncloseViewModel.importGpx`) rides the same injection path, fed
+from a route recorded elsewhere rather than tapped out: same relaxed thresholds,
+same gate bypass, same rule that the loop is only closed when the user presses
+Stop. The menu entry appears only while test mode is on, since outside it the
+imported points would be competing with live GPS for the same walk.
+
+`GpxImporter` is a hand-rolled scanner rather than an XML parser, for a reason
+worth keeping: `XmlPullParser` and `DocumentBuilderFactory` are both stubbed out
+in the mockable `android.jar`, so anything built on them can't be unit tested
+here — and the parsing is the part most likely to be wrong. It reads `<trkpt>`,
+falling back to `<rtept>` then `<wpt>`, tolerates either attribute order and
+either quote style, and picks up `<ele>` only when it belongs to the point in
+hand. `GpxImporterTest` includes a round trip against `GeoExporter.toGpx`, which
+is the cheap guard against the two halves drifting apart.
+
+**It scans with `String.indexOf` and never with `Regex`, and that is load
+bearing.** `Regex.findAll` builds a fresh `Matcher` over the whole input per
+match, and on Android each one copies the input into ICU, so cost grows with the
+square of the track. The JVM hides this completely — a 20 000-point ride parsed
+in 113 ms in the unit tests while the same file, on a device, took 247 ms at
+1 000 points, 1.6 s at 3 000, and had not finished after **five minutes** at
+20 000, with a modal up and no way out but killing the app. Anything that scans
+this file needs its offsets computed once up front; searching forward from each
+point re-reads the remainder every time, and reads to the very end whenever the
+tag is absent — which for `<ele>` is the common case. `GpxImporterTest` has a
+timeout-bounded 20 000-point case in both shapes (with and without `<ele>`) to
+keep that from creeping back; it is the test that caught the second regression.
+
+The other half of the same lesson: **unit-test timings say nothing about ART.**
+When something here is performance-sensitive, measure it on a device.
+
+The picker filters on `*/*` deliberately: most providers hand a `.gpx` over as
+`application/octet-stream`, so a precise filter mostly hides the file the user
+came to pick.

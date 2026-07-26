@@ -53,6 +53,14 @@ object TrackingManager {
         val elevationGainMeters: Double = 0.0,
         /** Time actually spent moving, excluding stops — see [PauseTracker]. */
         val movingMs: Long = 0L,
+        /**
+         * True once this walk has been through at least one stretch with no
+         * fixes at all — a dozing device, a tunnel, the screen off for a while.
+         * The path bridges that stretch with a straight line, so the route is an
+         * under-record of where the user actually went. Not fatal, and not the
+         * user's doing: it is surfaced, not punished.
+         */
+        val hadSignalGap: Boolean = false,
     ) {
         /** True while a vehicle (or implausible speed) is suspending recording. */
         val motionBlocked: Boolean get() = blockedReason != null
@@ -73,6 +81,13 @@ object TrackingManager {
         val elevationGainMeters: Double,
         /** Time spent moving, excluding stops, so pace reflects the walking. */
         val movingMs: Long,
+        /**
+         * True when the recording lost the signal at some point, so part of the
+         * ring is a straight line across ground that was never observed. The
+         * claim is still offered — the walking was real — but the user is told,
+         * rather than the walk being thrown away or the gap hidden.
+         */
+        val hadSignalGap: Boolean,
         val suggestedName: String,
     )
 
@@ -181,6 +196,11 @@ object TrackingManager {
             activityType = activityType,
             elevationGainMeters = elevationGainMeters,
             movingMs = movingMs,
+            // A restore only ever happens because recording was interrupted, and
+            // nothing on disk says for how long. Reporting the gap when it was
+            // brief costs a line of explanation; staying quiet when it was long
+            // hides a straight line across ground nobody recorded.
+            hadSignalGap = true,
         )
         return true
     }
@@ -211,9 +231,61 @@ object TrackingManager {
         var state = _walk.value
         if (!state.isTracking) return
 
+        // A fix this vague describes nothing, so it must shape nothing: not the
+        // path, and not the motion verdict either. Reacquiring after signal loss
+        // routinely lands hundreds of metres out, and letting that reach the
+        // speed window was on its own enough to void an honest walk. Keep the
+        // marker roughly fresh and wait for a fix worth believing.
+        if (accuracyMeters != null && accuracyMeters > MAX_ACCURACY_METERS) {
+            val toStart = state.start?.let { Geo.distanceMeters(it, point) }
+            _walk.value = state.copy(
+                current = point,
+                distanceToStartMeters = toStart ?: state.distanceToStartMeters,
+                accuracyMeters = accuracyMeters,
+                readyToClose = !state.motionBlocked &&
+                    state.canCloseLoop &&
+                    toStart != null &&
+                    toStart <= closureRadiusMeters,
+            )
+            return
+        }
+
         // Only human-powered movement counts. Test mode is exempt: tapped points
         // jump across the map by design and would always look like a vehicle.
         if (atElapsedMs != null && !relaxed) {
+            // Losing the signal is not evidence of speed, and it shows up in
+            // two different shapes — both of which used to end the walk.
+            //
+            //  - Silence: a dozing device stops delivering entirely, then hands
+            //    the missed stretch over in a burst on wake.
+            //  - A frozen fix: the provider keeps reporting the last position it
+            //    was sure of, at the normal interval, and then snaps to the true
+            //    one when it reacquires. Nothing looks wrong until the snap, so
+            //    the silence rule never sees it — this is the common one indoors
+            //    and with the screen off.
+            //
+            // The snap is recognised by being physically impossible rather than
+            // merely fast: no road vehicle sustains REACQUISITION_SPEED_MPS, so
+            // a segment that quick is the map catching up, not the user moving.
+            // Ordinary driving stays well below it and is still judged as
+            // driving by the gate.
+            val silenceMs = lastFixAtElapsedMs?.let { atElapsedMs - it }
+            val segmentSpeed = segmentSpeedMps(point, atElapsedMs)
+            val reacquired = (silenceMs != null && silenceMs > SIGNAL_GAP_MS) ||
+                (segmentSpeed != null && segmentSpeed > REACQUISITION_SPEED_MPS)
+            if (reacquired) {
+                // Start the speed window over rather than judging the walk on
+                // the jump; the gate's grace countdown restarts with it. Also
+                // drops the baseline, so the jump itself never becomes a speed
+                // sample. `blockedReason` is deliberately left alone: if
+                // movement was already being rejected when the signal went, the
+                // resume check below still has to answer for the ground between.
+                motionGate.reset(state.activityType)
+                lastFix = null
+                lastFixAtElapsedMs = null
+                state = state.copy(hadSignalGap = true)
+            }
+
             val speed = fusedSpeedMps(point, speedMps, atElapsedMs)
             lastFix = point
             lastFixAtElapsedMs = atElapsedMs
@@ -257,22 +329,14 @@ object TrackingManager {
             }
         }
 
-        // Very poor fixes shouldn't shape the claimed loop. Once the walk has
-        // an anchor, keep the live marker fresh but skip building the path.
-        val poorFix = accuracyMeters != null && accuracyMeters > MAX_ACCURACY_METERS
-
         // Climb is credited on any usable fix, including ones too close to the
         // previous point to extend the path: height can change without covering
         // ground — stairs, or a switchback tighter than MIN_MOVE_METERS.
-        val climb = if (poorFix) state.elevationGainMeters else elevation.add(altitudeMeters)
+        val climb = elevation.add(altitudeMeters)
 
-        // First fix of the walk sets the anchor.
+        // First fix of the walk sets the anchor. Fixes too vague to trust have
+        // already been sent back above, so this one is fit to anchor to.
         if (state.path.isEmpty()) {
-            // Wait for a usable first fix so the start anchor isn't wildly off.
-            if (poorFix) {
-                _walk.value = state.copy(current = point, accuracyMeters = accuracyMeters)
-                return
-            }
             _walk.value = state.copy(
                 path = listOf(point),
                 start = point,
@@ -289,8 +353,8 @@ object TrackingManager {
         val start = state.start!!
         val toStart = Geo.distanceMeters(start, point)
 
-        // Ignore GPS jitter (or reject poor fixes) so the path stays clean.
-        if (poorFix || Geo.distanceMeters(last, point) < MIN_MOVE_METERS) {
+        // Ignore GPS jitter so the path stays clean.
+        if (Geo.distanceMeters(last, point) < MIN_MOVE_METERS) {
             _walk.value = state.copy(
                 current = point,
                 distanceToStartMeters = toStart,
@@ -342,7 +406,12 @@ object TrackingManager {
         val ring = if (path.size >= 2) path.dropLast(1) + start else path
         val perimeter = Geo.pathLengthMeters(ring)
         // Stop tracking but keep the closed ring on screen as a preview.
-        _walk.value = WalkState(isTracking = false, path = ring, start = start)
+        _walk.value = WalkState(
+            isTracking = false,
+            path = ring,
+            start = start,
+            hadSignalGap = state.hadSignalGap,
+        )
         _pendingClaim.value = PendingClaim(
             id = UUID.randomUUID().toString(),
             ring = ring,
@@ -353,6 +422,7 @@ object TrackingManager {
             startedAtEpochMs = state.startedAtMs,
             elevationGainMeters = state.elevationGainMeters,
             movingMs = state.movingMs,
+            hadSignalGap = state.hadSignalGap,
             suggestedName = NameGenerator.random(),
         )
     }
@@ -366,15 +436,26 @@ object TrackingManager {
      * Must be called before [lastFix] is advanced to the new fix.
      */
     private fun fusedSpeedMps(point: LatLng, reportedMps: Float?, atElapsedMs: Long): Double? {
-        val previous = lastFix
-        val previousAt = lastFixAtElapsedMs
-        val segment = if (previous != null && previousAt != null && atElapsedMs > previousAt) {
-            Geo.distanceMeters(previous, point) / ((atElapsedMs - previousAt) / 1000.0)
-        } else {
-            null
-        }
+        val segment = segmentSpeedMps(point, atElapsedMs)
         val reported = reportedMps?.takeIf { it.isFinite() && it >= 0f }?.toDouble()
         return listOfNotNull(segment, reported).maxOrNull()
+    }
+
+    /**
+     * Speed implied by the ground covered since the previous fix, or null when
+     * there is no baseline to measure against.
+     *
+     * Separate from [fusedSpeedMps] because the reacquisition check needs the
+     * measured segment on its own: a provider that reports a plausible speed
+     * while its *position* jumps would otherwise hide the jump.
+     *
+     * Must be called before [lastFix] is advanced to the new fix.
+     */
+    private fun segmentSpeedMps(point: LatLng, atElapsedMs: Long): Double? {
+        val previous = lastFix ?: return null
+        val previousAt = lastFixAtElapsedMs ?: return null
+        if (atElapsedMs <= previousAt) return null
+        return Geo.distanceMeters(previous, point) / ((atElapsedMs - previousAt) / 1000.0)
     }
 
     /** Throw the walk away: the recorded path no longer reflects a real trip. */
@@ -427,4 +508,30 @@ object TrackingManager {
     private const val MAX_RESUME_GAP_METERS = 50.0
     /** Fixes worse than this accuracy (meters) are kept off the path. */
     private const val MAX_ACCURACY_METERS = 50f
+
+    /**
+     * Silence longer than this means the fixes stopped coming, not that the
+     * walker stopped moving. Fixes are requested every 3 s and tolerated down to
+     * 1 s, so 45 s is roughly fifteen missed ones — comfortably past a couple of
+     * dropped updates under trees, and short enough that a real doze window
+     * (minutes) is always caught. Matched in spirit to
+     * [PauseTracker.MAX_CREDITED_GAP_MS], which refuses to credit such a stretch
+     * as either moving or paused for the same reason.
+     */
+    const val SIGNAL_GAP_MS = 45_000L
+
+    /**
+     * A single segment quicker than this is the position catching up, not the
+     * user moving. 55 m/s ≈ 200 km/h: faster than any road vehicle in normal
+     * use, so it cannot be the drive that [MotionGate] exists to catch, while a
+     * reacquisition snap after a frozen fix is typically an order of magnitude
+     * beyond it (300 m against a 1 s interval is 300 m/s).
+     *
+     * Deliberately well clear of [MotionGate.ABSOLUTE_MAX_SPEED_MPS] (20 m/s):
+     * everything between the two is still judged as movement and still voids the
+     * walk. Only the physically impossible is reclassified as an artefact — and
+     * even then the ground it skips is recorded as [WalkState.hadSignalGap]
+     * rather than quietly absorbed into the route.
+     */
+    const val REACQUISITION_SPEED_MPS = 55.0
 }

@@ -1,6 +1,8 @@
 package io.app.enclose.ui
 
 import android.os.SystemClock
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
@@ -49,6 +51,7 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -61,6 +64,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -149,9 +153,16 @@ fun MapScreen(
     val pendingClaim by viewModel.pendingClaim.collectAsStateWithLifecycle()
     val showHowItWorks by viewModel.showHowItWorks.collectAsStateWithLifecycle()
     val voidedWalk by viewModel.voidedWalk.collectAsStateWithLifecycle()
+    val gpxImport by viewModel.gpxImport.collectAsStateWithLifecycle()
     val basemapStyle by viewModel.basemapStyle.collectAsStateWithLifecycle()
     val territorySort by viewModel.territorySort.collectAsStateWithLifecycle()
     val profile by profileViewModel.state.collectAsStateWithLifecycle()
+
+    // OpenDocument rather than GetContent: it gives a durable, readable uri, and
+    // the picker it opens is the one people expect for "find my file".
+    val gpxPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let(viewModel::importGpx) }
 
     val snackbarHost = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -308,6 +319,22 @@ fun MapScreen(
                                 if (testMode) Icon(Icons.Filled.Check, contentDescription = null)
                             },
                         )
+                        // Only while test mode is on: outside it the imported
+                        // points would be competing with live GPS for the walk.
+                        if (testMode) {
+                            DropdownMenuItem(
+                                text = { Text("Import GPX…") },
+                                onClick = {
+                                    showMenu = false
+                                    // Most providers hand GPX over as
+                                    // application/octet-stream or nothing at
+                                    // all, so a narrow filter mostly hides the
+                                    // file the user came to pick.
+                                    gpxPicker.launch(arrayOf("*/*"))
+                                },
+                                leadingIcon = { Icon(Icons.Filled.UploadFile, null) },
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text("How Enclose works") },
                             onClick = {
@@ -441,6 +468,35 @@ fun MapScreen(
                         "wasn't kept."
             },
             onDismiss = viewModel::dismissVoidedWalk,
+        )
+    }
+
+    // Go and look at what was just imported. A track from anywhere but the
+    // current view lands off camera, and an import you can't see is
+    // indistinguishable from one that didn't happen.
+    LaunchedEffect(gpxImport, controller.isStyleLoaded) {
+        val done = gpxImport as? GpxImport.Done ?: return@LaunchedEffect
+        if (controller.isStyleLoaded && done.route.isNotEmpty()) controller.fitTo(done.route)
+    }
+
+    when (val state = gpxImport) {
+        null -> Unit
+        is GpxImport.Reading -> GpxProgressDialog(label = "Reading the file…", progress = null)
+        is GpxImport.Replaying -> GpxProgressDialog(
+            label = "Replaying the track — ${state.done} of ${state.total} points",
+            progress = if (state.total == 0) null else state.done.toFloat() / state.total,
+        )
+
+        is GpxImport.Done -> NoticeDialog(
+            title = "Track imported",
+            message = "${state.headline}\n\n${state.detail}",
+            onDismiss = viewModel::dismissGpxImport,
+        )
+
+        is GpxImport.Failed -> NoticeDialog(
+            title = "Couldn't import that",
+            message = state.reason,
+            onDismiss = viewModel::dismissGpxImport,
         )
     }
 
@@ -852,6 +908,103 @@ private fun LiveStats(walk: TrackingManager.WalkState, testMode: Boolean) {
     // While movement is rejected, the loop checklist is meaningless — what the
     // user needs is why nothing is being recorded and how long they have.
     if (blocked) MotionBlockedNotice(walk) else LoopProgress(walk)
+
+    // A gap is not a failure and doesn't stop the walk, so it sits below the
+    // checklist as a footnote rather than replacing it.
+    if (walk.hadSignalGap && !testMode) SignalGapNotice()
+}
+
+/**
+ * Shown for the rest of the walk once the fixes stopped arriving for a while —
+ * a dozing device, a tunnel, a long stretch with the screen off.
+ *
+ * The walk deliberately survives this. Losing the signal is the device's doing,
+ * not the walker's, and discarding an hour on foot over it is the worse error by
+ * a wide margin. What the app owes the user instead is the truth: the route now
+ * contains a straight line across ground it never saw.
+ */
+@Composable
+private fun SignalGapNotice() {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        contentColor = MaterialTheme.colorScheme.onSurface,
+    ) {
+        Row(
+            Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.LocationOff,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "GPS dropped out for a while — still recording, but part of your " +
+                    "route is estimated.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * Import in progress. Deliberately has no dismiss button and ignores the scrim:
+ * the replay is feeding the tracker, and letting the user start tapping points
+ * into the middle of it would interleave two routes into one walk.
+ *
+ * Determinate once the point count is known — a bar that fills is the difference
+ * between "working" and "hung" on a long track — and indeterminate while the
+ * file is still being read, when there is genuinely nothing to count.
+ */
+@Composable
+private fun GpxProgressDialog(label: String, progress: Float?) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = {},
+        properties = androidx.compose.ui.window.DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+        ),
+    ) {
+        Surface(
+            shape = MaterialTheme.shapes.extraLarge,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text("Importing GPX", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(16.dp))
+                if (progress == null) {
+                    CircularProgressIndicator(Modifier.size(36.dp))
+                } else {
+                    // Not ProgressTrack: its 500 ms smoothing is right for the
+                    // loop checklist, which changes a few times a walk, and
+                    // wrong here — the replay updates every few milliseconds, so
+                    // the animation never catches up and the bar reads far
+                    // behind the count printed under it.
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    label,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+    }
 }
 
 /**
@@ -1176,6 +1329,21 @@ private fun ClaimDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
+
+                // Said plainly rather than hidden: the loop is still claimable —
+                // the walking was real — but part of its outline is a straight
+                // line drawn across ground the recording never saw.
+                if (pending.hadSignalGap) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "Note: GPS dropped out along the way, so part of this outline is " +
+                            "a straight line between the last fix before the gap and the " +
+                            "first one after it.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                }
 
                 Spacer(Modifier.height(18.dp))
                 OutlinedTextField(

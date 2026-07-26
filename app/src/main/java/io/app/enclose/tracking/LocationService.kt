@@ -53,18 +53,33 @@ class LocationService : Service() {
 
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
-            val loc = result.lastLocation ?: return
-            // Just record the fix; the loop is closed only when the user stops.
-            // Speed and the current activity ride along so the manager can reject
-            // movement that isn't human-powered (see MotionGate).
-            TrackingManager.onLocation(
-                point = LatLng(loc.latitude, loc.longitude),
-                accuracyMeters = if (loc.hasAccuracy()) loc.accuracy else null,
-                speedMps = if (loc.hasSpeed()) loc.speed else null,
-                atElapsedMs = SystemClock.elapsedRealtime(),
-                motion = ActivityMonitor.latest.value,
-                altitudeMeters = if (loc.hasAltitude()) loc.altitude else null,
-            )
+            val now = SystemClock.elapsedRealtime()
+            // Every fix in the batch, oldest first — not just `lastLocation`.
+            // A dozing or backgrounded device stops delivering and then hands
+            // over the whole stretch at once; keeping only the newest threw the
+            // walked ground away and left the survivor looking like a teleport.
+            for (loc in result.locations) {
+                // The fix's own monotonic clock, never the moment it happened to
+                // be delivered. A burst arrives milliseconds apart, so timing a
+                // several-hundred-metre segment by delivery reads as an
+                // impossible speed and used to discard the walk outright.
+                val fixAt = loc.elapsedRealtimeNanos / 1_000_000L
+                // Fused hands back a cached last-known fix when it reacquires.
+                // It describes where the user was, not where they are.
+                if (now - fixAt > MAX_FIX_AGE_MS) continue
+
+                // Just record the fix; the loop is closed only when the user stops.
+                // Speed and the current activity ride along so the manager can reject
+                // movement that isn't human-powered (see MotionGate).
+                TrackingManager.onLocation(
+                    point = LatLng(loc.latitude, loc.longitude),
+                    accuracyMeters = if (loc.hasAccuracy()) loc.accuracy else null,
+                    speedMps = if (loc.hasSpeed()) loc.speed else null,
+                    atElapsedMs = fixAt,
+                    motion = ActivityMonitor.latest.value,
+                    altitudeMeters = if (loc.hasAltitude()) loc.altitude else null,
+                )
+            }
         }
     }
 
@@ -228,6 +243,15 @@ class LocationService : Service() {
         private const val ACTION_STOP = "io.app.enclose.action.STOP"
         private const val UPDATE_INTERVAL_MS = 3_000L
         private const val MIN_UPDATE_INTERVAL_MS = 1_000L
+
+        /**
+         * How old a fix may be and still describe "now". Two minutes is well
+         * past the 3 s update interval and past any plausible batching delay,
+         * so anything older is a cached position being replayed rather than an
+         * observation — and a batch's own fixes are timestamped individually,
+         * so dropping the stale ones costs none of the real ones.
+         */
+        private const val MAX_FIX_AGE_MS = 120_000L
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(

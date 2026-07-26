@@ -1,9 +1,11 @@
 package io.app.enclose.ui
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.app.enclose.EncloseApp
+import io.app.enclose.export.GpxImporter
 import io.app.enclose.data.Conquest
 import io.app.enclose.data.MapCamera
 import io.app.enclose.data.SyncStatus
@@ -27,6 +29,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
+import java.io.InputStream
 
 class EncloseViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -293,6 +297,113 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         TrackingManager.onLocation(point)
     }
 
+    /**
+     * How the GPX import is going, for the UI to show and then clear. Null when
+     * there is nothing to say.
+     */
+    private val _gpxImport = MutableStateFlow<GpxImport?>(null)
+    val gpxImport: StateFlow<GpxImport?> = _gpxImport.asStateFlow()
+
+    fun dismissGpxImport() {
+        _gpxImport.value = null
+    }
+
+    /**
+     * Replay a GPX track as a test walk: the same injection path as tapping the
+     * map, fed from a route recorded elsewhere. Test mode only — outside it the
+     * points would be competing with real GPS for the same walk.
+     *
+     * Any walk in progress is abandoned first. In test mode that can only be
+     * another tapped or imported route, never one someone went out and walked,
+     * so there is nothing here that the no-data-loss rule protects.
+     *
+     * The loop is deliberately *not* closed at the end. Importing a track is the
+     * same as walking it — whether it becomes a claim is still the user's call,
+     * made with Stop, exactly as [TrackingManager] requires everywhere else.
+     *
+     * Every stage reports itself. An import is one of the few things in this app
+     * where nothing on screen necessarily changes — a track from another city
+     * lands entirely off camera — so silence is indistinguishable from a feature
+     * that doesn't work. [GpxImport.Done] carries the route back so the map can
+     * go and show it.
+     */
+    fun importGpx(uri: Uri) {
+        if (!_testMode.value) {
+            _gpxImport.value = GpxImport.Failed(
+                "Turn on test mode first — imported points stand in for GPS fixes.",
+            )
+            return
+        }
+        viewModelScope.launch {
+            _gpxImport.value = GpxImport.Reading
+            val points = withContext(Dispatchers.IO) {
+                runCatching {
+                    getApplication<Application>().contentResolver
+                        .openInputStream(uri)
+                        ?.use { stream -> GpxImporter.parse(stream.readCapped(MAX_GPX_BYTES)) }
+                }.getOrNull()
+            }
+
+            if (points == null) {
+                _gpxImport.value = GpxImport.Failed("Couldn't read that file.")
+                return@launch
+            }
+            if (points.size < 2) {
+                _gpxImport.value = GpxImport.Failed(
+                    "No track points in that file — looked for <trkpt>, <rtept> and <wpt>.",
+                )
+                return@launch
+            }
+
+            if (walk.value.isTracking) TrackingManager.cancelWalk()
+            startWalk()
+            _gpxImport.value = GpxImport.Replaying(done = 0, total = points.size)
+            points.forEachIndexed { index, point ->
+                // No timestamp: the motion gate is bypassed, as with map taps.
+                // An imported track jumps between fixes by design and would
+                // otherwise read as a vehicle on its very first segment.
+                TrackingManager.onLocation(
+                    point = point.position,
+                    altitudeMeters = point.elevationMeters,
+                )
+                // Replaying runs on the main dispatcher because the tracker's
+                // state is read straight afterwards; handing the frame back
+                // every so often is what lets the progress actually move
+                // instead of the screen sitting frozen until it's over.
+                if ((index + 1) % REPLAY_CHUNK == 0) {
+                    _gpxImport.value = GpxImport.Replaying(index + 1, points.size)
+                    yield()
+                }
+            }
+
+            val walked = walk.value
+            _gpxImport.value = GpxImport.Done(
+                headline = "${points.size} points · ${formatDistance(walked.distanceMeters)}" +
+                    " · ${formatClimb(walked.elevationGainMeters)} climb",
+                // The recorded path is shorter than the file whenever points sit
+                // closer together than the jitter filter allows, which is most
+                // real tracks. Say so, or the counts look like a bug.
+                detail = buildString {
+                    if (walked.path.size < points.size) {
+                        append(
+                            "${walked.path.size} kept — the rest sat closer together " +
+                                "than the jitter filter allows. ",
+                        )
+                    }
+                    append(
+                        if (walked.readyToClose) {
+                            "The loop closes here: press Close loop & claim to keep it."
+                        } else {
+                            "The track doesn't end near where it starts, so it can't be " +
+                                "claimed as a loop."
+                        },
+                    )
+                },
+                route = walked.path,
+            )
+        }
+    }
+
     fun renameTerritory(id: String, newName: String) {
         val name = newName.trim()
         if (name.isEmpty()) return
@@ -336,6 +447,20 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Read at most [maxBytes], so a file picked by mistake can't be pulled into
+     * memory whole.
+     *
+     * `readNBytes` rather than a hand-rolled loop over a `Reader`: the loop this
+     * replaces treated a zero-length read as progress and went round again, so a
+     * provider that returned 0 without hitting EOF — which the documents
+     * provider does — span forever on the IO dispatcher with the import dialog
+     * up and no way out but killing the app. A capped read that cannot make
+     * negative progress is the whole point.
+     */
+    private fun InputStream.readCapped(maxBytes: Int): String =
+        readNBytes(maxBytes).toString(Charsets.UTF_8)
+
     private fun TrackingManager.PendingClaim.toWalk(claimed: Boolean) = Walk(
         id = id,
         ring = ring,
@@ -349,4 +474,45 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         claimed = claimed,
         syncStatus = SyncStatus.PENDING,
     )
+
+    private companion object {
+        /**
+         * ~8 MB of GPX — a couple of hundred thousand track points, well past
+         * any single walk. Anything larger is the wrong file.
+         */
+        const val MAX_GPX_BYTES = 8_000_000
+
+        /**
+         * Points replayed between yields. Small enough that the progress bar
+         * moves smoothly on a long track, large enough that the yielding itself
+         * doesn't dominate the replay of a short one.
+         */
+        const val REPLAY_CHUNK = 100
+    }
+}
+
+/**
+ * What a GPX import is doing, so the UI can show it happening rather than
+ * leaving the user to guess from a map that may not visibly change at all.
+ */
+sealed interface GpxImport {
+
+    /** Opening and parsing the file. Length unknown until it's read. */
+    data object Reading : GpxImport
+
+    /** Feeding the parsed points through the tracker, [done] of [total]. */
+    data class Replaying(val done: Int, val total: Int) : GpxImport
+
+    /**
+     * The track is in. [route] is the path as actually recorded, for the map to
+     * frame — without it an import of somewhere else looks like nothing happened.
+     */
+    data class Done(
+        val headline: String,
+        val detail: String,
+        val route: List<LatLng>,
+    ) : GpxImport
+
+    /** Nothing was imported, and this is why. */
+    data class Failed(val reason: String) : GpxImport
 }
