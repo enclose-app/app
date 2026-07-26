@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.material.icons.filled.Loop
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Terrain
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -160,6 +161,16 @@ fun ProfileScreen(
                         modifier = Modifier.weight(1f),
                     )
                 }
+                Spacer(Modifier.height(12.dp))
+                // Full width rather than paired with an invented sixth figure —
+                // three columns would ellipsize values like "1.24 km²".
+                StatTile(
+                    label = "Elevation climbed",
+                    value = formatClimb(stats.totalElevationGainMeters),
+                    icon = Icons.Filled.Terrain,
+                    accent = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
 
             CoverageCard(
@@ -219,6 +230,16 @@ fun ProfileScreen(
                         "Longest walk",
                         if (stats.longestWalkMeters > 0) {
                             formatDistance(stats.longestWalkMeters)
+                        } else {
+                            EM_DASH
+                        },
+                    )
+                    // An em dash, not "0 m": walks recorded before altitude was
+                    // kept have no climb to report, which isn't a flat walk.
+                    DetailRow(
+                        "Biggest climb",
+                        if (stats.biggestClimbMeters > 0) {
+                            formatClimb(stats.biggestClimbMeters)
                         } else {
                             EM_DASH
                         },

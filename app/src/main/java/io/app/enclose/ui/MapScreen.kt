@@ -143,6 +143,7 @@ fun MapScreen(
 ) {
     val walk by viewModel.walk.collectAsStateWithLifecycle()
     val territories by viewModel.territories.collectAsStateWithLifecycle()
+    val walksById by viewModel.walksById.collectAsStateWithLifecycle()
     val testMode by viewModel.testMode.collectAsStateWithLifecycle()
     val activityType by viewModel.activityType.collectAsStateWithLifecycle()
     val pendingClaim by viewModel.pendingClaim.collectAsStateWithLifecycle()
@@ -461,6 +462,9 @@ fun MapScreen(
     if (showList) {
         TerritoryListSheet(
             territories = territories,
+            // A claim shares its id with the walk that made it, so the walk's
+            // climb is the claim's climb.
+            climbById = walksById.mapValues { (_, w) -> w.elevationGainMeters },
             sort = territorySort,
             onSortChange = viewModel::setTerritorySort,
             onDismiss = { showList = false },
@@ -802,11 +806,13 @@ private fun LiveStats(walk: TrackingManager.WalkState, testMode: Boolean) {
         if (!testMode) GpsAccuracyIndicator(walk.accuracyMeters)
     }
 
+    // Five figures over two rows rather than one: at 20sp a fifth column leaves
+    // about 68dp, which clips values like "8:20 /km" instead of ellipsing them.
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        // Equal weights: the four figures keep their columns as digits change.
+        // Equal weights: the figures keep their columns as digits change.
         Metric(
             label = "Distance",
             value = formatDistance(walk.distanceMeters),
@@ -822,11 +828,25 @@ private fun LiveStats(walk: TrackingManager.WalkState, testMode: Boolean) {
             value = formatPace(walk.distanceMeters, elapsedMs),
             modifier = Modifier.weight(1f),
         )
+    }
+    // A sibling row, not a nested one: the panel's Column spaces its children.
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Metric(
+            label = "Climb",
+            value = formatClimb(walk.elevationGainMeters),
+            modifier = Modifier.weight(1f),
+        )
         Metric(
             label = "From start",
             value = walk.distanceToStartMeters?.let { formatDistance(it) } ?: EM_DASH,
             modifier = Modifier.weight(1f),
         )
+        // Holds the third column so the two rows line up as a grid instead of
+        // the lower pair drifting between the columns above it.
+        Spacer(Modifier.weight(1f))
     }
 
     // While movement is rejected, the loop checklist is meaningless — what the
@@ -1147,10 +1167,14 @@ private fun ClaimDialog(
                     )
                 }
                 Spacer(Modifier.height(8.dp))
+                // Climb rides on the caption rather than becoming a third tile,
+                // for the width reason above.
                 Text(
-                    "Closed ${formatDistance(pending.distanceToStartMeters)} from your start",
+                    "Closed ${formatDistance(pending.distanceToStartMeters)} from your " +
+                        "start · ${formatClimb(pending.elevationGainMeters)} climbed",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
                 )
 
                 Spacer(Modifier.height(18.dp))

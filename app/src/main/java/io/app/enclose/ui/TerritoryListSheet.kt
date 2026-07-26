@@ -72,6 +72,12 @@ private const val SEARCH_THRESHOLD = 6
 @Composable
 fun TerritoryListSheet(
     territories: List<Territory>,
+    /**
+     * Climb per claim, keyed by territory id. Kept as a lookup rather than a
+     * field on [Territory] because elevation belongs to the walk, and claims
+     * made before altitude was recorded are simply absent from the map.
+     */
+    climbById: Map<String, Double> = emptyMap(),
     /** Hoisted so the choice outlives the sheet — and the app session. */
     sort: TerritorySort,
     onSortChange: (TerritorySort) -> Unit,
@@ -193,6 +199,7 @@ fun TerritoryListSheet(
                 itemsIndexed(visible, key = { _, t -> t.id }) { index, territory ->
                     TerritoryRow(
                         territory = territory,
+                        climbMeters = climbById[territory.id]?.takeIf { it > 0.0 },
                         now = now,
                         onClick = { onSelect(territory) },
                         onShowOnMap = { onShowOnMap(territory) },
@@ -240,6 +247,8 @@ fun TerritoryListSheet(
 @Composable
 private fun TerritoryRow(
     territory: Territory,
+    /** Climb for this claim, or null when its walk recorded no altitude. */
+    climbMeters: Double?,
     now: Long,
     onClick: () -> Unit,
     onShowOnMap: () -> Unit,
@@ -269,11 +278,18 @@ private fun TerritoryRow(
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                "${formatArea(territory.areaSqMeters)} · " +
-                    "${formatDistance(territory.perimeterMeters)} around",
+                buildString {
+                    append(formatArea(territory.areaSqMeters))
+                    append(" · ")
+                    append("${formatDistance(territory.perimeterMeters)} around")
+                    // Appended only when there is a climb to report — a flat
+                    // "0 m up" on every pre-altitude claim would be a lie.
+                    if (climbMeters != null) append(" · ${formatClimb(climbMeters)} up")
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {

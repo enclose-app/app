@@ -42,6 +42,15 @@ internal fun formatDistance(meters: Double): String =
     if (meters >= 1000) String.format(Locale.US, "%.2f km", meters / 1000.0)
     else "${meters.roundToInt()} m"
 
+/**
+ * Climb as whole metres — "48 m", "1,240 m" — never converted to kilometres.
+ * Elevation gain is read vertically and compared against other climbs, and
+ * "1.24 km" of ascent reads like a horizontal distance; the grouped metres also
+ * stop a long day being mistaken for a short one at a glance.
+ */
+internal fun formatClimb(meters: Double): String =
+    String.format(Locale.US, "%,d m", meters.roundToInt())
+
 /** Elapsed time as mm:ss, or h:mm:ss once past an hour. */
 internal fun formatElapsed(ms: Long): String {
     val totalSeconds = ms / 1000

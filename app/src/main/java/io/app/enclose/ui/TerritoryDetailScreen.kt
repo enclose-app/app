@@ -397,7 +397,7 @@ private fun WalkCard(walk: Walk?) {
             DetailRow("Pace", formatPace(walk.perimeterMeters, pacing))
         }
         if (hasClimb) {
-            DetailRow("Elevation gain", formatDistance(walk.elevationGainMeters))
+            DetailRow("Climb", formatClimb(walk.elevationGainMeters))
         }
     }
 }

@@ -88,8 +88,10 @@ class ProfileViewModel(app: Application) : AndroidViewModel(app) {
     private fun computeStats(territories: List<Territory>, walks: List<Walk>): ProfileStats {
         val totalArea = territories.sumOf { it.areaSqMeters }
         val totalDistance = walks.sumOf { it.perimeterMeters }
+        val totalClimb = walks.sumOf { it.elevationGainMeters }
         val biggest = territories.maxByOrNull { it.areaSqMeters }
         val longestWalk = walks.maxByOrNull { it.perimeterMeters }
+        val biggestClimb = walks.maxOfOrNull { it.elevationGainMeters } ?: 0.0
         val firstClaim = territories.minOfOrNull { it.claimedAtEpochMs }
 
         return ProfileStats(
@@ -97,6 +99,8 @@ class ProfileViewModel(app: Application) : AndroidViewModel(app) {
             walkCount = walks.size,
             totalAreaSqMeters = totalArea,
             totalDistanceMeters = totalDistance,
+            totalElevationGainMeters = totalClimb,
+            biggestClimbMeters = biggestClimb,
             biggestTerritoryName = biggest?.name,
             biggestTerritoryAreaSqMeters = biggest?.areaSqMeters ?: 0.0,
             longestWalkMeters = longestWalk?.perimeterMeters ?: 0.0,
@@ -131,9 +135,16 @@ data class ProfileStats(
     val walkCount: Int = 0,
     val totalAreaSqMeters: Double = 0.0,
     val totalDistanceMeters: Double = 0.0,
+    /**
+     * Climb summed across every recorded walk. Walks made before altitude was
+     * kept contribute zero, so this can only understate — never invent — height.
+     */
+    val totalElevationGainMeters: Double = 0.0,
     val biggestTerritoryName: String? = null,
     val biggestTerritoryAreaSqMeters: Double = 0.0,
     val longestWalkMeters: Double = 0.0,
+    /** Most climbed on a single walk; zero when nothing has any altitude yet. */
+    val biggestClimbMeters: Double = 0.0,
     val firstClaimEpochMs: Long? = null,
     /** Per-city coverage, biggest first. See [Coverage] for what the % means. */
     val cities: List<CityCoverage> = emptyList(),
