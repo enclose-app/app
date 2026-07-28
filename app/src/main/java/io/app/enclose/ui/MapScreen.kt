@@ -42,6 +42,8 @@ import androidx.compose.material.icons.automirrored.filled.DirectionsBike
 import androidx.compose.material.icons.automirrored.filled.DirectionsRun
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.MoreVert
@@ -155,6 +157,7 @@ fun MapScreen(
     val voidedWalk by viewModel.voidedWalk.collectAsStateWithLifecycle()
     val gpxImport by viewModel.gpxImport.collectAsStateWithLifecycle()
     val basemapStyle by viewModel.basemapStyle.collectAsStateWithLifecycle()
+    val home by viewModel.home.collectAsStateWithLifecycle()
     val territorySort by viewModel.territorySort.collectAsStateWithLifecycle()
     val profile by profileViewModel.state.collectAsStateWithLifecycle()
 
@@ -175,6 +178,11 @@ fun MapScreen(
     var showList by rememberSaveable { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var confirmDiscardWalk by remember { mutableStateOf(false) }
+    // Home button dialogs: the position being offered as home, the reset
+    // confirmation behind the hold, and "there's no fix to save yet".
+    var confirmSetHome by remember { mutableStateOf<LatLng?>(null) }
+    var confirmResetHome by remember { mutableStateOf(false) }
+    var noFixForHome by remember { mutableStateOf(false) }
     // Measured height of the bottom panel, so floating UI can clear it.
     var panelHeightPx by remember { mutableIntStateOf(0) }
     var topBarHeightPx by remember { mutableIntStateOf(0) }
@@ -374,6 +382,40 @@ fun MapScreen(
                 enabled = controller.isStyleLoaded,
                 onClick = { controller.zoomBy(-ZOOM_BUTTON_STEP) },
             )
+            // Home: tap to fly back to it, hold to reset it. Unset, the tap
+            // offers to save where the user is standing — nothing sets it
+            // behind their back, since a guessed home is one they'd have to
+            // notice and undo.
+            MapControlButton(
+                icon = if (home == null) Icons.Outlined.Home else Icons.Filled.Home,
+                contentDescription = if (home == null) {
+                    "Set your home position"
+                } else {
+                    "Go home"
+                },
+                // Flying home needs only a map; setting it needs a fix.
+                enabled = if (home == null) controller.canLocate else controller.isStyleLoaded,
+                tint = if (home == null) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.primary
+                },
+                onLongPress = if (home == null) null else ({ confirmResetHome = true }),
+                longPressLabel = "Reset your home position",
+                onClick = {
+                    val saved = home
+                    if (saved != null) {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        controller.flyTo(saved)
+                    } else {
+                        // Read once, and remember what was read: saving the fix
+                        // the user was shown beats re-reading a newer one after
+                        // they've walked on during the dialog.
+                        val here = controller.currentLocation()
+                        if (here != null) confirmSetHome = here else noFixForHome = true
+                    }
+                },
+            )
             MapControlButton(
                 icon = Icons.Filled.MyLocation,
                 contentDescription = "Recenter on my location",
@@ -497,6 +539,48 @@ fun MapScreen(
             title = "Couldn't import that",
             message = state.reason,
             onDismiss = viewModel::dismissGpxImport,
+        )
+    }
+
+    confirmSetHome?.let { here ->
+        ConfirmDialog(
+            title = "Set home here?",
+            message = "Where you're standing now becomes your home. The home button " +
+                "brings the map straight back to it; holding the button for three " +
+                "seconds clears it again.",
+            confirmLabel = "Set home",
+            onConfirm = {
+                confirmSetHome = null
+                viewModel.setHome(here)
+                controller.flyTo(here)
+                scope.launch { snackbarHost.showSnackbar("Home set") }
+            },
+            onDismiss = { confirmSetHome = null },
+        )
+    }
+
+    if (confirmResetHome) {
+        ConfirmDialog(
+            title = "Reset home position?",
+            message = "Your home is cleared. The button then asks you to set it again " +
+                "from wherever you are.",
+            confirmLabel = "Reset home",
+            destructive = true,
+            onConfirm = {
+                confirmResetHome = false
+                viewModel.clearHome()
+                scope.launch { snackbarHost.showSnackbar("Home cleared") }
+            },
+            onDismiss = { confirmResetHome = false },
+        )
+    }
+
+    if (noFixForHome) {
+        NoticeDialog(
+            title = "No position yet",
+            message = "There's no GPS fix yet, so there's nothing to save as home. " +
+                "Wait for your position to show on the map and try again.",
+            onDismiss = { noFixForHome = false },
         )
     }
 

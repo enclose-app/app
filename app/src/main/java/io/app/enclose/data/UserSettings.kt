@@ -2,6 +2,7 @@ package io.app.enclose.data
 
 import android.content.Context
 import androidx.core.content.edit
+import io.app.enclose.geo.LatLng
 
 /** Where the map was left: centre, zoom, and orientation. */
 data class MapCamera(
@@ -117,6 +118,39 @@ class UserSettings(context: Context) {
             }
         }
 
+    /**
+     * The position the map's home button returns to, or null until the user
+     * sets one. Cleared by resetting it, never by anything automatic.
+     *
+     * Stored as raw double bits rather than the floats the camera uses: a
+     * camera is a framing and survives a metre of rounding, but home is a
+     * doorstep the user pointed at once, and rounding it on every read/write
+     * cycle is drift with no upside. Both keys must be present for the value to
+     * read back, so a partial write reads as "no home" rather than as a point
+     * in the Gulf of Guinea.
+     */
+    var home: LatLng?
+        get() {
+            if (!prefs.contains(KEY_HOME_LAT) || !prefs.contains(KEY_HOME_LNG)) return null
+            val lat = Double.fromBits(prefs.getLong(KEY_HOME_LAT, 0L))
+            val lng = Double.fromBits(prefs.getLong(KEY_HOME_LNG, 0L))
+            if (lat !in -90.0..90.0 || lng !in -180.0..180.0) return null
+            return LatLng(lat, lng)
+        }
+        set(value) {
+            if (value == null) {
+                prefs.edit {
+                    remove(KEY_HOME_LAT)
+                    remove(KEY_HOME_LNG)
+                }
+                return
+            }
+            prefs.edit {
+                putLong(KEY_HOME_LAT, value.lat.toRawBits())
+                putLong(KEY_HOME_LNG, value.lng.toRawBits())
+            }
+        }
+
     private companion object {
         // Unchanged from the inline version — renaming would silently reset
         // choices users have already made.
@@ -134,6 +168,8 @@ class UserSettings(context: Context) {
         const val KEY_CAM_ZOOM = "camera_zoom"
         const val KEY_CAM_BEARING = "camera_bearing"
         const val KEY_CAM_TILT = "camera_tilt"
+        const val KEY_HOME_LAT = "home_lat"
+        const val KEY_HOME_LNG = "home_lng"
 
         const val DEFAULT_ZOOM = 16f
     }

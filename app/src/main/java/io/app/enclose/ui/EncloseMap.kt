@@ -133,6 +133,29 @@ class MapController {
         scope?.launch { flyToUser(m) }
     }
 
+    /**
+     * The last fix the map has, or null before one arrives. Read rather than
+     * waited on: this answers "can I save where I'm standing right now?", and a
+     * caller that has to poll for an answer would be holding a dialog open
+     * while it did.
+     */
+    fun currentLocation(): LatLng? {
+        val m = map ?: return null
+        val loc = lastKnownLocation(m) ?: return null
+        return LatLng(loc.latitude, loc.longitude)
+    }
+
+    /** Animate to a fixed point (the saved home), at street-level zoom. */
+    fun flyTo(point: LatLng) {
+        val m = map ?: return
+        runCatching {
+            m.animateCamera(
+                CameraUpdateFactory.newLatLngZoom(MlLatLng(point.lat, point.lng), FOCUS_ZOOM),
+                FOCUS_ANIM_MS,
+            )
+        }
+    }
+
     /** Zoom by whole-ish steps from the zoom controls. */
     fun zoomBy(delta: Double) {
         val m = map ?: return

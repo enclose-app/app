@@ -7,11 +7,18 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import android.os.SystemClock
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,18 +40,25 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,7 +70,14 @@ import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -66,6 +87,7 @@ import io.app.enclose.geo.LatLng
 import io.app.enclose.ui.theme.LocalEncloseAccents
 import io.app.enclose.ui.theme.MetricTextStyle
 import io.app.enclose.ui.theme.PillShape
+import kotlinx.coroutines.launch
 import kotlin.math.cos
 import kotlin.math.min
 
@@ -122,7 +144,26 @@ fun MapSurface(
     )
 }
 
-/** A 48dp circular map control (recenter, zoom, …). */
+/**
+ * How long [MapControlButton]'s optional hold gesture must be held.
+ *
+ * Deliberately far longer than the platform's ~500ms long press. These controls
+ * sit under the thumb that is already tapping zoom and recenter, and what is
+ * wired to the hold is a reset — the gesture has to be one nobody performs by
+ * resting a finger on the map furniture.
+ */
+private const val HOLD_TO_ACT_MS = 3_000L
+
+/**
+ * A 48dp circular map control (recenter, zoom, …).
+ *
+ * Passing [onLongPress] adds a press-and-hold action lasting [longPressMs]. A
+ * ring fills around the icon while the hold runs, because three seconds of
+ * nothing happening is indistinguishable from a button that doesn't work, and
+ * it doubles as the way out: lifting before the ring closes is an ordinary tap.
+ * TalkBack gets the same action as a plain long-click, so reaching it never
+ * depends on timing a gesture.
+ */
 @Composable
 fun MapControlButton(
     icon: ImageVector,
@@ -131,20 +172,146 @@ fun MapControlButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     tint: Color = MaterialTheme.colorScheme.onSurface,
+    onLongPress: (() -> Unit)? = null,
+    /** TalkBack label for [onLongPress]; falls back to [contentDescription]. */
+    longPressLabel: String? = null,
+    longPressMs: Long = HOLD_TO_ACT_MS,
 ) {
-    MapSurface(
+    if (onLongPress == null) {
+        MapControlFace(
+            icon = icon,
+            contentDescription = contentDescription,
+            tint = tint,
+            enabled = enabled,
+            modifier = modifier
+                .size(TOUCH_TARGET)
+                .clip(CircleShape)
+                .clickable(
+                    enabled = enabled,
+                    onClickLabel = contentDescription,
+                    role = Role.Button,
+                    onClick = onClick,
+                ),
+        )
+        return
+    }
+
+    val haptics = LocalHapticFeedback.current
+    val interactions = remember { MutableInteractionSource() }
+    // The gesture scope forbids suspending on anything but itself, so the
+    // ripple's press interactions are emitted from alongside it.
+    val interactionScope = rememberCoroutineScope()
+    // Callbacks are read through these so the gesture detector below can be
+    // keyed on stable values only: re-keying it would cancel the hold in
+    // progress on the very recompositions the ring's own progress causes.
+    val currentOnClick by rememberUpdatedState(onClick)
+    val currentOnLongPress by rememberUpdatedState(onLongPress)
+    // When the finger went down, on the same clock as PointerInputChange, or
+    // null when nothing is being held.
+    var holdStartedAt by remember { mutableStateOf<Long?>(null) }
+    var holdProgress by remember { mutableFloatStateOf(0f) }
+
+    // Driven off the frame clock rather than run as a fixed animation, so the
+    // ring shows the hold that is actually elapsing.
+    LaunchedEffect(holdStartedAt, longPressMs) {
+        val startedAt = holdStartedAt
+        if (startedAt == null) {
+            holdProgress = 0f
+            return@LaunchedEffect
+        }
+        while (holdProgress < 1f) {
+            withFrameNanos { }
+            holdProgress =
+                ((SystemClock.uptimeMillis() - startedAt).toFloat() / longPressMs).coerceIn(0f, 1f)
+        }
+    }
+
+    MapControlFace(
+        icon = icon,
+        contentDescription = contentDescription,
+        tint = tint,
+        enabled = enabled,
+        holdProgress = holdProgress,
         modifier = modifier
             .size(TOUCH_TARGET)
             .clip(CircleShape)
-            .clickable(
-                enabled = enabled,
-                onClickLabel = contentDescription,
-                role = Role.Button,
-                onClick = onClick,
-            ),
-        shape = CircleShape,
-    ) {
-        Box(contentAlignment = Alignment.Center) {
+            .indication(interactions, ripple())
+            .semantics {
+                role = Role.Button
+                onClick(label = contentDescription) {
+                    currentOnClick()
+                    true
+                }
+                onLongClick(label = longPressLabel ?: contentDescription) {
+                    currentOnLongPress()
+                    true
+                }
+            }
+            .pointerInput(enabled, longPressMs) {
+                if (!enabled) return@pointerInput
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    val press = PressInteraction.Press(down.position)
+                    interactionScope.launch { interactions.emit(press) }
+                    holdStartedAt = down.uptimeMillis
+                    // Three outcomes, and the wrapping boolean is what tells the
+                    // last two apart: null means the clock ran out (a hold),
+                    // true means the finger lifted (a tap), false means the
+                    // gesture was cancelled by leaving the button.
+                    val liftedInTime = withTimeoutOrNull(longPressMs) {
+                        waitForUpOrCancellation() != null
+                    }
+                    holdStartedAt = null
+                    when (liftedInTime) {
+                        null -> {
+                            interactionScope.launch {
+                                interactions.emit(PressInteraction.Release(press))
+                            }
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            currentOnLongPress()
+                            // Swallow the eventual lift, or it lands as a tap on
+                            // top of the action just fired.
+                            waitForUpOrCancellation()
+                        }
+                        true -> {
+                            interactionScope.launch {
+                                interactions.emit(PressInteraction.Release(press))
+                            }
+                            currentOnClick()
+                        }
+                        false -> interactionScope.launch {
+                            interactions.emit(PressInteraction.Cancel(press))
+                        }
+                    }
+                }
+            },
+    )
+}
+
+/** The look of a [MapControlButton]; the gesture handling lives on [modifier]. */
+@Composable
+private fun MapControlFace(
+    icon: ImageVector,
+    contentDescription: String,
+    tint: Color,
+    enabled: Boolean,
+    modifier: Modifier,
+    holdProgress: Float = 0f,
+) {
+    MapSurface(modifier = modifier, shape = CircleShape) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            if (holdProgress > 0f) {
+                CircularProgressIndicator(
+                    progress = { holdProgress },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(3.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = Color.Transparent,
+                    strokeWidth = 2.5.dp,
+                    gapSize = 0.dp,
+                )
+            }
             Icon(
                 icon,
                 contentDescription = contentDescription,

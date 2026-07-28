@@ -167,6 +167,28 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /**
+     * The place the map's home button returns to, or null until one is set.
+     *
+     * A flow rather than a per-call read like [lastCamera]: the button's icon,
+     * its label and whether holding it does anything all follow this, so the UI
+     * has to see it change the moment it is set or reset. Nothing sets it
+     * automatically — a home the app guessed would be a home the user has to
+     * notice and undo.
+     */
+    private val _home = MutableStateFlow(settings.home)
+    val home: StateFlow<LatLng?> = _home.asStateFlow()
+
+    fun setHome(point: LatLng) {
+        _home.value = point
+        settings.home = point
+    }
+
+    fun clearHome() {
+        _home.value = null
+        settings.home = null
+    }
+
     /** How the territory list is ordered. Remembered between launches. */
     private val _territorySort = MutableStateFlow(
         runCatching { TerritorySort.valueOf(settings.territorySortName ?: "") }
