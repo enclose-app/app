@@ -1,0 +1,22 @@
+<!--
+  Play Store icon: 512x512, full-bleed square. Google applies its own rounded
+  mask and shadow, so no corner radius is baked in here and the mark is kept
+  well inside the safe circle so the mask can never clip it.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="brand" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9C3BC0"/>
+      <stop offset="0.5" stop-color="#7B1FA2"/>
+      <stop offset="1" stop-color="#4A148C"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#brand)"/>
+  <g transform="translate(256,256) scale(5.3) translate(-54,-53)">
+    <path d="M54,31 L80,46 L72,77 L39,79 L28,51 Z" fill="#FFFFFF" fill-opacity="0.22"/>
+    <path d="M54,31 L80,46 L72,77 L39,79 L28,51 Z" fill="none" stroke="#FFFFFF" stroke-width="6"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="54" cy="31" r="7" fill="#FFFFFF"/>
+    <circle cx="54" cy="31" r="3.4" fill="#7B1FA2"/>
+  </g>
+</svg>

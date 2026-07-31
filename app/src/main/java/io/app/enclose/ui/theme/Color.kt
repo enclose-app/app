@@ -126,6 +126,13 @@ data class EncloseAccents(
     val trail: Color,
     /** The start anchor dot. */
     val anchor: Color,
+    /**
+     * The saved home marker. Matches the home button's tint
+     * (`colorScheme.primary`) so the control and the pin it flies to read as
+     * the same thing, and stays clear of [anchor] so a home pin is never
+     * mistaken for the start of a walk.
+     */
+    val home: Color,
     /** Closing zone once the loop is long enough to claim. */
     val zoneReady: Color,
     /** Closing zone while conditions aren't met yet. */
@@ -139,6 +146,7 @@ data class EncloseAccents(
 internal val LightAccents = EncloseAccents(
     trail = Color(0xFFE07B1F),
     anchor = Color(0xFFE07B1F),
+    home = BrandPurple,
     zoneReady = BrandPurple,
     zoneWaiting = Color(0xFF8B8194),
     gpsGood = Color(0xFF2E7D32),
@@ -150,6 +158,7 @@ internal val LightAccents = EncloseAccents(
 internal val DarkAccents = EncloseAccents(
     trail = BrandAmber,
     anchor = BrandAmber,
+    home = Color(0xFFC286DC),
     zoneReady = Color(0xFFC286DC),
     zoneWaiting = Color(0xFF9E93A8),
     gpsGood = Color(0xFF7ED18A),

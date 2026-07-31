@@ -60,6 +60,10 @@ test that*, leaving the Android shell thin:
 | `PauseTracker` | `PauseTrackerTest` | takes the normalised `MotionSample` |
 | `Passport` | `PassportTest` | takes domain objects only |
 | `OfflineTilePlanner` | `OfflineTilePlannerTest` | policy split from the MapLibre calls |
+| `PanelSummary` | `PanelSummaryTest` | status/action decided once, drawn three ways |
+| `WindowLayoutPolicy` | `WindowLayoutPolicyTest` | window size in as plain Ints, controls as an enum |
+| `SplitScreenSupport` | `SplitScreenSupportTest` | `Build` fields passed in, not read |
+| `ActivityType.resolve` | `ActivityTypeTest` | the stored name is just a String |
 
 JTS is pure Java and works fine in JVM tests. `TrackingManager` is a singleton
 `object`, so tests touching it must reset state in `@After`.
@@ -170,12 +174,35 @@ is denied) and sustained speed averaged over a window. The user's declared
 `ActivityType` sets the speed ceiling; a confident classification may *raise* it
 but never lower it, and nothing exceeds `ABSOLUTE_MAX_SPEED_MPS`.
 
-Blocking is not immediately fatal: fixes are dropped and a warning shows, and
-only after `GRACE_MS` does the walk become `Void`. Resuming more than
-`MAX_RESUME_GAP_METERS` from where recording was suspended also voids the walk,
-since the intervening ground was never recorded. The extensive KDoc in
-`MotionGate.kt` explains why each threshold has the value it does — read it
-before touching the numbers.
+**RUN and BIKE are currently turned off** (`ActivityType.available`): their chips
+show greyed, and `ActivityType.resolve` sends a stored-but-unavailable choice
+back to WALK so nobody walks under a ceiling they can't see. Everything else
+about them is intact — including the classifier's ability to *detect* a run or a
+ride and raise the ceiling — so re-enabling is that one flag.
+
+**Three strikes, not one.** Blocking is not fatal, and neither is staying
+blocked. Movement rejected for longer than `GRACE_MS` (90 s) costs the walk a
+**strike** (`Verdict.Strike`); only the `MAX_STRIKES`th returns `Verdict.Void`.
+`bankStrike()` clears the speed window and the countdown, so carrying on costs
+another full window rather than a strike per fix — roughly four and a half
+minutes of sustained vehicle movement before a walk dies. The asymmetry is the
+reason: a driver caught on the third strike still claims nothing, while a walker
+caught wrongly on the first loses hours that can't be re-walked. `WalkState.strikes`
+drives the count the panel shows; the gate keeps one counter, so the resume-gap
+check below spends from the same three.
+
+Resuming from a blocked stretch is graded rather than fatal: under
+`MAX_RESUME_GAP_METERS` (150 m) costs nothing, beyond it costs a strike and flags
+`hadSignalGap`, and past `MAX_UNVERIFIED_GAP_METERS` (1 km) still voids outright —
+that isn't a walk with a hole in it, it's two walks with a drive between them.
+
+`clearSpeedWindow()` exists so the signal-gap path can drop the speed history
+without wiping strikes: silence is not evidence of speed, but it is not an
+amnesty either.
+
+The extensive KDoc in `MotionGate.kt` explains why each threshold has the value
+it does — including why the ceilings were raised once and why
+`ABSOLUTE_MAX_SPEED_MPS` was raised least. Read it before touching the numbers.
 
 **Silence is not evidence of speed.** A backgrounded or dozing device stops
 delivering fixes and then hands the missed stretch over in a burst on wake. Three
@@ -283,8 +310,8 @@ box between two cities is mostly countryside.
 ### Remembered preferences
 
 `UserSettings` (SharedPreferences, file `enclose_ui`) holds **every** preference:
-seen-intro, activity type, basemap, territory sort, test mode, and the map
-camera. It exists as one class because the previous ad-hoc `prefs.getString(...)`
+seen-intro, activity type, basemap, territory sort, test mode, panel-collapsed,
+floating-window, home, and the map camera. It exists as one class because the previous ad-hoc `prefs.getString(...)`
 calls scattered through `EncloseViewModel` are exactly why the camera and two
 toggles went unpersisted for so long — there was nowhere to notice the gap. Add
 new preferences here, not inline.
@@ -292,8 +319,11 @@ new preferences here, not inline.
 Two non-obvious rules:
 
 - `lastCamera()` is read fresh per composition, never cached in the ViewModel. A
-  rotation rebuilds the map and re-reads it; a snapshot taken at construction
-  would teleport the user back to wherever they were at launch. It is
+  rebuild of the map re-reads it; a snapshot taken at construction would teleport
+  the user back to wherever they were at launch. (Rotation no longer causes that
+  rebuild — `MainActivity` handles `orientation`/`screenSize` itself so a
+  multi-window resize can't tear down the GL map mid-walk — but process death and
+  a style swap still do.) It is
   deliberately not a flow — the map owns the live camera and reports back via
   `saveCamera`, and feeding it back would fight the gesture that just moved it.
 - Camera components are stored as separate floats, so a partial write reads as
@@ -344,24 +374,103 @@ uploads walks.
   back on the map), and the `when` in `MainActivity`. One-shot hand-offs from
   the detail screen back to the map (focus a territory, delete-with-undo) are
   passed as nullable `pending*` params with an `on*Consumed` callback.
+- **The bottom panel folds.** `ControlPanel` renders either the full panel or a
+  one-row `CollapsedPanel`, and the collapsed row always carries the primary
+  action — the controls for the walk you're on can never be the thing that's
+  hidden. Which of the two, and what each says, comes from `PanelSummary` (pure,
+  tested), shared with the floating card so three surfaces can't describe the
+  same walk differently. The choice persists in `UserSettings.panelCollapsed`;
+  `WindowLayoutPolicy` can force it collapsed in a short window but never forces
+  it open.
+- **Multi-window.** `MainActivity` is `resizeableActivity`, `singleTask`, and
+  declares `configChanges` for every dimension a resize touches — not for
+  rotation but so entering split screen or PiP doesn't recreate the activity and
+  tear down the GL map mid-walk. **No public API puts an app into split screen**:
+  `FLAG_ACTIVITY_LAUNCH_ADJACENT` is documented as doing nothing unless already
+  split, and Samsung's One UI is the one widespread build that honours it from
+  full screen. `SplitScreenSupport` (pure, tested) decides whether asking is
+  worth it; the map's split control is **hidden entirely where it isn't**, and
+  where it is, the request is followed by the Recents explanation if the window
+  hasn't changed within `SPLIT_SETTLE_MS`.
+- **Landscape is the compact layout, not a second one.** A landscape phone is
+  ~360–400 dp tall, under `COMPACT_HEIGHT_DP`, so it folds the panel and moves
+  zoom to the left rail by the same rules split screen uses. What landscape does
+  need on its own is **insets**: the app is edge-to-edge, and rotating moves the
+  display cutout and the 3-button nav bar to the *sides*, where `statusBarsPadding`
+  and `navigationBarsPadding` don't reach. Everything floating over the map takes
+  `WindowInsets.safeDrawing.only(...)` with the sides it actually needs — the
+  rails take horizontal only, because the panel's measured height already carries
+  the bottom inset and adding it twice pushes the rail up a bar's worth. The
+  panel is capped at `PANEL_MAX_WIDTH` so it doesn't become a metre-wide strip.
+- **There is no ⋮ app menu.** The explainer, test mode and GPX import live in the
+  profile screen's *App* section, behind the avatar; the map's chrome is only for
+  things reached for mid-walk. A ⋮ button appears **only** when
+  `ControlLayout.menu` is non-empty — i.e. when a window is so short that even
+  both rails can't hold the map controls — so a control can never become
+  unreachable, and an empty menu never takes up the corner. `GpxImportDialogs`
+  and `HowItWorksSheet` are `internal` because both screens can now show them:
+  the import outlives the screen that started it.
+- **The map's controls are data, not hard-coded buttons.** `MapControlSpec`
+  describes each one once; `WindowLayoutPolicy.placeControls` (pure, tested)
+  decides whether it's drawn on the right rail, the left rail or in the ⋮ menu,
+  from the height actually left between the top row and the panel. Nothing is
+  ever resized to fit — 48 dp is the accessibility minimum — so a short window
+  (split screen) **moves zoom to the left edge** first, and only what still
+  doesn't fit goes to the menu, lowest priority first. Each list keeps the rails'
+  drawing order, so growing the window puts a control back where it was instead
+  of reshuffling the stack. The left rail clears `ORNAMENT_CLEARANCE` so it never
+  covers the OSM attribution.
+- **Floating window (PiP)** and split screen are both **map controls, at the top
+  of the right-hand rail** — one button each, not menu items. Floating follows
+  the home button's idiom: tap floats now and arms the automatic float, hold
+  disarms it (`UserSettings.floatingWindow`). Auto-enter is armed *only while a
+  walk is running*: a window that appears over whatever the user switched to has
+  to be earning its place. In PiP the whole app is replaced by
+  `FloatingWalkCard` — the map, following the walker, with one line of figures
+  over the top. Two rules there: it never passes `onCameraIdle`, so chasing the
+  walker round a tiny window can't overwrite the framing the user set up on the
+  real map; and the figures sit at the *top*, because the bottom-left corner is
+  the OpenStreetMap attribution. PiP sends touches to the system, so the card is
+  a read-out, not a control panel.
 - `EncloseMap` wraps MapLibre's `MapView` in an `AndroidView`, forwarding the
-  Compose lifecycle. State reaches the map by updating four named
-  `GeoJsonSource`s (claimed polygons, closing zone, live path, start anchor);
+  Compose lifecycle. State reaches the map by updating five named
+  `GeoJsonSource`s (claimed polygons, closing zone, live path, start anchor, and
+  the saved home);
   camera actions go through the imperative `MapController` handle, which
   exposes `isStyleLoaded`/`canLocate` so the UI can disable controls that would
-  otherwise silently no-op. Basemaps are free OpenFreeMap styles — no API key.
+  otherwise silently no-op.
+- **The map follows the walker.** `MapController.followUser` turns on when a walk
+  starts and when the recenter button is pressed, and off the instant the user
+  pans — detected via `REASON_API_GESTURE`, so the app's own fly-to animations
+  don't switch it off on their first frame. Following uses `panTo` (centre only,
+  no zoom change): re-zooming every few seconds would take the choice of how much
+  ground to see away from the user. The location component stays on
+  `CameraMode.NONE` deliberately — following is driven from Compose off the same
+  walk state everything else reads, and MapLibre's own tracking mode would put a
+  second animator on the camera that knows nothing about the walk. Basemaps are free OpenFreeMap styles — no API key.
 - `BasemapStyle` is deliberately **independent of the app theme**: light/dark
   legibility outdoors is a different question from whether the user wants a dark
   app.
 - Theming: `EncloseTheme` sets fully explicit M3 light/dark schemes (M3 baseline
   generation was rejected — it mixed the brand purple with stock lavender greys)
   plus `LocalEncloseAccents`, a `CompositionLocal` of semantic colors (trail,
-  anchor, closing zone, GPS quality) shared by both Compose chrome and the map
-  overlays so the two can't drift.
+  anchor, home, closing zone, GPS quality) shared by both Compose chrome and the
+  map overlays so the two can't drift. The home marker is built in code
+  (`HomeMarker.kt`) rather than shipped as a drawable for exactly that reason —
+  its fill is `accents.home`, the same value the home button is tinted with — and
+  it is registered with `style.addImage` inside `installOverlays`, since a
+  light/dark swap builds a new style and an image added to the old one goes with
+  it.
 - Shared widgets live in `UiKit.kt`, formatters in `Format.kt`. Check both
   before writing a new card, tile, dialog, or unit formatter.
 
 ### Test mode
+
+**The UI no longer advertises it.** The single remaining mention is the switch in
+the profile screen's *App* section; the explainer sheet, the permission-recovery
+block, the top-row status chip and the panel's copy have all had it stripped,
+because the mode is expected to be removed. Anything added here stays behind that
+one switch — don't re-introduce it into user-facing copy.
 
 A dev affordance on the map: taps inject points instead of GPS. It uses relaxed
 distance thresholds (`TrackingManager`'s `*_TEST_METERS` constants), skips

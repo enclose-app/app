@@ -1,8 +1,6 @@
 package io.app.enclose.ui
 
 import android.os.SystemClock
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
@@ -18,15 +16,19 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -44,16 +46,21 @@ import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LocationOff
+import androidx.compose.material.icons.filled.LocationSearching
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.PictureInPicture
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Splitscreen
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.TouchApp
-import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -64,6 +71,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -87,6 +95,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -99,8 +108,10 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -135,6 +146,19 @@ fun MapScreen(
     permissionBlocked: Boolean = false,
     /** Opens the system app-settings page, for the blocked-permission case. */
     onOpenAppSettings: () -> Unit = {},
+    /** True while Enclose shares the screen with another app. */
+    inMultiWindow: Boolean = false,
+    /** False where asking for split screen could never work — see [SplitScreenSupport]. */
+    splitScreenSupported: Boolean = false,
+    /** Asks the system for a split-screen half; false if it refused outright. */
+    onRequestSplitScreen: () -> Boolean = { false },
+    /** Whether the walk may float over other apps. */
+    floatingWindowEnabled: Boolean = false,
+    onSetFloatingWindow: (Boolean) -> Unit = {},
+    /** False where the device has no picture-in-picture at all. */
+    floatingWindowSupported: Boolean = false,
+    /** Floats the walk now; false if the system refused. */
+    onEnterFloatingWindow: () -> Boolean = { false },
     onOpenProfile: () -> Unit = {},
     onOpenTerritory: (String) -> Unit = {},
     /** Points to fit the camera to once (e.g. from "Show on map"). */
@@ -158,14 +182,9 @@ fun MapScreen(
     val gpxImport by viewModel.gpxImport.collectAsStateWithLifecycle()
     val basemapStyle by viewModel.basemapStyle.collectAsStateWithLifecycle()
     val home by viewModel.home.collectAsStateWithLifecycle()
+    val panelCollapsed by viewModel.panelCollapsed.collectAsStateWithLifecycle()
     val territorySort by viewModel.territorySort.collectAsStateWithLifecycle()
     val profile by profileViewModel.state.collectAsStateWithLifecycle()
-
-    // OpenDocument rather than GetContent: it gives a durable, readable uri, and
-    // the picker it opens is the one people expect for "find my file".
-    val gpxPicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri -> uri?.let(viewModel::importGpx) }
 
     val snackbarHost = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -183,10 +202,36 @@ fun MapScreen(
     var confirmSetHome by remember { mutableStateOf<LatLng?>(null) }
     var confirmResetHome by remember { mutableStateOf(false) }
     var noFixForHome by remember { mutableStateOf(false) }
+    // Multi-window: when a split-screen request lands nowhere, the user is told
+    // how to do it from Recents rather than left with a button that did nothing.
+    var splitRequestedAt by remember { mutableLongStateOf(0L) }
+    /** Whether the app was already sharing the screen when the request went out. */
+    var splitRequestedFrom by remember { mutableStateOf(false) }
+    var showSplitHelp by remember { mutableStateOf(false) }
+    var floatingRefused by remember { mutableStateOf(false) }
     // Measured height of the bottom panel, so floating UI can clear it.
     var panelHeightPx by remember { mutableIntStateOf(0) }
     var topBarHeightPx by remember { mutableIntStateOf(0) }
     val panelHeight = with(density) { panelHeightPx.toDp() }
+
+    // A split-screen half is about half the height the expanded panel was drawn
+    // for, so the window itself gets a say in whether the panel is folded.
+    val windowHeightDp = with(density) {
+        LocalWindowInfo.current.containerSize.height.toDp().value.toInt()
+    }
+    // Starting a walk folds the panel straight away: the moment there's a walk
+    // to look at, the map is what you want the screen for. Kept apart from the
+    // stored preference — this is about the walk, not a standing choice, so it
+    // lifts when the walk ends rather than changing what an idle map looks like
+    // tomorrow. Expanding it during a walk clears it, because an explicit choice
+    // outranks a convenience.
+    var autoCollapsed by remember { mutableStateOf(false) }
+    LaunchedEffect(walk.isTracking) { autoCollapsed = walk.isTracking }
+
+    val collapsePanel = WindowLayoutPolicy.collapsePanel(
+        userCollapsed = panelCollapsed || autoCollapsed,
+        heightDp = windowHeightDp,
+    )
 
     // Celebrate each claimed loop, and frame what was just won.
     LaunchedEffect(Unit) {
@@ -238,161 +283,106 @@ fun MapScreen(
         }
     }
 
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surfaceContainerLow),
-    ) {
-        EncloseMap(
-            walk = walk,
-            territories = territories,
-            hasLocationPermission = hasLocationPermission,
-            controller = controller,
-            onMapTap = if (testMode) viewModel::addTestPoint else null,
-            bottomInsetPx = panelHeightPx,
-            topInsetPx = topBarHeightPx,
-            basemap = basemapStyle,
-            // Read once per composition: stable while the map lives, refreshed
-            // when a rotation rebuilds it.
-            initialCamera = remember { viewModel.lastCamera() },
-            onCameraIdle = viewModel::saveCamera,
-            modifier = Modifier.fillMaxSize(),
-        )
-
-        // The basemap is blank while tiles load; say so rather than showing grey.
-        AnimatedVisibility(
-            visible = !controller.isStyleLoaded,
-            enter = fadeIn(),
-            exit = fadeOut(tween(400)),
-            modifier = Modifier.align(Alignment.Center),
-        ) {
-            MapLoadingIndicator()
-        }
-
-        // --- Top row: claims count, test marker, menu, profile ----------------
-        Row(
-            Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                // Measured before the insets/padding modifiers so the reported
-                // height covers everything the map must stay clear of.
-                .onSizeChanged { topBarHeightPx = it.height }
-                .statusBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            MapChip(
-                icon = Icons.Filled.Flag,
-                text = if (territories.isEmpty()) {
-                    "No claims yet"
-                } else {
-                    "${territories.size} · ${formatArea(territories.sumOf { it.areaSqMeters })}"
-                },
-                contentDescription = "Open your claimed territories",
-                onClick = { showList = true },
-            )
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                // Test mode is easy to leave on by accident, so it stays visible.
-                AnimatedVisibility(visible = testMode, enter = fadeIn(), exit = fadeOut()) {
-                    MapChip(
-                        icon = Icons.Filled.TouchApp,
-                        text = "Test",
-                        contentDescription = "Turn off test mode",
-                        onClick = { viewModel.setTestMode(false) },
-                        container = MaterialTheme.colorScheme.secondaryContainer,
-                        content = MaterialTheme.colorScheme.onSecondaryContainer,
-                    )
-                }
-
-                Box {
-                    MapControlButton(
-                        icon = Icons.Filled.MoreVert,
-                        contentDescription = "More options",
-                        onClick = { showMenu = true },
-                    )
-                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text(if (testMode) "Test mode · on" else "Test mode") },
-                            onClick = {
-                                viewModel.setTestMode(!testMode)
-                                showMenu = false
-                            },
-                            leadingIcon = { Icon(Icons.Filled.TouchApp, null) },
-                            trailingIcon = {
-                                if (testMode) Icon(Icons.Filled.Check, contentDescription = null)
-                            },
-                        )
-                        // Only while test mode is on: outside it the imported
-                        // points would be competing with live GPS for the walk.
-                        if (testMode) {
-                            DropdownMenuItem(
-                                text = { Text("Import GPX…") },
-                                onClick = {
-                                    showMenu = false
-                                    // Most providers hand GPX over as
-                                    // application/octet-stream or nothing at
-                                    // all, so a narrow filter mostly hides the
-                                    // file the user came to pick.
-                                    gpxPicker.launch(arrayOf("*/*"))
-                                },
-                                leadingIcon = { Icon(Icons.Filled.UploadFile, null) },
-                            )
+    // --- Map controls: where each one goes depends on the room there is ---
+    // Defined once, as data, so the ones that don't fit can be drawn in the
+    // ⋮ menu instead without a second copy of what each one does.
+    val controls = buildList {
+        // Window controls come first: they're about where the app is, not
+        // where the map is looking. They're also the first to move into the
+        // menu when room runs short — you press them once, not mid-stride.
+        if (floatingWindowSupported) {
+            // Tap floats now and arms the automatic float for when the user
+            // leaves the app mid-walk; holding disarms it again. One control,
+            // the same tap-and-hold idiom as Home below.
+            add(
+                MapControlSpec(
+                    control = MapControl.FLOAT,
+                    icon = Icons.Filled.PictureInPictureAlt,
+                    label = "Float the walk over other apps",
+                    tint = if (floatingWindowEnabled) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    onLongPress = if (floatingWindowEnabled) {
+                        {
+                            onSetFloatingWindow(false)
+                            scope.launch { snackbarHost.showSnackbar("Floating window off") }
                         }
-                        DropdownMenuItem(
-                            text = { Text("How Enclose works") },
-                            onClick = {
-                                viewModel.openHowItWorks()
-                                showMenu = false
-                            },
-                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.HelpOutline, null) },
-                        )
-                    }
-                }
-
-                ProfileAvatarButton(
-                    initials = profile.profile?.initials ?: "?",
-                    onClick = onOpenProfile,
-                )
-            }
+                    } else {
+                        null
+                    },
+                    longPressLabel = "Stop floating automatically",
+                    onClick = {
+                        onSetFloatingWindow(true)
+                        if (!onEnterFloatingWindow()) floatingRefused = true
+                    },
+                ),
+            )
         }
-
-        // --- Right rail: zoom + recenter, sitting above the panel -------------
-        Column(
-            Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 12.dp)
-                .padding(bottom = panelHeight + 12.dp),
-            horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            MapControlButton(
+        // Only where the request can actually land — see SplitScreenSupport.
+        // A control that never works is worse than one that isn't there.
+        if (splitScreenSupported) {
+            add(
+                MapControlSpec(
+                    control = MapControl.SPLIT,
+                    icon = Icons.Filled.Splitscreen,
+                    // Live in both states: asked for from inside a split, the
+                    // request re-pairs this task and takes the previous split
+                    // down with it, which is the only handle an app has on one.
+                    label = if (inMultiWindow) {
+                        "Rebuild the split screen"
+                    } else {
+                        "Share the screen with another app"
+                    },
+                    tint = if (inMultiWindow) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    onClick = {
+                        // Remembered so "did anything happen?" can be answered by
+                        // comparing against the state we asked from, in either
+                        // direction — into a split, or out of the old one.
+                        splitRequestedFrom = inMultiWindow
+                        if (onRequestSplitScreen()) {
+                            splitRequestedAt = System.currentTimeMillis()
+                        } else {
+                            showSplitHelp = true
+                        }
+                    },
+                ),
+            )
+        }
+        add(
+            MapControlSpec(
+                control = MapControl.ZOOM_IN,
                 icon = Icons.Filled.Add,
-                contentDescription = "Zoom in",
+                label = "Zoom in",
                 enabled = controller.isStyleLoaded,
+                tint = MaterialTheme.colorScheme.onSurface,
                 onClick = { controller.zoomBy(ZOOM_BUTTON_STEP) },
-            )
-            MapControlButton(
+            ),
+        )
+        add(
+            MapControlSpec(
+                control = MapControl.ZOOM_OUT,
                 icon = Icons.Filled.Remove,
-                contentDescription = "Zoom out",
+                label = "Zoom out",
                 enabled = controller.isStyleLoaded,
+                tint = MaterialTheme.colorScheme.onSurface,
                 onClick = { controller.zoomBy(-ZOOM_BUTTON_STEP) },
-            )
-            // Home: tap to fly back to it, hold to reset it. Unset, the tap
-            // offers to save where the user is standing — nothing sets it
-            // behind their back, since a guessed home is one they'd have to
-            // notice and undo.
-            MapControlButton(
+            ),
+        )
+        // Home: tap to fly back to it, hold to reset it. Unset, the tap
+        // offers to save where the user is standing — nothing sets it
+        // behind their back, since a guessed home is one they'd have to
+        // notice and undo.
+        add(
+            MapControlSpec(
+                control = MapControl.HOME,
                 icon = if (home == null) Icons.Outlined.Home else Icons.Filled.Home,
-                contentDescription = if (home == null) {
-                    "Set your home position"
-                } else {
-                    "Go home"
-                },
+                label = if (home == null) "Set your home position" else "Go home",
                 // Flying home needs only a map; setting it needs a fix.
                 enabled = if (home == null) controller.canLocate else controller.isStyleLoaded,
                 tint = if (home == null) {
@@ -415,33 +405,226 @@ fun MapScreen(
                         if (here != null) confirmSetHome = here else noFixForHome = true
                     }
                 },
-            )
-            MapControlButton(
-                icon = Icons.Filled.MyLocation,
-                contentDescription = "Recenter on my location",
+            ),
+        )
+        // Filled while the map is following, hollow once a pan has stopped
+        // it: the same button both reports the state and is how you get
+        // following back, so "why has it stopped keeping up?" answers itself.
+        add(
+            MapControlSpec(
+                control = MapControl.RECENTER,
+                icon = if (controller.followUser) {
+                    Icons.Filled.MyLocation
+                } else {
+                    Icons.Filled.LocationSearching
+                },
+                label = if (controller.followUser) {
+                    "Following your location"
+                } else {
+                    "Recenter and follow your location"
+                },
                 enabled = controller.canLocate,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = if (controller.followUser) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
                 onClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                     controller.recenter()
                 },
-            )
-            // Basemap toggle: the dark map is hard to read in bright sun. Shows
-            // the map you'd get by tapping, not the one you're looking at.
-            MapControlButton(
+            ),
+        )
+        // Basemap toggle: the dark map is hard to read in bright sun. Shows
+        // the map you'd get by tapping, not the one you're looking at.
+        add(
+            MapControlSpec(
+                control = MapControl.BASEMAP,
                 icon = if (basemapDark) Icons.Filled.LightMode else Icons.Filled.DarkMode,
-                contentDescription = if (basemapDark) {
-                    "Switch to light map"
-                } else {
-                    "Switch to dark map"
-                },
+                label = if (basemapDark) "Switch to light map" else "Switch to dark map",
                 enabled = controller.isStyleLoaded,
+                tint = MaterialTheme.colorScheme.onSurface,
                 onClick = {
                     viewModel.setBasemapStyle(
                         if (basemapDark) BasemapStyle.LIGHT else BasemapStyle.DARK,
                     )
                 },
+            ),
+        )
+    }
+
+    // What's actually left between the top row and the panel, measured
+    // rather than assumed — the panel's height depends on what the walk is
+    // doing, so a guess would be wrong exactly when the window is tightest.
+    val railHeightDp = windowHeightDp -
+        with(density) { (panelHeightPx + topBarHeightPx).toDp().value.toInt() } -
+        RAIL_MARGIN_DP
+    val layout = WindowLayoutPolicy.placeControls(controls.map { it.control }, railHeightDp)
+    fun placed(where: List<MapControl>) = controls.filter { it.control in where }
+
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+        EncloseMap(
+            walk = walk,
+            territories = territories,
+            hasLocationPermission = hasLocationPermission,
+            controller = controller,
+            home = home,
+            // Tapped points place themselves; a camera that chases them moves the
+            // map out from under the finger placing the next one.
+            followWalker = !testMode,
+            onMapTap = if (testMode) viewModel::addTestPoint else null,
+            bottomInsetPx = panelHeightPx,
+            topInsetPx = topBarHeightPx,
+            basemap = basemapStyle,
+            // Read once per composition: stable while the map lives, refreshed
+            // when a rotation rebuilds it.
+            initialCamera = remember { viewModel.lastCamera() },
+            onCameraIdle = viewModel::saveCamera,
+            modifier = Modifier.fillMaxSize(),
+        )
+
+        // The basemap is blank while tiles load; say so rather than showing grey.
+        AnimatedVisibility(
+            visible = !controller.isStyleLoaded,
+            enter = fadeIn(),
+            exit = fadeOut(tween(400)),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            MapLoadingIndicator()
+        }
+
+        // --- Top row: claims count, menu, profile -----------------------------
+        Row(
+            Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                // Measured before the insets/padding modifiers so the reported
+                // height covers everything the map must stay clear of.
+                .onSizeChanged { topBarHeightPx = it.height }
+                // Top and sides: in landscape the cutout is on the *side*, where
+                // statusBarsPadding alone left the claims chip under it.
+                .windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(
+                        WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
+                    ),
+                )
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            MapChip(
+                icon = Icons.Filled.Flag,
+                text = if (territories.isEmpty()) {
+                    "No claims yet"
+                } else {
+                    "${territories.size} · ${formatArea(territories.sumOf { it.areaSqMeters })}"
+                },
+                contentDescription = "Open your claimed territories",
+                onClick = { showList = true },
             )
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // No overflow menu of app settings any more: test mode, GPX
+                // import and the explainer live on the profile screen, behind
+                // the avatar. What can still appear here is map controls that
+                // had nowhere to sit — and only then, so an empty ⋮ never takes
+                // up the corner.
+                if (layout.menu.isNotEmpty()) {
+                    Box {
+                        MapControlButton(
+                            icon = Icons.Filled.MoreVert,
+                            contentDescription = "More map controls",
+                            onClick = { showMenu = true },
+                        )
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false },
+                        ) {
+                            // Hold gestures (resetting home, disarming the
+                            // floating window) don't survive the trip to a menu
+                            // item — they're back on the button as soon as the
+                            // window has room for it.
+                            placed(layout.menu).forEach { spec ->
+                                DropdownMenuItem(
+                                    text = { Text(spec.label) },
+                                    enabled = spec.enabled,
+                                    onClick = {
+                                        showMenu = false
+                                        spec.onClick()
+                                    },
+                                    leadingIcon = { Icon(spec.icon, null, tint = spec.tint) },
+                                )
+                            }
+                        }
+                    }
+                }
+
+                ProfileAvatarButton(
+                    initials = profile.profile?.initials ?: "?",
+                    onClick = onOpenProfile,
+                )
+            }
+        }
+
+        // --- Right rail: the map's controls, sitting above the panel ----------
+        Column(
+            Modifier
+                .align(Alignment.BottomEnd)
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                .padding(end = 12.dp)
+                // The panel's measured height already includes its own bottom
+                // inset, so the rail must not add one as well.
+                .padding(bottom = panelHeight + 12.dp),
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            placed(layout.right).forEach { spec ->
+                MapControlButton(
+                    icon = spec.icon,
+                    contentDescription = spec.label,
+                    enabled = spec.enabled,
+                    tint = spec.tint,
+                    onLongPress = spec.onLongPress,
+                    longPressLabel = spec.longPressLabel,
+                    onClick = spec.onClick,
+                )
+            }
+        }
+
+        // --- Left rail: zoom, once the right one has run out of room ----------
+        // Raised clear of the bottom-left corner, which carries MapLibre's logo
+        // and the OpenStreetMap attribution — a licence requirement, so it can't
+        // be covered by controls that had nowhere else to go.
+        if (layout.left.isNotEmpty()) {
+            Column(
+                Modifier
+                    .align(Alignment.BottomStart)
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
+                    )
+                    .padding(start = 12.dp)
+                    .padding(bottom = panelHeight + ORNAMENT_CLEARANCE),
+                horizontalAlignment = Alignment.Start,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                placed(layout.left).forEach { spec ->
+                    MapControlButton(
+                        icon = spec.icon,
+                        contentDescription = spec.label,
+                        enabled = spec.enabled,
+                        tint = spec.tint,
+                        onClick = spec.onClick,
+                    )
+                }
+            }
         }
 
         // The snackbar sits directly above the panel — anchored to the panel's
@@ -454,6 +637,9 @@ fun MapScreen(
                 .padding(horizontal = 12.dp),
         )
 
+        // Capped and centred: a panel stretched across a landscape phone puts
+        // the Start button an inch from the figures it belongs to, and on a
+        // tablet it's a metre of empty card.
         ControlPanel(
             walk = walk,
             testMode = testMode,
@@ -472,14 +658,26 @@ fun MapScreen(
             onFinishWithoutClaim = { confirmDiscardWalk = true },
             onRequestPermission = onRequestPermission,
             onOpenAppSettings = onOpenAppSettings,
-            onEnableTestMode = { viewModel.setTestMode(true) },
             onHowItWorks = viewModel::openHowItWorks,
+            collapsed = collapsePanel,
+            foldable = WindowLayoutPolicy.panelFoldable(windowHeightDp),
+            onCollapsedChange = { collapsed ->
+                // The user has said what they want the panel to do, so the
+                // automatic fold steps out of the way for the rest of this walk.
+                autoCollapsed = false
+                viewModel.setPanelCollapsed(collapsed)
+            },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .widthIn(max = PANEL_MAX_WIDTH)
                 // Measured outside the insets/margins so panelHeight is the full
                 // space the panel occupies at the bottom of the screen.
                 .onSizeChanged { panelHeightPx = it.height }
-                .navigationBarsPadding()
+                .windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(
+                        WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal,
+                    ),
+                )
                 .padding(horizontal = 12.dp, vertical = 12.dp),
         )
     }
@@ -499,11 +697,12 @@ fun MapScreen(
             title = "Walk discarded",
             message = when (reason) {
                 VoidReason.VEHICLE ->
-                    "That looked like a vehicle trip. Enclose only counts ground you " +
-                        "cover walking, running or cycling, so this walk wasn't kept."
+                    "That looked like a vehicle trip, through all " +
+                        "${MotionGate.MAX_STRIKES} warnings. Enclose only counts ground " +
+                        "you cover walking, running or cycling, so this walk wasn't kept."
                 VoidReason.TOO_FAST ->
-                    "You were moving faster than a walk, run or ride for too long, so " +
-                        "this walk wasn't kept."
+                    "You were moving faster than a walk, run or ride through all " +
+                        "${MotionGate.MAX_STRIKES} warnings, so this walk wasn't kept."
                 VoidReason.UNVERIFIED_GAP ->
                     "Recording picked up a long way from where it stopped, so there's no " +
                         "record of how you covered the ground in between. This walk " +
@@ -521,26 +720,7 @@ fun MapScreen(
         if (controller.isStyleLoaded && done.route.isNotEmpty()) controller.fitTo(done.route)
     }
 
-    when (val state = gpxImport) {
-        null -> Unit
-        is GpxImport.Reading -> GpxProgressDialog(label = "Reading the file…", progress = null)
-        is GpxImport.Replaying -> GpxProgressDialog(
-            label = "Replaying the track — ${state.done} of ${state.total} points",
-            progress = if (state.total == 0) null else state.done.toFloat() / state.total,
-        )
-
-        is GpxImport.Done -> NoticeDialog(
-            title = "Track imported",
-            message = "${state.headline}\n\n${state.detail}",
-            onDismiss = viewModel::dismissGpxImport,
-        )
-
-        is GpxImport.Failed -> NoticeDialog(
-            title = "Couldn't import that",
-            message = state.reason,
-            onDismiss = viewModel::dismissGpxImport,
-        )
-    }
+    GpxImportDialogs(gpxImport, onDismiss = viewModel::dismissGpxImport)
 
     confirmSetHome?.let { here ->
         ConfirmDialog(
@@ -572,6 +752,43 @@ fun MapScreen(
                 scope.launch { snackbarHost.showSnackbar("Home cleared") }
             },
             onDismiss = { confirmResetHome = false },
+        )
+    }
+
+    // The request either changed the window within a moment or the device
+    // ignored it. Nothing else can tell those apart, so the window itself is the
+    // answer — compared against the state it was asked from, so re-pairing an
+    // existing split is judged the same way as entering one.
+    val currentlyMultiWindow by rememberUpdatedState(inMultiWindow)
+    LaunchedEffect(splitRequestedAt) {
+        if (splitRequestedAt == 0L) return@LaunchedEffect
+        delay(SPLIT_SETTLE_MS)
+        if (currentlyMultiWindow == splitRequestedFrom) showSplitHelp = true
+    }
+
+    if (showSplitHelp) {
+        NoticeDialog(
+            title = "Split screen",
+            message = if (splitRequestedFrom) {
+                "This device won't let an app rebuild the split from inside it. " +
+                    "Drag the divider to the top or bottom edge to end this split, " +
+                    "then pair Enclose with the app you want."
+            } else {
+                "This device doesn't let an app put itself into split screen. " +
+                    "Open Recents, press and hold the Enclose card, choose Split screen, " +
+                    "then pick the app for the other half."
+            } + " Enclose keeps recording either way.",
+            onDismiss = { showSplitHelp = false },
+        )
+    }
+
+    if (floatingRefused) {
+        NoticeDialog(
+            title = "Couldn't float the window",
+            message = "The system turned the request down. Picture-in-picture can be " +
+                "switched off per app — check Settings › Apps › Enclose › " +
+                "Picture-in-picture and try again.",
+            onDismiss = { floatingRefused = false },
         )
     }
 
@@ -674,11 +891,16 @@ private fun ControlPanel(
     onFinishWithoutClaim: () -> Unit,
     onRequestPermission: () -> Unit,
     onOpenAppSettings: () -> Unit,
-    onEnableTestMode: () -> Unit,
     onHowItWorks: () -> Unit,
+    /** Minimised to a single row, so the map isn't half-covered. */
+    collapsed: Boolean,
+    /** False in a window too short for the expanded panel to be an option. */
+    foldable: Boolean,
+    onCollapsedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val shape = MaterialTheme.shapes.extraLarge
+    val summary = PanelSummary.of(walk, testMode, hasLocationPermission, permissionBlocked)
     // Beep + buzz once, the moment the loop becomes claimable, so the user knows
     // without looking at the screen. Keyed on readyToClose → fires on each
     // false→true transition.
@@ -706,14 +928,50 @@ private fun ControlPanel(
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
     ) {
+        if (collapsed) {
+            CollapsedPanel(
+                summary = summary,
+                walk = walk,
+                activityType = activityType,
+                onStart = onStart,
+                onClaim = onClaim,
+                onFinishWithoutClaim = onFinishWithoutClaim,
+                onRequestPermission = onRequestPermission,
+                onOpenAppSettings = onOpenAppSettings,
+                onExpand = if (foldable) ({ onCollapsedChange(false) }) else null,
+            )
+            return@Card
+        }
+
         Column(
-            Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+            Modifier.padding(horizontal = 18.dp).padding(top = 4.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            when {
-                // A walk in progress always owns the panel — losing permission
-                // mid-walk must not hide the controls for the walk you're on.
-                walk.isTracking -> {
+            // A full-width strip rather than a corner button: it's the whole top
+            // edge of the panel, so minimising never costs a careful tap, and the
+            // chevron reads as "this thing folds" without a label.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(24.dp)
+                    .clip(MaterialTheme.shapes.small)
+                    .clickable(
+                        onClickLabel = "Minimise the panel",
+                        role = Role.Button,
+                        onClick = { onCollapsedChange(true) },
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.KeyboardArrowDown,
+                    contentDescription = "Minimise the panel",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+
+            when (summary.status) {
+                PanelStatus.TRACKING, PanelStatus.BLOCKED, PanelStatus.READY -> {
                     LiveStats(walk, testMode = testMode)
                     WalkActions(
                         walk = walk,
@@ -724,29 +982,180 @@ private fun ControlPanel(
 
                 // Location is the whole point of the app, so an explicit, actionable
                 // recovery path replaces the old one-line red warning.
-                !hasLocationPermission && !testMode -> PermissionBlock(
+                PanelStatus.NO_PERMISSION -> PermissionBlock(
                     blocked = permissionBlocked,
                     onRequestPermission = onRequestPermission,
                     onOpenAppSettings = onOpenAppSettings,
-                    onEnableTestMode = onEnableTestMode,
                 )
 
-                else -> {
-                    IdleBlock(testMode = testMode, onHowItWorks = onHowItWorks)
+                PanelStatus.IDLE -> {
+                    IdleBlock(onHowItWorks = onHowItWorks)
                     ActivitySelector(selected = activityType, onSelect = onSelectActivity)
                     Button(
                         onClick = onStart,
                         modifier = Modifier.fillMaxWidth().height(54.dp),
                         shape = PillShape,
                     ) {
-                        ButtonContent(
-                            Icons.Filled.PlayArrow,
-                            if (testMode) "Start test walk" else "Start ${activityType.noun}",
-                        )
+                        ButtonContent(Icons.Filled.PlayArrow, "Start ${activityType.noun}")
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * The panel folded down to one row: what the walk is doing, and the single
+ * action that matters right now.
+ *
+ * The expanded panel is most of a phone screen, and a map you can only see the
+ * top half of is a poor map — but the walk's own controls can never be the thing
+ * that's hidden, so the primary action rides along in the collapsed row rather
+ * than being something you have to expand to reach.
+ */
+@Composable
+private fun CollapsedPanel(
+    summary: PanelSummary,
+    walk: TrackingManager.WalkState,
+    activityType: ActivityType,
+    onStart: () -> Unit,
+    onClaim: () -> Unit,
+    onFinishWithoutClaim: () -> Unit,
+    onRequestPermission: () -> Unit,
+    onOpenAppSettings: () -> Unit,
+    /** Null where the window is too short for the panel to expand into. */
+    onExpand: (() -> Unit)?,
+) {
+    val accents = LocalEncloseAccents.current
+    // Ticks so the elapsed time in the collapsed row keeps up with the expanded
+    // one; the stats are the reason to look at it at all.
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(walk.isTracking) {
+        while (walk.isTracking) {
+            now = System.currentTimeMillis()
+            delay(1000)
+        }
+    }
+    val elapsedMs = walk.startedAtMs?.let { (now - it).coerceAtLeast(0L) } ?: 0L
+
+    val dotColor = when (summary.status) {
+        PanelStatus.BLOCKED, PanelStatus.NO_PERMISSION -> MaterialTheme.colorScheme.error
+        PanelStatus.READY -> accents.success
+        PanelStatus.TRACKING -> accents.trail
+        PanelStatus.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val title = when (summary.status) {
+        PanelStatus.IDLE -> "Ready to claim ground"
+        PanelStatus.NO_PERMISSION -> "Location access needed"
+        PanelStatus.BLOCKED -> "Paused — not recording"
+        PanelStatus.READY -> "Back at the start"
+        PanelStatus.TRACKING -> walk.activityType.activeLabel
+    }
+    val detail = when (summary.status) {
+        PanelStatus.IDLE -> activityType.label
+        PanelStatus.NO_PERMISSION -> null
+        else -> "${formatDistance(walk.distanceMeters)} · ${formatElapsed(elapsedMs)}"
+    }
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Box(
+            Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(dotColor),
+        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (detail != null) {
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
+        CollapsedAction(
+            summary = summary,
+            activityType = activityType,
+            onStart = onStart,
+            onClaim = onClaim,
+            onFinishWithoutClaim = onFinishWithoutClaim,
+            onRequestPermission = onRequestPermission,
+            onOpenAppSettings = onOpenAppSettings,
+        )
+        if (onExpand != null) {
+            IconButton(onClick = onExpand, modifier = Modifier.size(TOUCH_TARGET)) {
+                Icon(
+                    Icons.Filled.KeyboardArrowUp,
+                    contentDescription = "Expand the panel",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** The single button the collapsed row leads with, per [PanelSummary.action]. */
+@Composable
+private fun CollapsedAction(
+    summary: PanelSummary,
+    activityType: ActivityType,
+    onStart: () -> Unit,
+    onClaim: () -> Unit,
+    onFinishWithoutClaim: () -> Unit,
+    onRequestPermission: () -> Unit,
+    onOpenAppSettings: () -> Unit,
+) {
+    val label = when (summary.action) {
+        PanelAction.START -> activityType.label
+        PanelAction.CLAIM -> "Claim"
+        PanelAction.END -> "End"
+        PanelAction.GRANT_PERMISSION -> "Grant"
+        PanelAction.OPEN_SETTINGS -> "Settings"
+    }
+    val onClick = when (summary.action) {
+        PanelAction.START -> onStart
+        PanelAction.CLAIM -> onClaim
+        PanelAction.END -> onFinishWithoutClaim
+        PanelAction.GRANT_PERMISSION -> onRequestPermission
+        PanelAction.OPEN_SETTINGS -> onOpenAppSettings
+    }
+    // Ending a walk is destructive and must not wear the inviting colour, exactly
+    // as in the expanded panel.
+    val colors = if (summary.action == PanelAction.END) {
+        ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        )
+    } else {
+        ButtonDefaults.buttonColors()
+    }
+    val icon = when (summary.action) {
+        PanelAction.START -> Icons.Filled.PlayArrow
+        PanelAction.CLAIM -> Icons.Filled.Flag
+        PanelAction.END -> Icons.Filled.Stop
+        PanelAction.GRANT_PERMISSION, PanelAction.OPEN_SETTINGS -> Icons.Filled.LocationOff
+    }
+    Button(
+        onClick = onClick,
+        modifier = Modifier.height(44.dp),
+        shape = PillShape,
+        colors = colors,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+    ) {
+        ButtonContent(icon, label)
     }
 }
 
@@ -768,6 +1177,10 @@ private fun ActivitySelector(
             val isSelected = type == selected
             FilterChip(
                 selected = isSelected,
+                // Shown but not selectable while a mode is turned off: hiding
+                // them would make the app look like it only ever did walking,
+                // and greyed chips say "not yet" instead.
+                enabled = type.available,
                 onClick = { onSelect(type) },
                 label = { Text(type.label) },
                 leadingIcon = {
@@ -794,25 +1207,20 @@ private fun ActivitySelector(
 }
 
 @Composable
-private fun IdleBlock(testMode: Boolean, onHowItWorks: () -> Unit) {
+private fun IdleBlock(onHowItWorks: () -> Unit) {
     Row(
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
             Text(
-                if (testMode) "Test mode" else "Ready to claim ground",
+                "Ready to claim ground",
                 style = MaterialTheme.typography.titleMedium,
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                if (testMode) {
-                    "Tap the map to drop points, circle back near the first one, " +
-                        "then close the loop."
-                } else {
-                    "Walk a loop and finish near where you started to claim " +
-                        "everything inside it."
-                },
+                "Walk a loop and finish near where you started to claim " +
+                    "everything inside it.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -828,7 +1236,6 @@ private fun PermissionBlock(
     blocked: Boolean,
     onRequestPermission: () -> Unit,
     onOpenAppSettings: () -> Unit,
-    onEnableTestMode: () -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
@@ -865,9 +1272,6 @@ private fun PermissionBlock(
         shape = PillShape,
     ) {
         Text(if (blocked) "Open settings" else "Grant location access")
-    }
-    TextButton(onClick = onEnableTestMode, modifier = Modifier.fillMaxWidth()) {
-        Text("Try it without GPS (test mode)")
     }
 }
 
@@ -934,11 +1338,7 @@ private fun LiveStats(walk: TrackingManager.WalkState, testMode: Boolean) {
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                when {
-                    blocked -> "Paused"
-                    testMode -> "Tapping a loop"
-                    else -> walk.activityType.activeLabel
-                },
+                if (blocked) "Paused" else walk.activityType.activeLabel,
                 style = MaterialTheme.typography.titleMedium,
             )
         }
@@ -993,6 +1393,11 @@ private fun LiveStats(walk: TrackingManager.WalkState, testMode: Boolean) {
     // user needs is why nothing is being recorded and how long they have.
     if (blocked) MotionBlockedNotice(walk) else LoopProgress(walk)
 
+    // A strike the walk survived. Kept on screen afterwards because the count is
+    // what decides the next one: someone who doesn't know they're on their last
+    // warning can't act on it.
+    if (!blocked && walk.strikes > 0) StrikeNotice(walk)
+
     // A gap is not a failure and doesn't stop the walk, so it sits below the
     // checklist as a footnote rather than replacing it.
     if (walk.hadSignalGap && !testMode) SignalGapNotice()
@@ -1036,6 +1441,38 @@ private fun SignalGapNotice() {
 }
 
 /**
+ * How the GPX import is going, wherever the user happens to be standing.
+ *
+ * The import is started from the profile screen but runs on the ViewModel's
+ * scope, so it outlives that screen — and an import you can't see the progress
+ * of is indistinguishable from one that has hung. Both screens draw this; only
+ * one of them is composed at a time.
+ */
+@Composable
+internal fun GpxImportDialogs(state: GpxImport?, onDismiss: () -> Unit) {
+    when (state) {
+        null -> Unit
+        is GpxImport.Reading -> GpxProgressDialog(label = "Reading the file…", progress = null)
+        is GpxImport.Replaying -> GpxProgressDialog(
+            label = "Replaying the track — ${state.done} of ${state.total} points",
+            progress = if (state.total == 0) null else state.done.toFloat() / state.total,
+        )
+
+        is GpxImport.Done -> NoticeDialog(
+            title = "Track imported",
+            message = "${state.headline}\n\n${state.detail}",
+            onDismiss = onDismiss,
+        )
+
+        is GpxImport.Failed -> NoticeDialog(
+            title = "Couldn't import that",
+            message = state.reason,
+            onDismiss = onDismiss,
+        )
+    }
+}
+
+/**
  * Import in progress. Deliberately has no dismiss button and ignores the scrim:
  * the replay is feeding the tracker, and letting the user start tapping points
  * into the middle of it would interleave two routes into one walk.
@@ -1045,7 +1482,7 @@ private fun SignalGapNotice() {
  * file is still being read, when there is genuinely nothing to count.
  */
 @Composable
-private fun GpxProgressDialog(label: String, progress: Float?) {
+internal fun GpxProgressDialog(label: String, progress: Float?) {
     androidx.compose.ui.window.Dialog(
         onDismissRequest = {},
         properties = androidx.compose.ui.window.DialogProperties(
@@ -1110,6 +1547,9 @@ private fun MotionBlockedNotice(walk: TrackingManager.WalkState) {
     val remainingMs = (MotionGate.GRACE_MS - (nowElapsed - since)).coerceAtLeast(0L)
     val fraction = (remainingMs.toFloat() / MotionGate.GRACE_MS).coerceIn(0f, 1f)
     val vehicle = walk.blockedReason == BlockReason.VEHICLE
+    // The warning being counted down to is the next one, not the last one given.
+    val pendingStrike = walk.strikes + 1
+    val fatal = pendingStrike >= MotionGate.MAX_STRIKES
 
     val error = MaterialTheme.colorScheme.error
     // A tint rather than a solid error fill: the End walk button below is already
@@ -1155,8 +1595,58 @@ private fun MotionBlockedNotice(walk: TrackingManager.WalkState) {
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                "Discarding this walk in ${(remainingMs / 1000)}s",
+                if (fatal) {
+                    // Last one: say what actually happens, not "warning 3 of 3".
+                    "Last warning — discarding this ${walk.activityType.noun} in " +
+                        "${remainingMs / 1000}s"
+                } else {
+                    "Warning $pendingStrike of ${MotionGate.MAX_STRIKES} in " +
+                        "${remainingMs / 1000}s"
+                },
                 style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * Shown for the rest of the walk once a warning has been used and the walk has
+ * carried on.
+ *
+ * The count is the point. Strikes exist so one bad stretch doesn't end an
+ * outing, but that only helps if the user can see how much rope is left — and
+ * being told about the third one only as it lands is the version of this that
+ * feels arbitrary.
+ */
+@Composable
+private fun StrikeNotice(walk: TrackingManager.WalkState) {
+    val error = MaterialTheme.colorScheme.error
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = error.copy(alpha = 0.08f),
+        contentColor = MaterialTheme.colorScheme.onSurface,
+    ) {
+        Row(
+            Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.Warning,
+                contentDescription = null,
+                tint = error,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "${walk.strikes} of ${MotionGate.MAX_STRIKES} warnings used — " +
+                    if (walk.strikesRemaining == 1) {
+                        "one more ends this ${walk.activityType.noun}."
+                    } else {
+                        "${walk.strikesRemaining} left before this " +
+                            "${walk.activityType.noun} is discarded."
+                    },
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -1493,7 +1983,7 @@ private fun ClaimDialog(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HowItWorksSheet(onDismiss: () -> Unit) {
+internal fun HowItWorksSheet(onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
@@ -1552,23 +2042,6 @@ private fun HowItWorksSheet(onDismiss: () -> Unit) {
                 }
             }
 
-            Spacer(Modifier.height(10.dp))
-            Surface(
-                shape = MaterialTheme.shapes.medium,
-                color = MaterialTheme.colorScheme.secondaryContainer,
-                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-            ) {
-                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.TouchApp, contentDescription = null, Modifier.size(20.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        "No GPS right now? Turn on test mode from the ⋮ menu and tap the map " +
-                            "to build a loop by hand.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
-
             Spacer(Modifier.height(22.dp))
             Button(
                 onClick = onDismiss,
@@ -1618,6 +2091,57 @@ private fun HowStep(
         }
     }
 }
+
+/**
+ * One of the map's floating controls, as data rather than as a composable.
+ *
+ * [WindowLayoutPolicy] decides *where* each one is drawn — right rail, left rail
+ * or the ⋮ menu — and it can only do that if the controls exist as a list before
+ * anything is emitted. Describing them once here is also what keeps a control
+ * from behaving differently depending on which of the three it ended up in.
+ */
+private data class MapControlSpec(
+    val control: MapControl,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    /** Doubles as the TalkBack description on the rail and the menu item's text. */
+    val label: String,
+    val tint: Color,
+    val onClick: () -> Unit,
+    val enabled: Boolean = true,
+    /** Rail only: a menu item has no hold gesture to hang this on. */
+    val onLongPress: (() -> Unit)? = null,
+    val longPressLabel: String? = null,
+)
+
+/**
+ * Room the rails can't use: the 12 dp above the panel plus a little breathing
+ * space, so the topmost control doesn't sit tight against the top row.
+ */
+private const val RAIL_MARGIN_DP = 24
+
+/**
+ * How wide the bottom panel is allowed to get. Beyond roughly this, the figures
+ * at one end and the button at the other stop reading as one control — which is
+ * what a landscape phone and any tablet would otherwise produce.
+ */
+private val PANEL_MAX_WIDTH = 600.dp
+
+/**
+ * How far the left rail sits above the panel. Wider than the right rail's 12 dp
+ * because the bottom-left corner is MapLibre's logo and the OpenStreetMap
+ * attribution, which carries the data credit and has to stay visible and
+ * tappable.
+ */
+private val ORNAMENT_CLEARANCE = 52.dp
+
+/**
+ * How long to wait before deciding a split-screen request went nowhere.
+ *
+ * Long enough for the system's own transition to finish (the window is resized
+ * and `onMultiWindowModeChanged` delivered), short enough that the explanation
+ * still reads as a response to the tap.
+ */
+private const val SPLIT_SETTLE_MS = 900L
 
 // --- Cues --------------------------------------------------------------------
 

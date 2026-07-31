@@ -16,6 +16,12 @@ enum class MotionActivity { WALKING, RUNNING, CYCLING, VEHICLE, STILL, UNKNOWN }
  * Ceilings are sustained averages with generous headroom over real-world bests
  * (a 2-hour marathon is ~5.7 m/s), because being wrongly stopped mid-effort is
  * far worse than a slightly permissive limit that the other signals still cover.
+ * They were raised once already, in the same pass that introduced strikes: on a
+ * long walk the old ceilings were being brushed by ordinary things — a downhill
+ * stretch, a fix that arrived late and read as a sprint — and the cost of that
+ * was the entire outing. The signals that actually catch a drive are the
+ * in-vehicle classification and [MotionGate.ABSOLUTE_MAX_SPEED_MPS], and neither
+ * of those was loosened by as much.
  */
 enum class ActivityType(
     /** Chip label: "Walk", "Run", "Bike". */
@@ -25,10 +31,31 @@ enum class ActivityType(
     /** The trip as a noun: "Start a **ride**", "too fast for a **run**". */
     val noun: String,
     val maxSpeedMps: Double,
+    /**
+     * Whether this mode can currently be chosen. Running and cycling are turned
+     * off for now — the chips still show, greyed, so the app doesn't quietly
+     * shrink and so turning them back on is this one flag rather than a
+     * re-write. Everything else about them (ceilings, wording, the gate's
+     * ability to *detect* a run or a ride and raise the ceiling accordingly)
+     * stays exactly as it was.
+     */
+    val available: Boolean = true,
 ) {
-    WALK("Walk", "Walking", "walk", 4.0), // ~14 km/h
-    RUN("Run", "Running", "run", 7.0), // ~25 km/h
-    BIKE("Bike", "Cycling", "ride", 9.0), // ~32 km/h
+    WALK("Walk", "Walking", "walk", 5.0), // ~18 km/h
+    RUN("Run", "Running", "run", 8.0, available = false), // ~29 km/h
+    BIKE("Bike", "Cycling", "ride", 11.0, available = false), // ~40 km/h
+    ;
+
+    companion object {
+        /**
+         * The stored preference, made safe to use: an unknown name (a rename, a
+         * downgrade) and a mode that is no longer available both resolve to
+         * [WALK] rather than leaving a walk declared as something the user can't
+         * see or change.
+         */
+        fun resolve(storedName: String?): ActivityType =
+            entries.firstOrNull { it.name == storedName && it.available } ?: WALK
+    }
 }
 
 /**
@@ -58,7 +85,10 @@ enum class BlockReason {
     TOO_FAST,
 }
 
-/** Why a walk was thrown away. Drives the explanation the user sees. */
+/**
+ * What went wrong with the movement — used both for a warning (a strike) and,
+ * once the strikes run out, for the explanation of why the walk was thrown away.
+ */
 enum class VoidReason {
     /** Vehicle movement continued past the grace window. */
     VEHICLE,
@@ -100,13 +130,23 @@ enum class VoidReason {
  * [ABSOLUTE_MAX_SPEED_MPS], beyond which no movement is treated as human-powered
  * regardless of what was declared or detected.
  *
- * Blocking is not immediately fatal: the caller drops the fix and shows a
- * warning, and only once movement stays blocked for [GRACE_MS] does the gate
- * return [Verdict.Void]. That tolerates a brief bus hop or a bad fix without
- * throwing away a long walk, while making a real drive unable to produce a claim.
+ * Blocking is not immediately fatal, and neither is running out of patience with
+ * it. Movement blocked for longer than [GRACE_MS] costs the walk a **strike**
+ * ([Verdict.Strike]) rather than the walk itself; only the [MAX_STRIKES]th one
+ * returns [Verdict.Void].
  *
- * Instances are stateful (speed window, how long we've been blocked) and belong
- * to a single walk — call [reset] when one starts.
+ * That is deliberately generous, because the two errors are not symmetrical. A
+ * cheat who drives loses nothing by being caught on the third strike instead of
+ * the first — they still can't claim. Someone two hours into a real walk who
+ * takes one tram stop, or whose phone hands over a burst of bad fixes, loses
+ * everything they walked for. The old single-strike rule made that second case
+ * common enough to be the thing people complained about, and a claim can't be
+ * re-walked from the couch. Three strikes of [GRACE_MS] each is roughly four and
+ * a half minutes of sustained vehicle movement before a walk dies — far past a
+ * bad patch of GPS, nowhere near a drive worth claiming.
+ *
+ * Instances are stateful (speed window, how long we've been blocked, strikes so
+ * far) and belong to a single walk — call [reset] when one starts.
  */
 class MotionGate {
 
@@ -120,7 +160,18 @@ class MotionGate {
          */
         data class Blocked(val reason: BlockReason, val sinceElapsedMs: Long) : Verdict
 
-        /** Blocked for longer than [GRACE_MS]: the walk can no longer be trusted. */
+        /**
+         * Blocked for longer than [GRACE_MS], with strikes left: a warning. The
+         * walk carries on, the fix is still dropped, and the gate starts over —
+         * so carrying on regardless costs another full grace window before the
+         * next strike, rather than a strike per fix.
+         *
+         * [count] is how many strikes this walk has now used, out of
+         * [MAX_STRIKES].
+         */
+        data class Strike(val reason: BlockReason, val count: Int) : Verdict
+
+        /** The last strike is used up: the walk can no longer be trusted. */
         data class Void(val reason: BlockReason) : Verdict
     }
 
@@ -128,11 +179,46 @@ class MotionGate {
     private var blockedSinceElapsedMs: Long? = null
     private var declared: ActivityType = ActivityType.WALK
 
+    /** Warnings this walk has used, across every reason. */
+    var strikes: Int = 0
+        private set
+
     /** Forget the previous walk and adopt the activity the user chose for this one. */
     fun reset(activityType: ActivityType = ActivityType.WALK) {
         speeds.clear()
         blockedSinceElapsedMs = null
+        strikes = 0
         declared = activityType
+    }
+
+    /**
+     * Spend a strike on something this gate didn't judge itself — recording
+     * resuming a long way from where it was suspended, which is the caller's
+     * check because only it knows where the path went.
+     *
+     * Shares the counter on purpose: three warnings means three warnings for the
+     * walk, not three of each kind. Also clears the speed window and the grace
+     * countdown, so whatever comes next is judged fresh.
+     *
+     * Returns the strike count, which the caller compares against [MAX_STRIKES].
+     */
+    fun bankStrike(): Int {
+        strikes += 1
+        clearSpeedWindow()
+        return strikes
+    }
+
+    /**
+     * Forget the speed history and the grace countdown, but not the strikes.
+     *
+     * For the caller's signal-gap handling: a burst of fixes after the device
+     * dozed describes nothing, so it must not be averaged into a verdict — but
+     * losing the signal is not an amnesty either. A walk already on its last
+     * warning is still on its last warning when the fixes come back.
+     */
+    fun clearSpeedWindow() {
+        speeds.clear()
+        blockedSinceElapsedMs = null
     }
 
     /**
@@ -180,11 +266,12 @@ class MotionGate {
         }
 
         val since = blockedSinceElapsedMs ?: nowElapsedMs.also { blockedSinceElapsedMs = it }
-        return if (nowElapsedMs - since >= GRACE_MS) {
-            Verdict.Void(reason)
-        } else {
-            Verdict.Blocked(reason, since)
-        }
+        if (nowElapsedMs - since < GRACE_MS) return Verdict.Blocked(reason, since)
+
+        // The grace window is spent. [bankStrike] clears the countdown, so the
+        // next strike is another full window away rather than the very next fix.
+        val count = bankStrike()
+        return if (count >= MAX_STRIKES) Verdict.Void(reason) else Verdict.Strike(reason, count)
     }
 
     /**
@@ -206,13 +293,19 @@ class MotionGate {
 
     companion object {
         /**
-         * Ceiling once the classifier has confirmed cycling: 14 m/s ≈ 50 km/h,
+         * Ceiling once the classifier has confirmed cycling: 16 m/s ≈ 58 km/h,
          * which covers descents and e-bikes.
          */
-        const val CONFIRMED_CYCLING_MAX_MPS = 14.0
+        const val CONFIRMED_CYCLING_MAX_MPS = 16.0
 
-        /** 20 m/s ≈ 72 km/h — nothing human-powered sustains this. */
-        const val ABSOLUTE_MAX_SPEED_MPS = 20.0
+        /**
+         * 22 m/s ≈ 79 km/h — nothing human-powered *sustains* this over the
+         * [SPEED_WINDOW] average, so it stays the hard ceiling nothing declared
+         * or detected can raise. It moved by 2 m/s when the other ceilings went
+         * up, rather than by the same amount: this is the number that has to keep
+         * a car out, so it gets the least slack of any of them.
+         */
+        const val ABSOLUTE_MAX_SPEED_MPS = 22.0
 
         /** Play Services confidences are 0-100; 70 is a firm signal. */
         const val VEHICLE_CONFIDENCE = 70
@@ -221,8 +314,24 @@ class MotionGate {
         /** Classifications older than this are ignored. */
         const val ACTIVITY_MAX_AGE_MS = 30_000L
 
-        /** How long blocked movement is tolerated before the walk is voided. */
-        const val GRACE_MS = 30_000L
+        /**
+         * How long blocked movement is tolerated before it costs a strike.
+         *
+         * Was 30 s, when a single expiry ended the walk outright. Ninety seconds
+         * covers the things that were ending honest walks — a stop on a bus, a
+         * lift across a junction, a stretch of fixes arriving in a burst — and
+         * three of them still has to be survived before anything is lost.
+         */
+        const val GRACE_MS = 90_000L
+
+        /**
+         * Warnings a walk gets before it is thrown away.
+         *
+         * Three rather than one because the failure is asymmetric: a driver
+         * caught on the third strike still claims nothing, while a walker caught
+         * wrongly on the first loses hours they can't re-walk.
+         */
+        const val MAX_STRIKES = 3
 
         /** Speed samples averaged together (≈15 s at a 3 s fix interval). */
         const val SPEED_WINDOW = 5

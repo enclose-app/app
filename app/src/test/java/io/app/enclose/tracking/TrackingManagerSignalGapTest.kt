@@ -162,20 +162,66 @@ class TrackingManagerSignalGapTest {
         fix(at(0.0), atElapsedMs = 0L)
 
         // 25 m/s ≈ 90 km/h, every 3 s: fast enough that no declared or detected
-        // activity justifies it, and sustained well past the grace window.
+        // activity justifies it, and sustained through every warning the walk has.
         var metres = 0.0
         var t = 0L
-        repeat(20) {
+        repeat(150) {
             metres += 75.0
             t += 3_000L
             fix(at(metres), atElapsedMs = t)
         }
 
-        assertFalse("A drive must not be able to enclose territory", TrackingManager.walk.value.isTracking)
+        assertFalse(
+            "A drive must not be able to enclose territory",
+            TrackingManager.walk.value.isTracking,
+        )
+    }
+
+    /**
+     * The loosening, from the other side: a minute of movement the gate doesn't
+     * like is a warning, not the end of the outing. Three of those is roughly
+     * four and a half minutes, which is why the test above has to drive so far.
+     */
+    @Test
+    fun `a short blocked stretch no longer ends the walk`() {
+        startWalking()
+        fix(at(0.0), atElapsedMs = 0L)
+
+        var metres = 0.0
+        var t = 0L
+        repeat(20) { // 60 s at vehicle speed — inside the first grace window
+            metres += 75.0
+            t += 3_000L
+            fix(at(metres), atElapsedMs = t)
+        }
+
+        val state = TrackingManager.walk.value
+        assertTrue("A minute of bad movement must not cost the walk", state.isTracking)
+        assertTrue("...but it must be visibly not recording", state.motionBlocked)
+        assertEquals("...and it hasn't cost a warning yet", 0, state.strikes)
     }
 
     @Test
-    fun `losing the signal mid-block does not launder the gap`() {
+    fun `the walk counts its warnings`() {
+        startWalking()
+        fix(at(0.0), atElapsedMs = 0L)
+
+        var metres = 0.0
+        var t = 0L
+        repeat(40) { // past the first grace window, not past the second
+            metres += 75.0
+            t += 3_000L
+            fix(at(metres), atElapsedMs = t)
+        }
+
+        val state = TrackingManager.walk.value
+        assertTrue("One warning is survivable", state.isTracking)
+        assertEquals(1, state.strikes)
+        assertEquals(2, state.strikesRemaining)
+    }
+
+    @Test
+    fun `losing the signal mid-block costs a warning`() {
         startWalking()
         fix(at(0.0), atElapsedMs = 0L)
 
@@ -194,8 +240,38 @@ class TrackingManagerSignalGapTest {
         // but the ground covered while blocked is still unaccounted for.
         fix(at(metres + 500.0), atElapsedMs = t + 120_000L)
 
+        val state = TrackingManager.walk.value
+        assertTrue("Half a kilometre is a warning, not an ending", state.isTracking)
+        assertEquals("...and it has to cost one", 1, state.strikes)
+        assertTrue(
+            "The route now bridges ground nobody recorded; say so",
+            state.hadSignalGap,
+        )
+    }
+
+    /**
+     * The other side of the loosening. A warning covers a gap the recording could
+     * plausibly have missed; it does not cover a drive across town, because the
+     * loop drawn round it would enclose ground nobody walked.
+     */
+    @Test
+    fun `a gap too big for any warning still voids the walk`() {
+        startWalking()
+        fix(at(0.0), atElapsedMs = 0L)
+
+        var metres = 0.0
+        var t = 0L
+        repeat(3) {
+            metres += 75.0
+            t += 3_000L
+            fix(at(metres), atElapsedMs = t)
+        }
+        assertTrue(TrackingManager.walk.value.motionBlocked)
+
+        fix(at(metres + 4_000.0), atElapsedMs = t + 120_000L)
+
         assertFalse(
-            "Ground covered while movement was being rejected still has to be answered for",
+            "Four kilometres of unrecorded ground is a drive, whatever the warnings say",
             TrackingManager.walk.value.isTracking,
         )
     }

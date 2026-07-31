@@ -95,12 +95,15 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
      * single tap. It tightens the motion checks — see [ActivityType].
      */
     private val _activityType = MutableStateFlow(
-        runCatching { ActivityType.valueOf(settings.activityTypeName ?: "") }
-            .getOrDefault(ActivityType.WALK),
+        ActivityType.resolve(settings.activityTypeName),
     )
     val activityType: StateFlow<ActivityType> = _activityType.asStateFlow()
 
     fun setActivityType(type: ActivityType) {
+        // Guarded rather than trusted: the UI greys out the modes that are off,
+        // but the declared type sets the speed ceiling, so it must not be
+        // possible to end up on one by any other route.
+        if (!type.available) return
         _activityType.value = type
         settings.activityTypeName = type.name
     }
@@ -187,6 +190,30 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     fun clearHome() {
         _home.value = null
         settings.home = null
+    }
+
+    /**
+     * Whether the bottom panel is minimised to a single row. Remembered, so the
+     * map the user set up stays set up — see [UserSettings.panelCollapsed].
+     */
+    private val _panelCollapsed = MutableStateFlow(settings.panelCollapsed)
+    val panelCollapsed: StateFlow<Boolean> = _panelCollapsed.asStateFlow()
+
+    fun setPanelCollapsed(collapsed: Boolean) {
+        _panelCollapsed.value = collapsed
+        settings.panelCollapsed = collapsed
+    }
+
+    /**
+     * Whether the walk may float over other apps in a picture-in-picture window.
+     * Nothing turns this on but the user — see [UserSettings.floatingWindow].
+     */
+    private val _floatingWindow = MutableStateFlow(settings.floatingWindow)
+    val floatingWindow: StateFlow<Boolean> = _floatingWindow.asStateFlow()
+
+    fun setFloatingWindow(enabled: Boolean) {
+        _floatingWindow.value = enabled
+        settings.floatingWindow = enabled
     }
 
     /** How the territory list is ordered. Remembered between launches. */

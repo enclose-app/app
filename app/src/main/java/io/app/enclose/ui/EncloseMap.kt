@@ -15,6 +15,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -41,12 +42,15 @@ import org.maplibre.android.location.modes.CameraMode
 import org.maplibre.android.location.modes.RenderMode
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.LineLayer
+import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
+import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
@@ -88,6 +92,9 @@ enum class BasemapStyle {
 private const val SRC_CLAIMED = "src-claimed"
 private const val SRC_PATH = "src-path"
 private const val SRC_START = "src-start"
+private const val SRC_HOME = "src-home"
+private const val IMG_HOME = "img-home"
+private const val LYR_HOME = "lyr-home"
 private const val LYR_CLAIMED_FILL = "lyr-claimed-fill"
 private const val LYR_CLAIMED_LINE = "lyr-claimed-line"
 private const val SRC_CLOSE_ZONE = "src-close-zone"
@@ -103,6 +110,7 @@ private class Overlays(
     val closeZone: GeoJsonSource,
     val path: GeoJsonSource,
     val start: GeoJsonSource,
+    val home: GeoJsonSource,
 )
 
 /**
@@ -127,10 +135,40 @@ class MapController {
     var canLocate: Boolean by mutableStateOf(false)
         internal set
 
+    /**
+     * Whether the camera keeps up with the walker as fixes arrive.
+     *
+     * Turned on when a walk starts and by [recenter], and turned off the instant
+     * the user pans the map themselves — a map that snaps back while you're
+     * trying to look at the street ahead is unusable, and a walk map that
+     * doesn't keep up with you is a picture of where you were. The recenter
+     * button is how you get it back, which is also what it looks like it does.
+     */
+    var followUser: Boolean by mutableStateOf(false)
+        internal set
+
     /** Animate to the user's position, waiting briefly for a first GPS fix. */
     fun recenter() {
         val m = map ?: return
+        followUser = true
         scope?.launch { flyToUser(m) }
+    }
+
+    /**
+     * Keep up with the walker without touching their zoom.
+     *
+     * Distinct from [flyTo], which frames a place at a fixed zoom: following is
+     * about staying centred, and re-zooming every few seconds would take the
+     * choice of how much ground to see away from the user.
+     */
+    internal fun panTo(point: LatLng) {
+        val m = map ?: return
+        runCatching {
+            m.animateCamera(
+                CameraUpdateFactory.newLatLng(MlLatLng(point.lat, point.lng)),
+                FOLLOW_ANIM_MS,
+            )
+        }
     }
 
     /**
@@ -192,6 +230,15 @@ fun EncloseMap(
     hasLocationPermission: Boolean,
     controller: MapController,
     modifier: Modifier = Modifier,
+    /** The saved home position; null draws no marker at all. */
+    home: LatLng? = null,
+    /**
+     * Whether the camera keeps up with the walker. False where the points are
+     * coming from the user's own taps rather than from GPS: re-centring on each
+     * one moves the map out from under the finger placing the next, which turns
+     * a tapped loop into a spiral.
+     */
+    followWalker: Boolean = true,
     /** When non-null, map taps are forwarded here (test mode) and consumed. */
     onMapTap: ((LatLng) -> Unit)? = null,
     /** Space (px) reserved at the bottom by UI, so map ornaments clear it. */
@@ -292,6 +339,14 @@ fun EncloseMap(
                             )
                         }
                     }
+                    // A pan or a pinch means the user wants to look somewhere;
+                    // following them around would fight the gesture that just
+                    // happened. Only gestures count — the fly-to that following
+                    // itself performs arrives here as an animation, and would
+                    // otherwise switch following off on its first frame.
+                    mlMap.addOnCameraMoveStartedListener { reason ->
+                        if (reason == REASON_API_GESTURE) controller.followUser = false
+                    }
                     mlMap.addOnMapClickListener { point ->
                         val handler = currentOnMapTap
                         if (handler != null) {
@@ -329,7 +384,7 @@ fun EncloseMap(
         controller.isStyleLoaded = false
         overlays = null
         m.setStyle(Style.Builder().fromUri(styleUrl)) { loaded ->
-            overlays = installOverlays(loaded, accents)
+            overlays = installOverlays(loaded, accents, context)
             style = loaded
             controller.isStyleLoaded = true
         }
@@ -370,11 +425,21 @@ fun EncloseMap(
         if (flyToUser(m)) didInitialFocus = true
     }
 
-    // Re-center on the walker each time a walk starts, so it begins framed on them.
-    LaunchedEffect(walk.isTracking) {
-        if (!walk.isTracking) return@LaunchedEffect
+    // Re-center on the walker each time a walk starts, so it begins framed on
+    // them — and keep following until they pan the map themselves.
+    LaunchedEffect(walk.isTracking, followWalker) {
+        if (!walk.isTracking || !followWalker) return@LaunchedEffect
         val m = controller.map ?: return@LaunchedEffect
+        controller.followUser = true
         flyToUser(m)
+    }
+
+    // Follow: each accepted fix re-centres the map, at whatever zoom the user is
+    // on. Keyed on the position alone, so a change to a figure the map doesn't
+    // draw doesn't move the camera.
+    LaunchedEffect(walk.current, controller.followUser, controller.isStyleLoaded, followWalker) {
+        val here = walk.current ?: return@LaunchedEffect
+        if (followWalker && controller.followUser && controller.isStyleLoaded) controller.panTo(here)
     }
 
     // Redraw overlays whenever the walk or the claimed set changes.
@@ -384,6 +449,14 @@ fun EncloseMap(
         o.closeZone.setGeoJson(closeZoneFeature(walk, accents))
         o.path.setGeoJson(pathToFeature(walk.path))
         o.start.setGeoJson(pointToFeature(walk.start))
+    }
+
+    // Home changes on its own schedule — it's set and reset from the button, not
+    // by walking — so it gets its own effect rather than redrawing every overlay
+    // on each GPS fix.
+    LaunchedEffect(overlays, home) {
+        val o = overlays ?: return@LaunchedEffect
+        o.home.setGeoJson(pointToFeature(home))
     }
 }
 
@@ -434,15 +507,25 @@ private suspend fun flyToUser(map: MapLibreMap): Boolean {
     return false
 }
 
-private fun installOverlays(style: Style, accents: EncloseAccents): Overlays {
+private fun installOverlays(
+    style: Style,
+    accents: EncloseAccents,
+    context: android.content.Context,
+): Overlays {
     val claimed = GeoJsonSource(SRC_CLAIMED)
     val closeZone = GeoJsonSource(SRC_CLOSE_ZONE)
     val path = GeoJsonSource(SRC_PATH)
     val start = GeoJsonSource(SRC_START)
+    val home = GeoJsonSource(SRC_HOME)
     style.addSource(claimed)
     style.addSource(closeZone)
     style.addSource(path)
     style.addSource(start)
+    style.addSource(home)
+    // Images belong to the style, so the marker is registered here rather than
+    // once at startup — a light/dark swap builds a whole new style, and an image
+    // added to the old one goes with it.
+    style.addImage(IMG_HOME, homeMarkerBitmap(context, accents.home.toArgb()))
 
     style.addLayer(
         FillLayer(LYR_CLAIMED_FILL, SRC_CLAIMED).withProperties(
@@ -499,7 +582,19 @@ private fun installOverlays(style: Style, accents: EncloseAccents): Overlays {
             PropertyFactory.circleStrokeWidth(2.5f),
         ),
     )
-    return Overlays(claimed, closeZone, path, start)
+    // Last, so the pin is never buried under a claim's fill. Overlap is allowed
+    // on purpose: there is exactly one home, and a marker the map decides to
+    // hide because a street label got there first is a marker the user reads as
+    // "my home isn't saved".
+    style.addLayer(
+        SymbolLayer(LYR_HOME, SRC_HOME).withProperties(
+            PropertyFactory.iconImage(IMG_HOME),
+            PropertyFactory.iconAnchor(Property.ICON_ANCHOR_BOTTOM),
+            PropertyFactory.iconAllowOverlap(true),
+            PropertyFactory.iconIgnorePlacement(true),
+        ),
+    )
+    return Overlays(claimed, closeZone, path, start, home)
 }
 
 @SuppressLint("MissingPermission") // Caller guards on hasLocationPermission.
@@ -509,8 +604,11 @@ private fun enableUserLocation(map: MapLibreMap, style: Style, context: android.
         LocationComponentActivationOptions.builder(context, style).build(),
     )
     component.isLocationComponentEnabled = true
-    // Show the dot but leave the camera free after the initial focus, so the
-    // user can pan/zoom the map without it snapping back.
+    // NONE, even though the map does follow the walker: following is driven from
+    // Compose (see MapController.followUser) off the same walk state everything
+    // else on screen reads. Handing the camera to the location component instead
+    // would put a second animator on it that knows nothing about the walk, and
+    // the two would fight over every fix.
     component.cameraMode = CameraMode.NONE
     // NORMAL (plain dot), NOT COMPASS: the compass-bearing animator keeps ticking
     // during map teardown and calls getSourceAs on an invalidated style → crash.
@@ -530,6 +628,13 @@ private const val FOCUS_POLL_INTERVAL_MS = 500L
 // Mouse-wheel zoom: zoom levels changed per wheel notch, and the animation time.
 private const val ZOOM_STEP = 0.6
 private const val ZOOM_ANIM_MS = 120
+
+/**
+ * How long the follow animation takes. Comfortably under the 3 s fix interval,
+ * so each move finishes before the next one starts rather than the camera
+ * lurching between two animations it never completes.
+ */
+private const val FOLLOW_ANIM_MS = 900
 
 // On-screen zoom buttons.
 internal const val ZOOM_BUTTON_STEP = 1.0

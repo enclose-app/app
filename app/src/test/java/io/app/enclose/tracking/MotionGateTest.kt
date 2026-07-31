@@ -35,6 +35,15 @@ class MotionGateTest {
         return verdict
     }
 
+    /**
+     * Drive from [startAtMs] until the gate does something other than block:
+     * fills the speed window, then keeps going past the grace window.
+     */
+    private fun driveUntilVerdict(startAtMs: Long): MotionGate.Verdict {
+        feed(DRIVING_MPS, count = SPEED_WINDOW, startAtMs = startAtMs)
+        return gate.evaluate(startAtMs + GRACE_MS + SPEED_WINDOW * FIX_INTERVAL_MS, DRIVING_MPS, null)
+    }
+
     @Before
     fun declareBike() {
         // The suite's baseline is the loosest mode, so the speed rules themselves
@@ -141,17 +150,68 @@ class MotionGateTest {
     }
 
     @Test
-    fun `sustained blocking voids the walk after the grace window`() {
+    fun `sustained blocking costs a strike, not the walk`() {
         feed(DRIVING_MPS, count = SPEED_WINDOW)
         // Keep driving past the grace window.
         val past = GRACE_MS + SPEED_WINDOW * FIX_INTERVAL_MS
         val verdict = gate.evaluate(past, DRIVING_MPS, null)
-        assertTrue("expected void, was $verdict", verdict is MotionGate.Verdict.Void)
-        assertEquals(BlockReason.TOO_FAST, (verdict as MotionGate.Verdict.Void).reason)
+        assertTrue("expected a strike, was $verdict", verdict is MotionGate.Verdict.Strike)
+        verdict as MotionGate.Verdict.Strike
+        assertEquals(BlockReason.TOO_FAST, verdict.reason)
+        assertEquals(1, verdict.count)
+    }
+
+    /**
+     * The whole point of strikes: a walk survives a bad stretch. Only the last
+     * one ends it, and it takes a full grace window each time to get there.
+     */
+    @Test
+    fun `the third strike voids the walk`() {
+        var at = 0L
+        repeat(MotionGate.MAX_STRIKES - 1) { strike ->
+            val verdict = driveUntilVerdict(at)
+            assertTrue("strike ${strike + 1} was $verdict", verdict is MotionGate.Verdict.Strike)
+            assertEquals(strike + 1, (verdict as MotionGate.Verdict.Strike).count)
+            at = verdict.let { GRACE_MS * (strike + 1) + FIX_INTERVAL_MS * SPEED_WINDOW * 2 }
+        }
+        val fatal = driveUntilVerdict(at)
+        assertTrue("expected void, was $fatal", fatal is MotionGate.Verdict.Void)
+        assertEquals(BlockReason.TOO_FAST, (fatal as MotionGate.Verdict.Void).reason)
+    }
+
+    /**
+     * Carrying on driving must not spend the remaining strikes on consecutive
+     * fixes: each one costs another full grace window, which is what makes three
+     * of them worth roughly four and a half minutes.
+     */
+    @Test
+    fun `a strike restarts the countdown rather than striking every fix`() {
+        val first = driveUntilVerdict(0L)
+        assertTrue(first is MotionGate.Verdict.Strike)
+        // The very next fix, still driving, is blocked again — not a second strike.
+        val next = gate.evaluate(GRACE_MS + FIX_INTERVAL_MS, DRIVING_MPS, null)
+        assertTrue("expected blocked, was $next", next is MotionGate.Verdict.Blocked)
     }
 
     @Test
-    fun `blocking does not void before the grace window elapses`() {
+    fun `a banked strike shares the counter with the gate's own`() {
+        // The unverified-gap check spends from the same three, so three warnings
+        // means three for the walk rather than three of each kind.
+        assertEquals(1, gate.bankStrike())
+        val verdict = driveUntilVerdict(0L)
+        assertEquals(2, (verdict as MotionGate.Verdict.Strike).count)
+    }
+
+    @Test
+    fun `reset clears the strikes too`() {
+        gate.bankStrike()
+        gate.bankStrike()
+        gate.reset(ActivityType.BIKE)
+        assertEquals(0, gate.strikes)
+    }
+
+    @Test
+    fun `blocking does not strike before the grace window elapses`() {
         feed(DRIVING_MPS, count = SPEED_WINDOW)
         val justInside = GRACE_MS - 1_000L
         val verdict = gate.evaluate(justInside, DRIVING_MPS, null)

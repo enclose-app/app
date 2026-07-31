@@ -61,9 +61,19 @@ object TrackingManager {
          * user's doing: it is surfaced, not punished.
          */
         val hadSignalGap: Boolean = false,
+        /**
+         * Warnings this walk has used, out of [MotionGate.MAX_STRIKES]. A strike
+         * is spent when movement stays blocked past the grace window, or when
+         * recording resumes further from where it stopped than the recorded path
+         * can account for. The walk survives every strike but the last.
+         */
+        val strikes: Int = 0,
     ) {
         /** True while a vehicle (or implausible speed) is suspending recording. */
         val motionBlocked: Boolean get() = blockedReason != null
+
+        /** Warnings left before the next one ends the walk. */
+        val strikesRemaining: Int get() = (MotionGate.MAX_STRIKES - strikes).coerceAtLeast(0)
     }
 
     /** A closed loop awaiting the user's decision to claim (with name/color). */
@@ -280,7 +290,8 @@ object TrackingManager {
                 // sample. `blockedReason` is deliberately left alone: if
                 // movement was already being rejected when the signal went, the
                 // resume check below still has to answer for the ground between.
-                motionGate.reset(state.activityType)
+                // The strikes stay banked too — silence is not an amnesty.
+                motionGate.clearSpeedWindow()
                 lastFix = null
                 lastFixAtElapsedMs = null
                 state = state.copy(hadSignalGap = true)
@@ -309,16 +320,49 @@ object TrackingManager {
                     return
                 }
 
+                is MotionGate.Verdict.Strike -> {
+                    // A warning, not an ending. The movement is still being
+                    // rejected — `blockedReason` deliberately stays set — so the
+                    // resume check below still has to account for the ground
+                    // covered in the meantime. What changes is only that the
+                    // countdown starts again, against one fewer strike.
+                    _walk.value = state.copy(
+                        current = point,
+                        accuracyMeters = accuracyMeters,
+                        blockedReason = verdict.reason,
+                        blockedSinceElapsedMs = atElapsedMs,
+                        strikes = verdict.count,
+                        readyToClose = false,
+                    )
+                    return
+                }
+
                 MotionGate.Verdict.Allowed -> {
                     if (state.motionBlocked) {
                         // Recording resumes. Nothing was recorded while blocked, so
                         // connecting to the resume point would bridge ground the
-                        // user never covered — refuse rather than claim it.
+                        // user never covered.
                         val gap = state.path.lastOrNull()
                             ?.let { Geo.distanceMeters(it, point) } ?: 0.0
-                        if (gap > MAX_RESUME_GAP_METERS) {
-                            voidWalk(VoidReason.UNVERIFIED_GAP)
-                            return
+                        when {
+                            // Too far to be anything but a ride. No number of
+                            // warnings makes a straight line across half a city
+                            // into ground someone walked.
+                            gap > MAX_UNVERIFIED_GAP_METERS -> {
+                                voidWalk(VoidReason.UNVERIFIED_GAP)
+                                return
+                            }
+                            // Far enough that the route now contains ground the
+                            // recording never saw: a warning, and the outline is
+                            // marked as estimated, rather than an hour thrown out.
+                            gap > MAX_RESUME_GAP_METERS -> {
+                                val count = motionGate.bankStrike()
+                                if (count >= MotionGate.MAX_STRIKES) {
+                                    voidWalk(VoidReason.UNVERIFIED_GAP)
+                                    return
+                                }
+                                state = state.copy(strikes = count, hadSignalGap = true)
+                            }
                         }
                         state = state.copy(blockedReason = null, blockedSinceElapsedMs = null)
                     }
@@ -501,11 +545,24 @@ object TrackingManager {
     private const val MIN_MOVE_METERS = 4.0
 
     /**
-     * How far recording may resume from where it was suspended. Ground covered
-     * while movement was blocked is not recorded, so a longer gap would draw a
-     * straight line across land the user never travelled on foot.
+     * How far recording may resume from where it was suspended before it costs
+     * the walk anything. Ground covered while movement was blocked is not
+     * recorded, so a longer gap draws a straight line across land nobody
+     * observed.
+     *
+     * Raised from 50 m with the move to strikes. Fifty metres is inside the error
+     * of a fix reacquired after a blocked stretch, so honest walks were being
+     * voided by the recovery rather than by the gap.
      */
-    private const val MAX_RESUME_GAP_METERS = 50.0
+    private const val MAX_RESUME_GAP_METERS = 150.0
+
+    /**
+     * The gap that no warning covers. Past a kilometre of unrecorded ground the
+     * path is not a walk with a hole in it — it is two walks with a drive
+     * between them, and claiming the polygon they enclose would be claiming the
+     * drive.
+     */
+    private const val MAX_UNVERIFIED_GAP_METERS = 1_000.0
     /** Fixes worse than this accuracy (meters) are kept off the path. */
     private const val MAX_ACCURACY_METERS = 50f
 

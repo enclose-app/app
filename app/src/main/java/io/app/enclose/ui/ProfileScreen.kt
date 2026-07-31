@@ -2,11 +2,15 @@ package io.app.enclose.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -26,6 +30,7 @@ import androidx.compose.material.icons.filled.CropSquare
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LocationCity
@@ -35,6 +40,9 @@ import androidx.compose.material.icons.filled.Terrain
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -43,6 +51,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -79,10 +88,25 @@ import kotlin.math.roundToInt
 fun ProfileScreen(
     onBack: () -> Unit,
     viewModel: ProfileViewModel = viewModel(),
+    /**
+     * The same activity-scoped instance the map screen uses — the app's own
+     * settings (the explainer, test mode, GPX import) live here now, and they
+     * are state about the walk, not about the profile.
+     */
+    encloseViewModel: EncloseViewModel = viewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val testMode by encloseViewModel.testMode.collectAsStateWithLifecycle()
+    val gpxImport by encloseViewModel.gpxImport.collectAsStateWithLifecycle()
+    val showHowItWorks by encloseViewModel.showHowItWorks.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf(false) }
     var showCities by rememberSaveable { mutableStateOf(false) }
+
+    // OpenDocument rather than GetContent: it gives a durable, readable uri, and
+    // the picker it opens is the one people expect for "find my file".
+    val gpxPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let(encloseViewModel::importGpx) }
 
     Scaffold(
         topBar = {
@@ -100,6 +124,9 @@ fun ProfileScreen(
             )
         },
         containerColor = MaterialTheme.colorScheme.background,
+        // safeDrawing, not the default systemBars: in landscape the display
+        // cutout is on the side, where the bar insets don't reach.
+        contentWindowInsets = WindowInsets.safeDrawing,
     ) { padding ->
         Column(
             Modifier
@@ -251,9 +278,65 @@ fun ProfileScreen(
                 }
             }
 
+            SectionCard(title = "App") {
+                // The explainer lives here rather than in a map menu: it's read
+                // once, and the map's own chrome is for things you reach for
+                // mid-walk.
+                DetailAction(
+                    icon = Icons.AutoMirrored.Filled.HelpOutline,
+                    title = "How Enclose works",
+                    subtitle = "Walk a loop, come back, claim what's inside.",
+                    onClick = encloseViewModel::openHowItWorks,
+                )
+
+                HorizontalDivider(Modifier.padding(vertical = 12.dp))
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Filled.TouchApp,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Test mode", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "Tap the map to drop points instead of walking.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = testMode, onCheckedChange = encloseViewModel::setTestMode)
+                }
+
+                // Only while test mode is on: outside it the imported points
+                // would be competing with live GPS for the same walk.
+                if (testMode) {
+                    Spacer(Modifier.height(4.dp))
+                    DetailAction(
+                        icon = Icons.Filled.UploadFile,
+                        title = "Import GPX…",
+                        subtitle = "Replay a recorded track as a test walk.",
+                        // Most providers hand GPX over as
+                        // application/octet-stream or nothing at all, so a narrow
+                        // filter mostly hides the file the user came to pick.
+                        onClick = { gpxPicker.launch(arrayOf("*/*")) },
+                    )
+                }
+            }
+
             Spacer(Modifier.height(8.dp))
         }
     }
+
+    // Both started from here, so both report back here — the import outlives
+    // this screen, but the user is standing on it when they kick it off.
+    GpxImportDialogs(gpxImport, onDismiss = encloseViewModel::dismissGpxImport)
+    if (showHowItWorks) HowItWorksSheet(onDismiss = encloseViewModel::dismissHowItWorks)
 
     if (showCities && state.stats.cities.isNotEmpty()) {
         CityCoverageSheet(

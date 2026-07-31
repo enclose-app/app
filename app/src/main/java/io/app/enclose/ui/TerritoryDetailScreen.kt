@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -172,6 +174,9 @@ fun TerritoryDetailScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHost) },
         containerColor = MaterialTheme.colorScheme.background,
+        // safeDrawing, not the default systemBars: in landscape the display
+        // cutout is on the side, where the bar insets don't reach.
+        contentWindowInsets = WindowInsets.safeDrawing,
     ) { padding ->
         Column(
             Modifier
@@ -471,6 +476,9 @@ private fun LoadingScreen(onBack: () -> Unit) {
             )
         },
         containerColor = MaterialTheme.colorScheme.background,
+        // safeDrawing, not the default systemBars: in landscape the display
+        // cutout is on the side, where the bar insets don't reach.
+        contentWindowInsets = WindowInsets.safeDrawing,
     ) { padding ->
         Box(
             Modifier.fillMaxSize().padding(padding),

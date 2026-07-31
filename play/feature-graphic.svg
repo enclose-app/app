@@ -1,0 +1,41 @@
+<!--
+  Play Store feature graphic: 1024x500, fully opaque (no alpha allowed).
+  Content is kept inside the middle so the crops Play applies on some surfaces
+  can't cut the wordmark or the mark in half.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 500" width="1024" height="500">
+  <defs>
+    <linearGradient id="brand" x1="0" y1="0" x2="1024" y2="500" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9C3BC0"/>
+      <stop offset="0.55" stop-color="#7B1FA2"/>
+      <stop offset="1" stop-color="#3F1179"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="500" fill="url(#brand)"/>
+
+  <!-- Decoration: a faint second loop, as if another claim sits behind this one. -->
+  <g opacity="0.10" transform="translate(830,395) scale(6.2) translate(-54,-53)">
+    <path d="M54,31 L80,46 L72,77 L39,79 L28,51 Z" fill="none" stroke="#FFFFFF" stroke-width="5"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <g opacity="0.08" transform="translate(90,80) scale(3.4) translate(-54,-53)">
+    <path d="M54,31 L80,46 L72,77 L39,79 L28,51 Z" fill="none" stroke="#FFFFFF" stroke-width="5"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- The mark. -->
+  <g transform="translate(170,250) scale(3.6) translate(-54,-53)">
+    <path d="M54,31 L80,46 L72,77 L39,79 L28,51 Z" fill="#FFFFFF" fill-opacity="0.22"/>
+    <path d="M54,31 L80,46 L72,77 L39,79 L28,51 Z" fill="none" stroke="#FFFFFF" stroke-width="6"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="54" cy="31" r="7" fill="#FFFFFF"/>
+    <circle cx="54" cy="31" r="3.4" fill="#7B1FA2"/>
+  </g>
+
+  <g font-family="Montserrat" fill="#FFFFFF">
+    <text x="320" y="232" font-size="100" font-weight="800" letter-spacing="-2">Enclose</text>
+    <text x="326" y="288" font-size="30" font-weight="500" opacity="0.92">Walk a loop. Claim the ground inside.</text>
+    <text x="326" y="332" font-size="24" font-weight="400" opacity="0.7">Works offline. Nothing leaves your phone.</text>
+  </g>
+</svg>

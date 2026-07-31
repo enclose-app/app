@@ -63,6 +63,29 @@ class UserSettings(context: Context) {
         set(value) = prefs.edit { putBoolean(KEY_TEST_MODE, value) }
 
     /**
+     * Whether the bottom control panel is minimised to a single row.
+     *
+     * Remembered because it's a standing preference about the map, not a
+     * per-walk one: someone who minimised it to see more ground wants it
+     * minimised on the next walk too, and re-collapsing it every time is exactly
+     * the kind of small friction that makes the map feel like it's fighting back.
+     */
+    var panelCollapsed: Boolean
+        get() = prefs.getBoolean(KEY_PANEL_COLLAPSED, false)
+        set(value) = prefs.edit { putBoolean(KEY_PANEL_COLLAPSED, value) }
+
+    /**
+     * Whether the floating (picture-in-picture) window is allowed.
+     *
+     * Off by default and never turned on by the app: a window that appears over
+     * whatever the user was doing has to be something they asked for. When on,
+     * leaving the app mid-walk floats the live stats instead of hiding them.
+     */
+    var floatingWindow: Boolean
+        get() = prefs.getBoolean(KEY_FLOATING_WINDOW, false)
+        set(value) = prefs.edit { putBoolean(KEY_FLOATING_WINDOW, value) }
+
+    /**
      * The basemap style and screen density the offline downloader should use.
      * Recorded by the map, because a background worker has neither a map nor a
      * window to ask.
@@ -161,6 +184,8 @@ class UserSettings(context: Context) {
 
         const val KEY_TERRITORY_SORT = "territory_sort"
         const val KEY_TEST_MODE = "test_mode"
+        const val KEY_PANEL_COLLAPSED = "panel_collapsed"
+        const val KEY_FLOATING_WINDOW = "floating_window"
         const val KEY_OFFLINE_STYLE = "offline_style_url"
         const val KEY_OFFLINE_RATIO = "offline_pixel_ratio"
         const val KEY_CAM_LAT = "camera_lat"

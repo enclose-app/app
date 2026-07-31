@@ -40,9 +40,28 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Enclose"
         tools:ignore="MissingClass">
+        <!--
+          resizeable + supportsPictureInPicture: the walk is worth watching while
+          you use another app, in a split-screen half or in a floating window.
+
+          configChanges covers every dimension a multi-window resize touches. Not
+          for rotation's sake — for the map's: without it, entering or leaving
+          split screen or PiP recreates the activity, which tears down the GL
+          MapView and rebuilds it mid-walk. Compose re-reads the configuration on
+          its own, so nothing here needs handling in code.
+
+          launchMode=singleTask so the split-screen request (which relaunches
+          this activity with FLAG_ACTIVITY_LAUNCH_ADJACENT) can never produce a
+          second copy of the app on devices that ignore the flag; it is delivered
+          to the running one as a new intent instead.
+        -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|density|uiMode|keyboardHidden|navigation"
             android:theme="@style/Theme.Enclose">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
