@@ -11,6 +11,28 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.util.UUID
 
 /**
+ * Why nothing is reaching [TrackingManager] — the recorder could not be started,
+ * or was started and then refused.
+ *
+ * This exists because starting a walk used to be optimistic in a way nothing
+ * ever checked: the UI set the walk running, the service tried to subscribe to
+ * location, and if that failed the service quietly stopped itself. The walk went
+ * on showing "Walking" over a path that could never grow, and the only way out
+ * was to stop and discard. A failure the app knows about has to be a failure the
+ * app says out loud.
+ */
+enum class RecordingFailure {
+    /** Location permission is missing or was revoked out from under the service. */
+    PERMISSION,
+
+    /**
+     * The location request itself was refused — no provider, no Play Services,
+     * or the platform declined for a reason of its own.
+     */
+    UNAVAILABLE,
+}
+
+/**
  * Owns the walk in progress and runs loop-closure detection. The
  * [LocationService] feeds it GPS fixes; the UI observes [walk]. When a loop
  * closes it publishes a [PendingClaim] on [pendingClaim] — the UI shows a modal
@@ -68,6 +90,17 @@ object TrackingManager {
          * can account for. The walk survives every strike but the last.
          */
         val strikes: Int = 0,
+        /**
+         * Set when the walk is on screen but nothing is reaching it: the location
+         * recorder could not be started, or stopped being able to run. Cleared by
+         * the next fix that arrives, because a fix is the only proof it works.
+         *
+         * A walk that has already recorded ground keeps running with this set —
+         * the points are real and Stop can still claim them. Only a walk with
+         * nothing recorded is dropped back to idle, since there is nothing there
+         * to protect.
+         */
+        val recordingFailure: RecordingFailure? = null,
     ) {
         /** True while a vehicle (or implausible speed) is suspending recording. */
         val motionBlocked: Boolean get() = blockedReason != null
@@ -114,6 +147,15 @@ object TrackingManager {
      */
     private val _voidEvents = MutableSharedFlow<VoidReason>(extraBufferCapacity = 4)
     val voidEvents: SharedFlow<VoidReason> = _voidEvents.asSharedFlow()
+
+    /**
+     * Emitted when the recorder could not be started, or stopped being able to
+     * run. Separate from [voidEvents]: nothing was walked and nothing was thrown
+     * away — the app simply cannot do the thing it just said it was doing, and
+     * has to say so.
+     */
+    private val _recordingFailures = MutableSharedFlow<RecordingFailure>(extraBufferCapacity = 4)
+    val recordingFailures: SharedFlow<RecordingFailure> = _recordingFailures.asSharedFlow()
 
     /** When true, use relaxed thresholds so a tap-tested loop can still close. */
     private var relaxed = false
@@ -221,6 +263,37 @@ object TrackingManager {
     }
 
     /**
+     * Told by whoever owns the location stream that it cannot run: permission is
+     * gone, or the platform refused the request.
+     *
+     * Nothing downstream of [startWalk] used to check that fixes were actually
+     * arriving, so this failure was invisible — the panel said "Walking" over a
+     * path that could never grow. What happens next depends on whether anything
+     * has been recorded yet, and the asymmetry is the same one that governs the
+     * rest of this app:
+     *
+     *  - **Nothing recorded.** Drop straight back to idle. There is nothing to
+     *    lose, and leaving a walk running that cannot record is the state the
+     *    user could only escape by stopping and discarding.
+     *  - **Ground already recorded.** Keep the walk exactly where it is. Those
+     *    points are somewhere the user actually went, and Stop can still claim
+     *    them — a walk is never thrown away to report a problem with it.
+     *
+     * Either way the reason goes out on [recordingFailures] so it can be
+     * explained rather than guessed at.
+     */
+    fun reportRecordingUnavailable(failure: RecordingFailure) {
+        val state = _walk.value
+        if (!state.isTracking) return
+        _walk.value = if (state.path.isEmpty()) {
+            WalkState(isTracking = false)
+        } else {
+            state.copy(recordingFailure = failure)
+        }
+        _recordingFailures.tryEmit(failure)
+    }
+
+    /**
      * Feed a new GPS fix. This only updates live walk state — the loop is never
      * closed automatically; closing happens when the user presses Stop (see
      * [finishWalk]). [WalkState.readyToClose] reflects whether stopping now would
@@ -240,6 +313,10 @@ object TrackingManager {
     ) {
         var state = _walk.value
         if (!state.isTracking) return
+
+        // A fix arriving is the only proof the recorder works, so it is what
+        // clears a reported failure — not the notice being dismissed on screen.
+        if (state.recordingFailure != null) state = state.copy(recordingFailure = null)
 
         // A fix this vague describes nothing, so it must shape nothing: not the
         // path, and not the motion verdict either. Reacquiring after signal loss
@@ -563,8 +640,16 @@ object TrackingManager {
      * drive.
      */
     private const val MAX_UNVERIFIED_GAP_METERS = 1_000.0
-    /** Fixes worse than this accuracy (meters) are kept off the path. */
-    private const val MAX_ACCURACY_METERS = 50f
+    /**
+     * Fixes worse than this accuracy (meters) are kept off the path.
+     *
+     * Public because the UI has to be able to say so. A fix this vague is
+     * discarded outright, and "discarded" looks exactly like "no signal" from the
+     * panel — which is how a walk under approximate-only location could run for
+     * an hour recording nothing while the GPS chip read-out sat there quietly
+     * showing a number.
+     */
+    const val MAX_ACCURACY_METERS = 50f
 
     /**
      * Silence longer than this means the fixes stopped coming, not that the

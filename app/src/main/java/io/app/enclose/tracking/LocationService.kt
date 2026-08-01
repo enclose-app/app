@@ -130,6 +130,17 @@ class LocationService : Service() {
             }
         }
         if (!requestUpdates()) {
+            // Say so. This used to stop the service and tell nobody: the manager
+            // stayed `isTracking`, the panel went on saying "Walking", and the
+            // path could never grow. The manager decides what that costs — a walk
+            // with points on the ground survives it, an empty one doesn't.
+            TrackingManager.reportRecordingUnavailable(
+                if (hasLocationPermission()) {
+                    RecordingFailure.UNAVAILABLE
+                } else {
+                    RecordingFailure.PERMISSION
+                },
+            )
             stopSelf()
             return
         }
@@ -179,15 +190,18 @@ class LocationService : Service() {
         }.isSuccess
     }
 
+    /**
+     * Precise location only. Approximate ("coarse") fixes land hundreds of metres
+     * to kilometres out, and [TrackingManager.MAX_ACCURACY_METERS] discards every
+     * one of them before it can anchor a path — so treating coarse as good enough
+     * bought a foreground service, a notification and a battery drain that could
+     * not record a single point.
+     */
     private fun hasLocationPermission(): Boolean =
         ContextCompat.checkSelfPermission(
             this,
             Manifest.permission.ACCESS_FINE_LOCATION,
-        ) == PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_COARSE_LOCATION,
-            ) == PackageManager.PERMISSION_GRANTED
+        ) == PackageManager.PERMISSION_GRANTED
 
     override fun onDestroy() {
         // A stopped service with no walk in progress means the walk ended

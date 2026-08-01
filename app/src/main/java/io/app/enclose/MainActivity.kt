@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Rect
+import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -33,13 +34,16 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.location.LocationManagerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import io.app.enclose.tracking.TrackingManager
 import io.app.enclose.ui.EncloseViewModel
 import io.app.enclose.ui.FloatingWalkCard
+import io.app.enclose.ui.LocationReadiness
 import io.app.enclose.ui.MapScreen
 import io.app.enclose.ui.ProfileScreen
 import io.app.enclose.ui.Screen
@@ -74,19 +78,23 @@ class MainActivity : ComponentActivity() {
                 val floatingWindowEnabled by
                     viewModel.floatingWindow.collectAsStateWithLifecycle()
 
-                var hasLocationPermission by remember { mutableStateOf(isLocationGranted()) }
                 // True once the user has denied twice (or ticked "don't ask
                 // again"): the system prompt will no longer appear, so the UI has
                 // to send them to app settings instead of a button that does
                 // nothing.
                 var permissionBlocked by remember { mutableStateOf(false) }
 
-                // Permission can change while we're backgrounded (system
-                // settings, another app's prompt), so re-read it on every resume.
+                // Everything standing between the app and a recordable fix, as
+                // one value — see LocationReadiness. Re-read on every resume:
+                // permission and the device's location switch can both change
+                // while we're backgrounded, and the recovery buttons below send
+                // the user out to exactly those screens to change them.
+                var location by remember {
+                    mutableStateOf(locationReadiness(permissionBlocked))
+                }
                 RefreshOnResume {
-                    val granted = isLocationGranted()
-                    hasLocationPermission = granted
-                    if (granted) permissionBlocked = false
+                    if (isPreciseLocationGranted()) permissionBlocked = false
+                    location = locationReadiness(permissionBlocked)
                 }
 
                 // Auto-enter only while there's a walk to watch: a window that
@@ -106,7 +114,7 @@ class MainActivity : ComponentActivity() {
                     FloatingWalkCard(
                         walk = walk,
                         territories = territories,
-                        hasLocationPermission = hasLocationPermission,
+                        hasLocationPermission = location.hasPermission,
                         basemap = basemap,
                     )
                     return@EncloseTheme
@@ -132,15 +140,17 @@ class MainActivity : ComponentActivity() {
                 val permissionLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestMultiplePermissions(),
                 ) { result ->
-                    val granted =
-                        result[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                            result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-                    hasLocationPermission = granted
-                    permissionBlocked = !granted && !ActivityCompat
+                    // Precise only. The Android 12+ dialog offers Approximate
+                    // right beside it, and taking that option leaves every fix
+                    // too vague for TrackingManager to keep — a granted
+                    // permission that can't record a metre.
+                    val precise = result[Manifest.permission.ACCESS_FINE_LOCATION] == true
+                    permissionBlocked = !precise && !ActivityCompat
                         .shouldShowRequestPermissionRationale(
                             this,
                             Manifest.permission.ACCESS_FINE_LOCATION,
                         )
+                    location = locationReadiness(permissionBlocked)
                 }
 
                 // System back returns to the map from any sub-screen.
@@ -163,8 +173,8 @@ class MainActivity : ComponentActivity() {
                     when (current) {
                         Screen.Map -> MapScreen(
                             viewModel = viewModel,
-                            hasLocationPermission = hasLocationPermission,
-                            permissionBlocked = permissionBlocked,
+                            location = location,
+                            onOpenLocationSettings = ::openLocationSettings,
                             onRequestPermission = {
                                 permissionLauncher.launch(
                                     arrayOf(
@@ -326,15 +336,51 @@ class MainActivity : ComponentActivity() {
             .build()
     }
 
-    private fun isLocationGranted(): Boolean =
+    /**
+     * Precise location. Approximate is *not* enough to record a walk: those fixes
+     * land hundreds of metres out and [TrackingManager.MAX_ACCURACY_METERS]
+     * discards every one, so a walk under approximate-only ran a foreground
+     * service, held a notification and recorded nothing.
+     */
+    private fun isPreciseLocationGranted(): Boolean =
         ContextCompat.checkSelfPermission(
             this,
             Manifest.permission.ACCESS_FINE_LOCATION,
-        ) == PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_COARSE_LOCATION,
-            ) == PackageManager.PERMISSION_GRANTED
+        ) == PackageManager.PERMISSION_GRANTED
+
+    private fun isApproximateLocationGranted(): Boolean =
+        ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * The device's own location switch. With it off, subscribing to fixes
+     * *succeeds* and then never delivers a callback — nothing throws, nothing
+     * reports, and the walk records nothing forever. Checking it is the only way
+     * to know.
+     */
+    private fun isLocationServicesEnabled(): Boolean =
+        runCatching {
+            LocationManagerCompat.isLocationEnabled(
+                getSystemService(LocationManager::class.java),
+            )
+        }.getOrDefault(true)
+
+    private fun locationReadiness(promptBlocked: Boolean): LocationReadiness =
+        LocationReadiness.of(
+            precise = isPreciseLocationGranted(),
+            approximate = isApproximateLocationGranted(),
+            servicesEnabled = isLocationServicesEnabled(),
+            promptBlocked = promptBlocked,
+        )
+
+    /** Deep-link to the device's location settings, for the master switch. */
+    private fun openLocationSettings() {
+        runCatching {
+            startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+        }.onFailure { openAppSettings() }
+    }
 
     /** Deep-link to this app's settings page so a blocked permission is fixable. */
     private fun openAppSettings() {

@@ -17,8 +17,13 @@ internal enum class PanelStatus {
     /** No walk in progress; the panel offers to start one. */
     IDLE,
 
-    /** Location was refused, and without it there is nothing to record. */
-    NO_PERMISSION,
+    /**
+     * Location can't produce a fix worth recording — refused, granted only as
+     * approximate, or switched off device-wide. Without it there is nothing to
+     * record, so the panel offers the repair instead of a Start button that would
+     * begin a walk incapable of recording anything.
+     */
+    NO_LOCATION,
 
     /** Recording normally. */
     TRACKING,
@@ -40,7 +45,12 @@ internal enum class PanelAction {
     CLAIM,
     END,
     GRANT_PERMISSION,
+
+    /** This app's settings page — where the Precise location toggle lives. */
     OPEN_SETTINGS,
+
+    /** The device's location settings, for the master switch. */
+    OPEN_LOCATION_SETTINGS,
 }
 
 internal data class PanelSummary(
@@ -57,8 +67,7 @@ internal data class PanelSummary(
         fun of(
             walk: TrackingManager.WalkState,
             testMode: Boolean,
-            hasLocationPermission: Boolean,
-            permissionBlocked: Boolean,
+            location: LocationReadiness,
         ): PanelSummary = when {
             walk.isTracking -> {
                 val status = when {
@@ -75,14 +84,22 @@ internal data class PanelSummary(
             }
 
             // Test mode feeds points from map taps, so it needs no GPS at all.
-            !hasLocationPermission && !testMode -> PanelSummary(
-                status = PanelStatus.NO_PERMISSION,
-                action = if (permissionBlocked) {
-                    // The system prompt will no longer appear, so asking again
-                    // would be a button that does nothing.
-                    PanelAction.OPEN_SETTINGS
-                } else {
-                    PanelAction.GRANT_PERMISSION
+            !location.canRecord && !testMode -> PanelSummary(
+                status = PanelStatus.NO_LOCATION,
+                // Each way of being un-ready has a different repair, and offering
+                // the wrong one is a button that does nothing: re-prompting for a
+                // permission the system won't ask about again, or asking for
+                // permission when the problem is the device's own switch.
+                action = when (location) {
+                    LocationReadiness.DENIED -> PanelAction.GRANT_PERMISSION
+                    LocationReadiness.SERVICES_OFF -> PanelAction.OPEN_LOCATION_SETTINGS
+                    // Approximate is upgraded to precise on this app's settings
+                    // page; the runtime prompt can't be relied on to offer it.
+                    LocationReadiness.BLOCKED,
+                    LocationReadiness.APPROXIMATE_ONLY,
+                    -> PanelAction.OPEN_SETTINGS
+                    // Unreachable: canRecord is exactly READY.
+                    LocationReadiness.READY -> PanelAction.START
                 },
             )
 

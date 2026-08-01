@@ -14,9 +14,8 @@ class PanelSummaryTest {
     private fun summarize(
         walk: WalkState = WalkState(),
         testMode: Boolean = false,
-        hasLocationPermission: Boolean = true,
-        permissionBlocked: Boolean = false,
-    ) = PanelSummary.of(walk, testMode, hasLocationPermission, permissionBlocked)
+        location: LocationReadiness = LocationReadiness.READY,
+    ) = PanelSummary.of(walk, testMode, location)
 
     @Test
     fun `idle with permission offers to start`() {
@@ -27,21 +26,45 @@ class PanelSummaryTest {
 
     @Test
     fun `no permission asks for it`() {
-        val summary = summarize(hasLocationPermission = false)
-        assertEquals(PanelStatus.NO_PERMISSION, summary.status)
+        val summary = summarize(location = LocationReadiness.DENIED)
+        assertEquals(PanelStatus.NO_LOCATION, summary.status)
         assertEquals(PanelAction.GRANT_PERMISSION, summary.action)
     }
 
     @Test
     fun `a blocked permission sends the user to settings instead`() {
-        val summary = summarize(hasLocationPermission = false, permissionBlocked = true)
-        assertEquals(PanelStatus.NO_PERMISSION, summary.status)
+        val summary = summarize(location = LocationReadiness.BLOCKED)
+        assertEquals(PanelStatus.NO_LOCATION, summary.status)
         assertEquals(PanelAction.OPEN_SETTINGS, summary.action)
+    }
+
+    /**
+     * The one that started all this: permission granted, so the app happily began
+     * a walk that could never record a metre, because every approximate fix is
+     * past [io.app.enclose.tracking.TrackingManager.MAX_ACCURACY_METERS].
+     */
+    @Test
+    fun `approximate-only location cannot start a walk`() {
+        val summary = summarize(location = LocationReadiness.APPROXIMATE_ONLY)
+        assertEquals(PanelStatus.NO_LOCATION, summary.status)
+        // App settings, not the prompt: that is where the Precise toggle lives.
+        assertEquals(PanelAction.OPEN_SETTINGS, summary.action)
+    }
+
+    /**
+     * Permission is granted here; the device's own switch is off. Asking for
+     * permission again would be a button that does nothing.
+     */
+    @Test
+    fun `location switched off sends the user to location settings`() {
+        val summary = summarize(location = LocationReadiness.SERVICES_OFF)
+        assertEquals(PanelStatus.NO_LOCATION, summary.status)
+        assertEquals(PanelAction.OPEN_LOCATION_SETTINGS, summary.action)
     }
 
     @Test
     fun `test mode needs no location permission`() {
-        val summary = summarize(hasLocationPermission = false, testMode = true)
+        val summary = summarize(location = LocationReadiness.DENIED, testMode = true)
         assertEquals(PanelStatus.IDLE, summary.status)
         assertEquals(PanelAction.START, summary.action)
     }
@@ -82,7 +105,18 @@ class PanelSummaryTest {
     fun `losing permission mid-walk keeps the walk's own controls`() {
         val summary = summarize(
             walk = WalkState(isTracking = true),
-            hasLocationPermission = false,
+            location = LocationReadiness.DENIED,
+        )
+        assertEquals(PanelStatus.TRACKING, summary.status)
+        assertEquals(PanelAction.END, summary.action)
+    }
+
+    /** Same rule for the device switch being turned off mid-walk. */
+    @Test
+    fun `location switched off mid-walk keeps the walk's own controls`() {
+        val summary = summarize(
+            walk = WalkState(isTracking = true),
+            location = LocationReadiness.SERVICES_OFF,
         )
         assertEquals(PanelStatus.TRACKING, summary.status)
         assertEquals(PanelAction.END, summary.action)

@@ -15,6 +15,7 @@ import io.app.enclose.geo.LatLng
 import io.app.enclose.offline.OfflineTilesScheduler
 import io.app.enclose.sync.SyncScheduler
 import io.app.enclose.tracking.ActivityType
+import io.app.enclose.tracking.RecordingFailure
 import io.app.enclose.tracking.VoidReason
 import io.app.enclose.tracking.LocationService
 import io.app.enclose.tracking.TrackingManager
@@ -56,6 +57,14 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
             TrackingManager.voidEvents.collect { reason ->
                 LocationService.stop(getApplication())
                 _voidedWalk.value = reason
+            }
+        }
+        // The recorder couldn't start (or couldn't carry on). The service has
+        // already stopped itself, so there is nothing to shut down here — only
+        // something to say, which is the whole point: this used to be silent.
+        viewModelScope.launch {
+            TrackingManager.recordingFailures.collect { failure ->
+                _recordingFailure.value = failure
             }
         }
     }
@@ -243,6 +252,22 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         _voidedWalk.value = null
     }
 
+    /**
+     * Set when the recorder couldn't run at all. The UI explains it and calls
+     * [dismissRecordingFailure].
+     *
+     * Distinct from [voidedWalk]: nothing was walked and nothing was thrown away.
+     * This is the app admitting it can't do the thing it just said it was doing,
+     * which it previously did by stopping the location service in silence and
+     * leaving a walk on screen that could never record a metre.
+     */
+    private val _recordingFailure = MutableStateFlow<RecordingFailure?>(null)
+    val recordingFailure: StateFlow<RecordingFailure?> = _recordingFailure.asStateFlow()
+
+    fun dismissRecordingFailure() {
+        _recordingFailure.value = null
+    }
+
     /** A closed loop awaiting the user's claim decision (drives the modal). */
     val pendingClaim: StateFlow<TrackingManager.PendingClaim?> = TrackingManager.pendingClaim
 
@@ -307,6 +332,8 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     fun discardClaim() = TrackingManager.clearPending()
 
     fun startWalk() {
+        // The previous attempt's explanation doesn't belong on top of this one.
+        _recordingFailure.value = null
         // Test walks use relaxed thresholds so a tap-built loop can close.
         TrackingManager.startWalk(
             relaxedThresholds = _testMode.value,

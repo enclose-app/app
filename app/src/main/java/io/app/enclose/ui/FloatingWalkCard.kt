@@ -54,13 +54,14 @@ fun FloatingWalkCard(
 ) {
     val accents = LocalEncloseAccents.current
     val controller = rememberMapController()
-    // Permission state doesn't change what a read-out says: what matters is
-    // whether a walk is running, which the state itself carries.
+    // Location readiness doesn't change what a read-out says: what matters is
+    // whether a walk is running, which the state itself carries. This card takes
+    // no touches either, so the recovery buttons the other statuses lead to
+    // couldn't be pressed from here anyway.
     val summary = PanelSummary.of(
         walk = walk,
         testMode = false,
-        hasLocationPermission = true,
-        permissionBlocked = false,
+        location = LocationReadiness.READY,
     )
 
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -76,7 +77,7 @@ fun FloatingWalkCard(
         PanelStatus.READY -> accents.success to "Ready to claim"
         PanelStatus.BLOCKED -> MaterialTheme.colorScheme.error to "Paused"
         PanelStatus.TRACKING -> accents.trail to walk.activityType.activeLabel
-        PanelStatus.IDLE, PanelStatus.NO_PERMISSION ->
+        PanelStatus.IDLE, PanelStatus.NO_LOCATION ->
             MaterialTheme.colorScheme.onSurfaceVariant to "No walk in progress"
     }
 

@@ -61,6 +61,9 @@ test that*, leaving the Android shell thin:
 | `Passport` | `PassportTest` | takes domain objects only |
 | `OfflineTilePlanner` | `OfflineTilePlannerTest` | policy split from the MapLibre calls |
 | `PanelSummary` | `PanelSummaryTest` | status/action decided once, drawn three ways |
+| `LocationReadiness` | `LocationReadinessTest` | permission/services flags in as plain Booleans |
+| `FixWatch` | `FixWatchTest` | counts and an accuracy, no clock of its own |
+| `TrackingManager.reportRecordingUnavailable` | `TrackingManagerRecordingFailureTest` | manager has no Android/DB deps |
 | `WindowLayoutPolicy` | `WindowLayoutPolicyTest` | window size in as plain Ints, controls as an enum |
 | `SplitScreenSupport` | `SplitScreenSupportTest` | `Build` fields passed in, not read |
 | `ActivityType.resolve` | `ActivityTypeTest` | the stored name is just a String |
@@ -113,6 +116,38 @@ This is the core flow and it spans four files:
 4. `EncloseViewModel` owns everything `TrackingManager` deliberately can't:
    starting/stopping `LocationService`, persisting, and reacting to
    `voidEvents` (the manager cannot stop the service itself).
+
+**Starting a walk is checked, not assumed.** `startWalk()` used to flip
+`isTracking` and hope: if the service then couldn't subscribe to location it
+stopped itself in silence, leaving a walk on screen whose path could never grow
+and whose only exit was Stop-and-discard. Four rules close that off, and each one
+covers a case the others don't:
+
+- **`LocationReadiness`** (pure, tested) is the single value for "can a fix be
+  recorded, and if not, why not". It exists because two of its cases were
+  previously read as plain "granted". *Approximate* location is off by hundreds of
+  metres, which is past `TrackingManager.MAX_ACCURACY_METERS`, so every fix was
+  discarded before it could anchor a path — precise (`ACCESS_FINE_LOCATION`) is
+  therefore required, and coarse-only is a recovery state, not a grant. And with
+  the device's **location switch off**, subscribing *succeeds* and then never
+  delivers a callback, so nothing throws and nothing reports; it has to be read
+  from `LocationManager` up front. `PanelSummary` turns each case into its own
+  repair — the app's settings page for Precise, the device's for the switch —
+  because offering the wrong one is a button that does nothing.
+- **`TrackingManager.reportRecordingUnavailable`** is how `LocationService` says
+  it can't run instead of stopping quietly. What that costs follows the same
+  asymmetry as everything else here: a walk with **nothing** recorded drops back
+  to idle (there is nothing to lose, and leaving it running is the trap), while a
+  walk that has **already recorded ground** stays up so Stop can still claim it.
+  A fix arriving is what clears the flag — not the notice being dismissed.
+- **`FixWatch`** (pure, tested) decides when "acquiring…" has stopped being a
+  plausible thing to say: after 30 s with an empty path it says either *no fix at
+  all* or *fixes arriving and all too vague to keep*. Those need different things
+  from the user, and telling someone to go outside when the real problem is
+  approximate location costs them the walk.
+
+None of this is reachable from a unit test end to end — the permission reads, the
+`LocationManager` and the fused provider all need `device-check`.
 
 Two consequences to preserve when editing:
 

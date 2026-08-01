@@ -121,6 +121,7 @@ import io.app.enclose.tracking.BlockReason
 import io.app.enclose.tracking.ActivityType
 import io.app.enclose.tracking.MotionGate
 import io.app.enclose.tracking.NameGenerator
+import io.app.enclose.tracking.RecordingFailure
 import io.app.enclose.tracking.VoidReason
 import io.app.enclose.tracking.TrackingManager
 import io.app.enclose.ui.theme.LocalEncloseAccents
@@ -140,12 +141,13 @@ import kotlin.math.roundToInt
 @Composable
 fun MapScreen(
     viewModel: EncloseViewModel,
-    hasLocationPermission: Boolean,
+    /** Whether location can produce a fix worth recording, and if not, why not. */
+    location: LocationReadiness,
     onRequestPermission: () -> Unit,
-    /** True when the OS will no longer show a permission prompt. */
-    permissionBlocked: Boolean = false,
-    /** Opens the system app-settings page, for the blocked-permission case. */
+    /** Opens this app's settings page — where the Precise location toggle lives. */
     onOpenAppSettings: () -> Unit = {},
+    /** Opens the device's location settings, for the master switch. */
+    onOpenLocationSettings: () -> Unit = {},
     /** True while Enclose shares the screen with another app. */
     inMultiWindow: Boolean = false,
     /** False where asking for split screen could never work — see [SplitScreenSupport]. */
@@ -179,6 +181,7 @@ fun MapScreen(
     val pendingClaim by viewModel.pendingClaim.collectAsStateWithLifecycle()
     val showHowItWorks by viewModel.showHowItWorks.collectAsStateWithLifecycle()
     val voidedWalk by viewModel.voidedWalk.collectAsStateWithLifecycle()
+    val recordingFailure by viewModel.recordingFailure.collectAsStateWithLifecycle()
     val gpxImport by viewModel.gpxImport.collectAsStateWithLifecycle()
     val basemapStyle by viewModel.basemapStyle.collectAsStateWithLifecycle()
     val home by viewModel.home.collectAsStateWithLifecycle()
@@ -471,7 +474,9 @@ fun MapScreen(
         EncloseMap(
             walk = walk,
             territories = territories,
-            hasLocationPermission = hasLocationPermission,
+            // Any grant will do for the blue dot: a vague position is still worth
+            // drawing, even where it is far too vague to claim ground with.
+            hasLocationPermission = location.hasPermission,
             controller = controller,
             home = home,
             // Tapped points place themselves; a camera that chases them moves the
@@ -645,11 +650,13 @@ fun MapScreen(
             testMode = testMode,
             activityType = activityType,
             onSelectActivity = viewModel::setActivityType,
-            hasLocationPermission = hasLocationPermission,
-            permissionBlocked = permissionBlocked,
+            location = location,
             onStart = {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                if (testMode || hasLocationPermission) viewModel.startWalk() else onRequestPermission()
+                // Guarded rather than trusted: PanelSummary only offers Start when
+                // location is ready, and starting a walk that cannot record is the
+                // failure this whole path exists to stop.
+                if (testMode || location.canRecord) viewModel.startWalk() else onRequestPermission()
             },
             onClaim = {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -658,6 +665,7 @@ fun MapScreen(
             onFinishWithoutClaim = { confirmDiscardWalk = true },
             onRequestPermission = onRequestPermission,
             onOpenAppSettings = onOpenAppSettings,
+            onOpenLocationSettings = onOpenLocationSettings,
             onHowItWorks = viewModel::openHowItWorks,
             collapsed = collapsePanel,
             foldable = WindowLayoutPolicy.panelFoldable(windowHeightDp),
@@ -709,6 +717,39 @@ fun MapScreen(
                         "wasn't kept."
             },
             onDismiss = viewModel::dismissVoidedWalk,
+        )
+    }
+
+    // The recorder couldn't run. Nothing was walked and nothing was thrown away —
+    // this says so out loud, where it used to be a service that stopped itself in
+    // silence behind a panel still claiming to record.
+    recordingFailure?.let { failure ->
+        val recorded = walk.path.isNotEmpty()
+        NoticeDialog(
+            title = if (recorded) "Recording stopped" else "Couldn't start recording",
+            message = buildString {
+                append(
+                    when (failure) {
+                        RecordingFailure.PERMISSION ->
+                            "Enclose no longer has precise location access, so there's " +
+                                "nothing to record your route with."
+                        RecordingFailure.UNAVAILABLE ->
+                            "This device wouldn't hand over location updates. Check that " +
+                                "location is switched on, then try again."
+                    },
+                )
+                append(
+                    if (recorded) {
+                        // Never quietly dropped: the ground already walked is real,
+                        // and Stop can still claim it.
+                        " Everything walked so far is still here — press Stop to " +
+                            "claim or discard it."
+                    } else {
+                        " Nothing was recorded, so the walk has been stopped."
+                    },
+                )
+            },
+            onDismiss = viewModel::dismissRecordingFailure,
         )
     }
 
@@ -884,13 +925,13 @@ private fun ControlPanel(
     testMode: Boolean,
     activityType: ActivityType,
     onSelectActivity: (ActivityType) -> Unit,
-    hasLocationPermission: Boolean,
-    permissionBlocked: Boolean,
+    location: LocationReadiness,
     onStart: () -> Unit,
     onClaim: () -> Unit,
     onFinishWithoutClaim: () -> Unit,
     onRequestPermission: () -> Unit,
     onOpenAppSettings: () -> Unit,
+    onOpenLocationSettings: () -> Unit,
     onHowItWorks: () -> Unit,
     /** Minimised to a single row, so the map isn't half-covered. */
     collapsed: Boolean,
@@ -900,7 +941,7 @@ private fun ControlPanel(
     modifier: Modifier = Modifier,
 ) {
     val shape = MaterialTheme.shapes.extraLarge
-    val summary = PanelSummary.of(walk, testMode, hasLocationPermission, permissionBlocked)
+    val summary = PanelSummary.of(walk, testMode, location)
     // Beep + buzz once, the moment the loop becomes claimable, so the user knows
     // without looking at the screen. Keyed on readyToClose → fires on each
     // false→true transition.
@@ -938,6 +979,7 @@ private fun ControlPanel(
                 onFinishWithoutClaim = onFinishWithoutClaim,
                 onRequestPermission = onRequestPermission,
                 onOpenAppSettings = onOpenAppSettings,
+                onOpenLocationSettings = onOpenLocationSettings,
                 onExpand = if (foldable) ({ onCollapsedChange(false) }) else null,
             )
             return@Card
@@ -982,10 +1024,12 @@ private fun ControlPanel(
 
                 // Location is the whole point of the app, so an explicit, actionable
                 // recovery path replaces the old one-line red warning.
-                PanelStatus.NO_PERMISSION -> PermissionBlock(
-                    blocked = permissionBlocked,
+                PanelStatus.NO_LOCATION -> LocationBlock(
+                    location = location,
+                    action = summary.action,
                     onRequestPermission = onRequestPermission,
                     onOpenAppSettings = onOpenAppSettings,
+                    onOpenLocationSettings = onOpenLocationSettings,
                 )
 
                 PanelStatus.IDLE -> {
@@ -1023,6 +1067,7 @@ private fun CollapsedPanel(
     onFinishWithoutClaim: () -> Unit,
     onRequestPermission: () -> Unit,
     onOpenAppSettings: () -> Unit,
+    onOpenLocationSettings: () -> Unit,
     /** Null where the window is too short for the panel to expand into. */
     onExpand: (() -> Unit)?,
 ) {
@@ -1039,21 +1084,24 @@ private fun CollapsedPanel(
     val elapsedMs = walk.startedAtMs?.let { (now - it).coerceAtLeast(0L) } ?: 0L
 
     val dotColor = when (summary.status) {
-        PanelStatus.BLOCKED, PanelStatus.NO_PERMISSION -> MaterialTheme.colorScheme.error
+        PanelStatus.BLOCKED, PanelStatus.NO_LOCATION -> MaterialTheme.colorScheme.error
         PanelStatus.READY -> accents.success
         PanelStatus.TRACKING -> accents.trail
         PanelStatus.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val title = when (summary.status) {
         PanelStatus.IDLE -> "Ready to claim ground"
-        PanelStatus.NO_PERMISSION -> "Location access needed"
+        PanelStatus.NO_LOCATION -> when (summary.action) {
+            PanelAction.OPEN_LOCATION_SETTINGS -> "Location is switched off"
+            else -> "Location access needed"
+        }
         PanelStatus.BLOCKED -> "Paused — not recording"
         PanelStatus.READY -> "Back at the start"
         PanelStatus.TRACKING -> walk.activityType.activeLabel
     }
     val detail = when (summary.status) {
         PanelStatus.IDLE -> activityType.label
-        PanelStatus.NO_PERMISSION -> null
+        PanelStatus.NO_LOCATION -> null
         else -> "${formatDistance(walk.distanceMeters)} · ${formatElapsed(elapsedMs)}"
     }
 
@@ -1094,6 +1142,7 @@ private fun CollapsedPanel(
             onFinishWithoutClaim = onFinishWithoutClaim,
             onRequestPermission = onRequestPermission,
             onOpenAppSettings = onOpenAppSettings,
+            onOpenLocationSettings = onOpenLocationSettings,
         )
         if (onExpand != null) {
             IconButton(onClick = onExpand, modifier = Modifier.size(TOUCH_TARGET)) {
@@ -1117,13 +1166,14 @@ private fun CollapsedAction(
     onFinishWithoutClaim: () -> Unit,
     onRequestPermission: () -> Unit,
     onOpenAppSettings: () -> Unit,
+    onOpenLocationSettings: () -> Unit,
 ) {
     val label = when (summary.action) {
         PanelAction.START -> activityType.label
         PanelAction.CLAIM -> "Claim"
         PanelAction.END -> "End"
         PanelAction.GRANT_PERMISSION -> "Grant"
-        PanelAction.OPEN_SETTINGS -> "Settings"
+        PanelAction.OPEN_SETTINGS, PanelAction.OPEN_LOCATION_SETTINGS -> "Settings"
     }
     val onClick = when (summary.action) {
         PanelAction.START -> onStart
@@ -1131,6 +1181,7 @@ private fun CollapsedAction(
         PanelAction.END -> onFinishWithoutClaim
         PanelAction.GRANT_PERMISSION -> onRequestPermission
         PanelAction.OPEN_SETTINGS -> onOpenAppSettings
+        PanelAction.OPEN_LOCATION_SETTINGS -> onOpenLocationSettings
     }
     // Ending a walk is destructive and must not wear the inviting colour, exactly
     // as in the expanded panel.
@@ -1146,7 +1197,10 @@ private fun CollapsedAction(
         PanelAction.START -> Icons.Filled.PlayArrow
         PanelAction.CLAIM -> Icons.Filled.Flag
         PanelAction.END -> Icons.Filled.Stop
-        PanelAction.GRANT_PERMISSION, PanelAction.OPEN_SETTINGS -> Icons.Filled.LocationOff
+        PanelAction.GRANT_PERMISSION,
+        PanelAction.OPEN_SETTINGS,
+        PanelAction.OPEN_LOCATION_SETTINGS,
+        -> Icons.Filled.LocationOff
     }
     Button(
         onClick = onClick,
@@ -1231,12 +1285,45 @@ private fun IdleBlock(onHowItWorks: () -> Unit) {
     }
 }
 
+/**
+ * The recovery block shown in place of a Start button when location can't
+ * produce a fix worth recording.
+ *
+ * Each way of being un-ready gets its own sentence and its own button, because
+ * they need different things done and pointing at the wrong screen wastes the
+ * walk someone came to do. In particular, "granted, but Approximate" and
+ * "granted, but location is off" both used to read as fully granted and start a
+ * walk that could never record.
+ */
 @Composable
-private fun PermissionBlock(
-    blocked: Boolean,
+private fun LocationBlock(
+    location: LocationReadiness,
+    action: PanelAction,
     onRequestPermission: () -> Unit,
     onOpenAppSettings: () -> Unit,
+    onOpenLocationSettings: () -> Unit,
 ) {
+    val title = when (location) {
+        LocationReadiness.SERVICES_OFF -> "Location is switched off"
+        LocationReadiness.APPROXIMATE_ONLY -> "Precise location needed"
+        else -> "Location access needed"
+    }
+    val body = when (location) {
+        LocationReadiness.SERVICES_OFF ->
+            "Enclose has permission, but the device's location switch is off, so " +
+                "no fixes arrive at all."
+        LocationReadiness.APPROXIMATE_ONLY ->
+            "Approximate location is off by hundreds of metres — too vague to trace " +
+                "a route. Switch this app's location to Precise."
+        LocationReadiness.BLOCKED -> "Enable it in system settings to record walks."
+        else -> "Enclose traces your route to work out what you enclosed."
+    }
+    val (onClick, label) = when (action) {
+        PanelAction.OPEN_LOCATION_SETTINGS -> onOpenLocationSettings to "Open location settings"
+        PanelAction.OPEN_SETTINGS -> onOpenAppSettings to "Open settings"
+        else -> onRequestPermission to "Grant location access"
+    }
+
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier
@@ -1254,24 +1341,20 @@ private fun PermissionBlock(
         }
         Spacer(Modifier.width(12.dp))
         Column {
-            Text("Location access needed", style = MaterialTheme.typography.titleMedium)
+            Text(title, style = MaterialTheme.typography.titleMedium)
             Text(
-                if (blocked) {
-                    "Enable it in system settings to record walks."
-                } else {
-                    "Enclose traces your route to work out what you enclosed."
-                },
+                body,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
     Button(
-        onClick = if (blocked) onOpenAppSettings else onRequestPermission,
+        onClick = onClick,
         modifier = Modifier.fillMaxWidth().height(52.dp),
         shape = PillShape,
     ) {
-        Text(if (blocked) "Open settings" else "Grant location access")
+        Text(label)
     }
 }
 
@@ -1321,6 +1404,15 @@ private fun LiveStats(walk: TrackingManager.WalkState, testMode: Boolean) {
         }
     }
     val elapsedMs = walk.startedAtMs?.let { (now - it).coerceAtLeast(0L) } ?: 0L
+    // Its own clock, because `startedAtMs` is set by the *first accepted fix* —
+    // the very thing that never arrives in the case this watches for.
+    val startedWaitingMs = remember(walk.isTracking) { System.currentTimeMillis() }
+    val fixWarning = FixWatch.warning(
+        isTracking = walk.isTracking,
+        recordedPoints = walk.path.size,
+        accuracyMeters = walk.accuracyMeters,
+        waitingMs = (now - startedWaitingMs).coerceAtLeast(0L),
+    )
     val accents = LocalEncloseAccents.current
     val blocked = walk.motionBlocked
 
@@ -1389,9 +1481,15 @@ private fun LiveStats(walk: TrackingManager.WalkState, testMode: Boolean) {
         Spacer(Modifier.weight(1f))
     }
 
-    // While movement is rejected, the loop checklist is meaningless — what the
-    // user needs is why nothing is being recorded and how long they have.
-    if (blocked) MotionBlockedNotice(walk) else LoopProgress(walk)
+    // Nothing has been recorded and it has stopped being plausible to call that
+    // warm-up. This outranks the loop checklist for the same reason the blocked
+    // notice does: a progress bar towards a loop is meaningless when no part of
+    // the route is being kept.
+    when {
+        blocked -> MotionBlockedNotice(walk)
+        fixWarning != null -> FixWarningNotice(fixWarning, walk.accuracyMeters)
+        else -> LoopProgress(walk)
+    }
 
     // A strike the walk survived. Kept on screen afterwards because the count is
     // what decides the next one: someone who doesn't know they're on their last
@@ -1524,6 +1622,62 @@ internal fun GpxProgressDialog(label: String, progress: Float?) {
                     textAlign = TextAlign.Center,
                 )
             }
+        }
+    }
+}
+
+/**
+ * Shown when a walk has been running long enough that "acquiring…" has stopped
+ * being a plausible explanation for an empty path — see [FixWatch].
+ *
+ * The two cases are worded apart on purpose. Telling someone to move into the
+ * open when the real problem is approximate-only location sends them on a walk
+ * that still records nothing, which is precisely the failure this exists to end.
+ */
+@Composable
+private fun FixWarningNotice(warning: FixWarning, accuracyMeters: Float?) {
+    val error = MaterialTheme.colorScheme.error
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = error.copy(alpha = 0.10f),
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        border = BorderStroke(1.dp, error.copy(alpha = 0.35f)),
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.LocationOff,
+                    contentDescription = null,
+                    tint = error,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    when (warning) {
+                        FixWarning.NO_FIX -> "No GPS fix yet"
+                        FixWarning.TOO_VAGUE -> "GPS too vague to record"
+                    },
+                    style = MaterialTheme.typography.titleSmall,
+                    color = error,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                when (warning) {
+                    FixWarning.NO_FIX ->
+                        "Nothing has been recorded yet. Check that location is switched " +
+                            "on, and that you have a view of the sky — indoors and " +
+                            "underground, no fix arrives at all."
+                    FixWarning.TOO_VAGUE ->
+                        "Fixes are arriving but every one is off by more than " +
+                            "${TrackingManager.MAX_ACCURACY_METERS.roundToInt()} m" +
+                            (accuracyMeters?.let { " (currently ±${it.roundToInt()} m)" } ?: "") +
+                            ", so none can be kept. This is what Approximate location " +
+                            "looks like — switch Enclose to Precise in system settings."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -1772,7 +1926,14 @@ private fun loopHint(walk: TrackingManager.WalkState): String {
     }
 }
 
-/** Colored dot + "±Xm" summarizing the current GPS fix quality. */
+/**
+ * Colored dot + "±Xm" summarizing the current GPS fix quality.
+ *
+ * Past [TrackingManager.MAX_ACCURACY_METERS] the fix isn't merely poor, it is
+ * *discarded* — so the read-out says so. A bare "±800 m" in an unfamiliar colour
+ * reads as a weak signal that is nonetheless being recorded, which is the exact
+ * misunderstanding that lets a walk run for an hour and keep nothing.
+ */
 @Composable
 private fun GpsAccuracyIndicator(accuracyMeters: Float?) {
     val accents = LocalEncloseAccents.current
@@ -1780,7 +1941,9 @@ private fun GpsAccuracyIndicator(accuracyMeters: Float?) {
         accuracyMeters == null -> MaterialTheme.colorScheme.onSurfaceVariant to "acquiring…"
         accuracyMeters <= 10f -> accents.gpsGood to "±${accuracyMeters.roundToInt()} m"
         accuracyMeters <= 25f -> accents.gpsFair to "±${accuracyMeters.roundToInt()} m"
-        else -> accents.gpsPoor to "±${accuracyMeters.roundToInt()} m"
+        accuracyMeters <= TrackingManager.MAX_ACCURACY_METERS ->
+            accents.gpsPoor to "±${accuracyMeters.roundToInt()} m"
+        else -> accents.gpsPoor to "±${accuracyMeters.roundToInt()} m — not recorded"
     }
     Row(
         verticalAlignment = Alignment.CenterVertically,
