@@ -51,6 +51,11 @@ object Conquest {
                 other.copy(
                     polygons = reduced,
                     areaSqMeters = Geo.areaOfPolygons(reduced),
+                    // Stamped so [SnapDisplay] knows to stop drawing this claim's
+                    // road-matched outline, if it has one. That outline describes
+                    // the whole loop as walked, and part of that loop now belongs
+                    // to someone else.
+                    carvedAtEpochMs = atEpochMs,
                     syncStatus = SyncStatus.PENDING,
                 )
             }

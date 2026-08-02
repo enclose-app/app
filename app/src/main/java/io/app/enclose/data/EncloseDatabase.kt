@@ -17,7 +17,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         WalkProgressPointEntity::class,
         OfflineRegionEntity::class,
     ],
-    version = 11,
+    version = 12,
     // Exported to app/schemas so every future migration can be written against
     // the real previous schema and verified, instead of guessed at.
     exportSchema = true,
@@ -141,6 +141,31 @@ abstract class EncloseDatabase : RoomDatabase() {
         }
 
         /**
+         * Adds the road-matched outline to claims, plus the two timestamps that
+         * make sense of it.
+         *
+         * `snappedJson` needs the SQL `DEFAULT ''` even though the Kotlin
+         * property has one — a constructor default is not a column default, and
+         * existing rows are written by SQLite, not by Kotlin. It backfills blank,
+         * which reads as "no matched outline", which is exactly true.
+         *
+         * Both timestamps are nullable so every existing claim reads as never
+         * matched and never carved. Never-carved is right by construction: a
+         * claim that *was* carved before this column existed has no record of
+         * when, and guessing a date would be inventing history. The cost of
+         * getting it wrong is only that such a claim may draw a matched outline
+         * once it is matched — and it can only be matched at all if the user opts
+         * in, at which point [SnapPolicy] still has to accept the result.
+         */
+        private val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE territories ADD COLUMN snappedJson TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE territories ADD COLUMN snappedAtEpochMs INTEGER")
+                db.execSQL("ALTER TABLE territories ADD COLUMN carvedAtEpochMs INTEGER")
+            }
+        }
+
+        /**
          * There is deliberately **no** destructive-migration fallback here.
          *
          * A territory is a walk someone actually went out and did; it cannot be
@@ -167,6 +192,7 @@ abstract class EncloseDatabase : RoomDatabase() {
                         MIGRATION_8_9,
                         MIGRATION_9_10,
                         MIGRATION_10_11,
+                        MIGRATION_11_12,
                     )
                     .build().also { instance = it }
             }

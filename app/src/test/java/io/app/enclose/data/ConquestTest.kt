@@ -61,6 +61,22 @@ class ConquestTest {
         assertTrue("Some ground should survive", reduced.areaSqMeters > 0.0)
         // The as-walked ring is history and never gets rewritten by carving.
         assertEquals(older.ring, reduced.ring)
+        // Stamped so SnapDisplay stops drawing a road-matched outline that still
+        // describes the whole loop, part of which is now someone else's.
+        assertEquals(1L, reduced.carvedAtEpochMs)
+    }
+
+    /**
+     * A claim nobody has carved must stay unstamped, or every claim on the map
+     * would refuse its matched outline.
+     */
+    @Test
+    fun `an untouched claim is never stamped as carved`() {
+        val older = square("older", ATHENS, sizeDeg = 0.004)
+        val elsewhere = square("newer", BERLIN, sizeDeg = 0.004)
+
+        assertTrue(Conquest.carve(listOf(older), elsewhere, atEpochMs = 1L).isEmpty())
+        assertNull(older.carvedAtEpochMs)
     }
 
     @Test

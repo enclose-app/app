@@ -63,6 +63,23 @@ class UserSettings(context: Context) {
         set(value) = prefs.edit { putBoolean(KEY_TEST_MODE, value) }
 
     /**
+     * Whether claimed routes may be matched onto real roads and paths.
+     *
+     * **Off by default, and that default is not a formality.** Everything else
+     * this app does happens on the device: the basemap streams tiles, the
+     * geocoder runs locally, and the sync seam accepts nothing. Matching is the
+     * first feature that would send somewhere a precise record of where somebody
+     * walked, so it has to be asked for rather than discovered.
+     *
+     * Turning it on covers *new* claims only. Existing ones are matched solely by
+     * an explicit action that says how many walks it would upload first — a
+     * single toggle must never ship a walking history.
+     */
+    var snapToPaths: Boolean
+        get() = prefs.getBoolean(KEY_SNAP_TO_PATHS, false)
+        set(value) = prefs.edit { putBoolean(KEY_SNAP_TO_PATHS, value) }
+
+    /**
      * Whether the bottom control panel is minimised to a single row.
      *
      * Remembered because it's a standing preference about the map, not a
@@ -184,6 +201,7 @@ class UserSettings(context: Context) {
 
         const val KEY_TERRITORY_SORT = "territory_sort"
         const val KEY_TEST_MODE = "test_mode"
+        const val KEY_SNAP_TO_PATHS = "snap_to_paths"
         const val KEY_PANEL_COLLAPSED = "panel_collapsed"
         const val KEY_FLOATING_WINDOW = "floating_window"
         const val KEY_OFFLINE_STYLE = "offline_style_url"

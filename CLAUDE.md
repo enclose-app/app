@@ -62,6 +62,11 @@ test that*, leaving the Android shell thin:
 | `OfflineTilePlanner` | `OfflineTilePlannerTest` | policy split from the MapLibre calls |
 | `PanelSummary` | `PanelSummaryTest` | status/action decided once, drawn three ways |
 | `LocationReadiness` | `LocationReadinessTest` | permission/services flags in as plain Booleans |
+| `Polyline` | `PolylineTest` | a codec over Strings, no transport |
+| `RouteSimplify` | `RouteSimplifyTest` | points in, points out |
+| `SnapPolicy` | `SnapPolicyTest` | geometry only, no storage or network |
+| `SnapDisplay` | `SnapDisplayTest` | takes a `Territory`, returns what to draw |
+| `SnapTagger` | `SnapTaggerTest` | the `SnapStore` + `RouteMatcher` seams |
 | `FixWatch` | `FixWatchTest` | counts and an accuracy, no clock of its own |
 | `TrackingManager.reportRecordingUnavailable` | `TrackingManagerRecordingFailureTest` | manager has no Android/DB deps |
 | `WindowLayoutPolicy` | `WindowLayoutPolicyTest` | window size in as plain Ints, controls as an enum |
@@ -277,17 +282,59 @@ taking only the newest throws the walked ground away.
 - `Territory.ring` is the original as-walked boundary and never changes.
   `Territory.polygons` (a `List<GeoPolygon>`, i.e. multipolygon with holes) is
   the **effective** claimed geometry, which shrinks/splits/gains holes as later
-  claims carve into it. Rendering, area, and export use `polygons`; GPX uses
-  `ring`.
+  claims carve into it. **Area, conquest and export use `polygons`; GPX uses
+  `ring`; rendering goes through `SnapDisplay`** — see "Snapping to real paths".
 - `Geo` uses an equirectangular projection around the mean latitude plus the
   shoelace formula — accurate enough at city-walk scale, and `GeoClip` projects
   the same way before handing geometry to JTS (which is planar). `GeoClip` runs
   `buffer(0)` to repair self-intersections from GPS noise and returns the
-  original input unchanged on any failure.
+  original input unchanged on any failure. `GeoClip.isSimpleRing` answers the
+  same question about geometry that came from somewhere else.
+
+### Snapping to real paths
+
+A recorded loop wobbles across buildings and cuts corners it didn't cut, so a
+claim's outline can be matched onto real roads. Four constraints shape all of it,
+and none of them are incidental:
+
+- **Display only.** `Territory.ring` stays the boundary of record, `areaSqMeters`
+  is measured from it, and `Conquest` carves with it. A footpath missing from the
+  map must never shrink what someone owns. `SnapDisplay` is a named object rather
+  than an extension property precisely so a leak into `Conquest`, `Coverage`,
+  `Passport` or `OfflineTilePlanner` is visible in a diff. **Export stays raw,
+  GeoJSON as well as GPX** — `toGeoJson` writes the area into `properties`
+  beside the geometry, and shipping a shape whose stated area disagrees with it
+  is worse than shipping the honest one.
+- **After the claim, never during the walk.** Live snapping is an anti-cheat
+  hole: a drive down a road map-matches to that road perfectly, which is exactly
+  the signal `MotionGate` exists to reject. Do not "improve" this into a live
+  feature.
+- **A carved claim stops using its matched outline** (`Territory.carvedAtEpochMs`,
+  stamped by `Conquest.carve`). The matched ring describes the *whole* loop as
+  walked, and matching is opt-in and needs a network, so it can arrive weeks after
+  a rival already took part of that loop — `Conquest` only revisits a claim when a
+  new walk overlaps it, so there would be nothing to correct it.
+- **Opt-in, and it never bulk-uploads by itself.** `UserSettings.snapToPaths` is
+  off by default. This is the only feature that sends a precise record of where
+  someone walked anywhere, so turning it on covers new claims only; existing ones
+  need the explicit button that states how many walks it would send.
+
+`snappedAtEpochMs` is nullable and separate from the ring on purpose: it
+distinguishes *never asked* from *asked and refused*, without which a loop round a
+park — which has no roads to match and is refused every time — would be
+re-uploaded on every backfill forever.
+
+**No matching host is bound.** `RouteMatcher` is the seam and `NoRouteMatcher` is
+what `EncloseApp` wires, in the same idiom as `RemoteSyncApi`/`NoBackendSyncApi`,
+because there is no free, key-less, terms-clean map-matching endpoint and this app
+ships to Play. `RouteMatcher`'s KDoc carries what an implementation owes its
+caller, including the two wire traps (Valhalla encodes polylines at 1e6, not 1e5;
+`trace_route` re-routes through GPS gaps and returns one shape per leg with
+duplicated vertices).
 
 ### Persistence
 
-Room (KSP), database version 11, six entities: `territories`, `walks`, a
+Room (KSP), database version 12, six entities: `territories`, `walks`, a
 single-row `profile` (`id = "me"`, auto-created with a random guest name on
 first access), and the `walk_progress` / `walk_progress_points` pair backing the
 walk in progress, and `offline_regions`. Geometry is stored as **hand-rolled JSON strings** in
@@ -303,7 +350,7 @@ couch — so dropping tables to land a schema change is never an acceptable
 trade, pre-release included.
 
 The rule that follows: **every version bump ships a `Migration`.**
-`EncloseDatabase` has six worked examples — `MIGRATION_5_6` (add a column),
+`EncloseDatabase` has seven worked examples — `MIGRATION_5_6` (add a column),
 `MIGRATION_6_7` (add nullable columns), `MIGRATION_7_8` (create tables, with the
 `CREATE TABLE` copied verbatim from the exported JSON so Room's validation
 passes), `MIGRATION_8_9` and `MIGRATION_9_10` (a `NOT NULL` column needs a SQL `DEFAULT`
@@ -345,7 +392,7 @@ box between two cities is mostly countryside.
 ### Remembered preferences
 
 `UserSettings` (SharedPreferences, file `enclose_ui`) holds **every** preference:
-seen-intro, activity type, basemap, territory sort, test mode, panel-collapsed,
+seen-intro, activity type, basemap, territory sort, test mode, snap-to-paths, panel-collapsed,
 floating-window, home, and the map camera. It exists as one class because the previous ad-hoc `prefs.getString(...)`
 calls scattered through `EncloseViewModel` are exactly why the camera and two
 toggles went unpersisted for so long — there was nowhere to notice the gap. Add

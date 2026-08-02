@@ -38,6 +38,7 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     private val repository = (app as EncloseApp).repository
     private val walkRepository = (app as EncloseApp).walkRepository
     private val cityTagger = (app as EncloseApp).cityTagger
+    private val snapTagger = (app as EncloseApp).snapTagger
     private val offlineTileSync = (app as EncloseApp).offlineTileSync
 
     /** Everything remembered between launches. See [UserSettings]. */
@@ -326,6 +327,17 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
             // worker waits for Wi-Fi, so nothing downloads on mobile data.
             requestOfflineTiles()
         }
+        // Match the route onto real roads, if the user has asked for that.
+        //
+        // Deliberately its own coroutine, and deliberately on applicationScope.
+        // Chaining it behind cityTagger would put a slow remote match in a queue
+        // behind the geocoder's ten-second timeout, and viewModelScope dies with
+        // the screen — which someone can easily leave in the seconds after
+        // claiming. Nothing here is on the path to the claim being saved; that
+        // already happened above.
+        (getApplication() as EncloseApp).applicationScope.launch {
+            snapTagger.tag(territory.id, newRing)
+        }
     }
 
     /** User dismissed the modal without claiming. */
@@ -364,6 +376,62 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         settings.testMode = enabled
         // Leaving test mode abandons any tap-built walk in progress.
         if (!enabled && walk.value.isTracking) TrackingManager.cancelWalk()
+    }
+
+    /**
+     * Whether claimed routes may be matched onto real roads and paths.
+     *
+     * Off by default: this is the only thing in the app that sends a precise
+     * record of where somebody walked anywhere. See [UserSettings.snapToPaths].
+     */
+    private val _snapToPaths = MutableStateFlow(settings.snapToPaths)
+    val snapToPaths: StateFlow<Boolean> = _snapToPaths.asStateFlow()
+
+    /** False where no matching service is bound, so the switch can be hidden. */
+    val snapAvailable: Boolean get() = snapTagger.isAvailable
+
+    fun setSnapToPaths(enabled: Boolean) {
+        _snapToPaths.value = enabled
+        settings.snapToPaths = enabled
+        // Deliberately no backfill here. Turning a switch on must not, by itself,
+        // upload a walking history — that takes the explicit action below, which
+        // says how many walks it would send first.
+        if (enabled) refreshSnapBacklog()
+    }
+
+    /**
+     * How many claims [snapExistingClaims] would upload, or null while unknown.
+     * Shown on the button so nobody presses it blind.
+     */
+    private val _snapBacklog = MutableStateFlow<Int?>(null)
+    val snapBacklog: StateFlow<Int?> = _snapBacklog.asStateFlow()
+
+    fun refreshSnapBacklog() {
+        viewModelScope.launch { _snapBacklog.value = snapTagger.pendingCount() }
+    }
+
+    /** True while a backfill is running, so the button can say so. */
+    private val _snappingExisting = MutableStateFlow(false)
+    val snappingExisting: StateFlow<Boolean> = _snappingExisting.asStateFlow()
+
+    /**
+     * Match every claim that has never been offered to the matcher.
+     *
+     * Only ever from a button the user pressed, and on [applicationScope] because
+     * it is a long run of network calls that shouldn't die because the profile
+     * screen was closed half way through.
+     */
+    fun snapExistingClaims() {
+        if (_snappingExisting.value) return
+        _snappingExisting.value = true
+        (getApplication() as EncloseApp).applicationScope.launch {
+            try {
+                snapTagger.backfill()
+            } finally {
+                _snappingExisting.value = false
+                _snapBacklog.value = snapTagger.pendingCount()
+            }
+        }
     }
 
     /** Inject a tapped point. The first tap auto-starts a (serviceless) walk. */

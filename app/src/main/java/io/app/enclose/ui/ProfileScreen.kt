@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Terrain
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.HorizontalDivider
@@ -97,10 +98,17 @@ fun ProfileScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val testMode by encloseViewModel.testMode.collectAsStateWithLifecycle()
+    val snapToPaths by encloseViewModel.snapToPaths.collectAsStateWithLifecycle()
+    val snapBacklog by encloseViewModel.snapBacklog.collectAsStateWithLifecycle()
+    val snappingExisting by encloseViewModel.snappingExisting.collectAsStateWithLifecycle()
     val gpxImport by encloseViewModel.gpxImport.collectAsStateWithLifecycle()
     val showHowItWorks by encloseViewModel.showHowItWorks.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf(false) }
     var showCities by rememberSaveable { mutableStateOf(false) }
+
+    // Recount on every visit: claims are made elsewhere, so a count taken once
+    // would go stale the moment someone walks a loop and comes back here.
+    androidx.compose.runtime.LaunchedEffect(Unit) { encloseViewModel.refreshSnapBacklog() }
 
     // OpenDocument rather than GetContent: it gives a durable, readable uri, and
     // the picker it opens is the one people expect for "find my file".
@@ -311,6 +319,66 @@ fun ProfileScreen(
                         )
                     }
                     Switch(checked = testMode, onCheckedChange = encloseViewModel::setTestMode)
+                }
+
+                // Hidden entirely where no matching service is bound: a switch
+                // that cannot do anything is worse than no switch.
+                if (encloseViewModel.snapAvailable) {
+                    HorizontalDivider(Modifier.padding(vertical = 12.dp))
+
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Filled.Route,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Snap routes to paths", style = MaterialTheme.typography.bodyLarge)
+                            // Says plainly that something leaves the device. This
+                            // is the only feature that does, and burying that
+                            // would be the one thing not to do with it.
+                            Text(
+                                "Draws claims along real roads instead of your raw GPS " +
+                                    "trace. Sends the route of each new claim to a map " +
+                                    "service to do it. Areas never change.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = snapToPaths,
+                            onCheckedChange = encloseViewModel::setSnapToPaths,
+                        )
+                    }
+
+                    // Existing claims are never swept up by the switch itself, so
+                    // this says how many walks it would send before it sends any.
+                    if (snapToPaths && (snapBacklog ?: 0) > 0) {
+                        Spacer(Modifier.height(4.dp))
+                        DetailAction(
+                            icon = Icons.Filled.Route,
+                            title = if (snappingExisting) {
+                                "Snapping existing claims…"
+                            } else {
+                                "Snap existing claims"
+                            },
+                            subtitle = if (snappingExisting) {
+                                "Working through them now."
+                            } else {
+                                "Sends $snapBacklog earlier " +
+                                    "${if (snapBacklog == 1) "walk" else "walks"} to the map " +
+                                    "service. New claims are already covered."
+                            },
+                            onClick = {
+                                if (!snappingExisting) encloseViewModel.snapExistingClaims()
+                            },
+                        )
+                    }
                 }
 
                 // Only while test mode is on: outside it the imported points

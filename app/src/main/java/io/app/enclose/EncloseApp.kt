@@ -4,11 +4,14 @@ import android.app.Application
 import io.app.enclose.data.CityTagger
 import io.app.enclose.data.EncloseDatabase
 import io.app.enclose.data.ProfileRepository
+import io.app.enclose.data.SnapTagger
 import io.app.enclose.data.TerritoryRepository
 import io.app.enclose.data.UserSettings
 import io.app.enclose.data.WalkProgressRepository
 import io.app.enclose.data.WalkRepository
 import io.app.enclose.geo.CityResolver
+import io.app.enclose.geo.NoRouteMatcher
+import io.app.enclose.geo.RouteMatcher
 import io.app.enclose.offline.OfflineTileCache
 import io.app.enclose.offline.OfflineTileSync
 import io.app.enclose.sync.NoBackendSyncApi
@@ -55,6 +58,32 @@ class EncloseApp : Application() {
 
     /** Everything the app remembers between launches. */
     val settings by lazy { UserSettings(this) }
+
+    /**
+     * Matches claimed routes onto real roads and paths.
+     *
+     * [NoRouteMatcher] is bound because no host has been chosen — see
+     * [RouteMatcher] for why that is a decision and not an omission. Swap this
+     * one line for a real client and the rest of the feature is already built,
+     * tested and gated behind the user's opt-in.
+     */
+    val routeMatcher: RouteMatcher by lazy { NoRouteMatcher() }
+
+    /**
+     * Fills in the road-matched outline for claims. Shared for the same reason
+     * [cityTagger] is: two screens must not be able to run competing backfills
+     * against a rate-limited service.
+     */
+    val snapTagger by lazy {
+        SnapTagger(
+            repository = repository,
+            matcher = routeMatcher,
+            // Read per call, never captured: the user can turn this off between
+            // one claim and the next, and the answer that matters is the one at
+            // the moment something would be uploaded.
+            enabled = { settings.snapToPaths },
+        )
+    }
 
     /**
      * Keeps map tiles for claimed cities on the device, so walking out of

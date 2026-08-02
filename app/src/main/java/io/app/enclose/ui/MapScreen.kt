@@ -115,6 +115,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import io.app.enclose.data.SnapDisplay
 import io.app.enclose.data.Territory
 import io.app.enclose.geo.LatLng
 import io.app.enclose.tracking.BlockReason
@@ -872,7 +873,7 @@ fun MapScreen(
             },
             onShowOnMap = { territory ->
                 showList = false
-                controller.fitTo(territory.polygons.flatten().flatten().ifEmpty { territory.ring })
+                controller.fitTo(SnapDisplay.pointsFor(territory))
             },
             onRename = viewModel::renameTerritory,
             onDelete = { territory ->

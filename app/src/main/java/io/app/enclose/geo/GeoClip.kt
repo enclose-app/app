@@ -43,6 +43,26 @@ object GeoClip {
         return fromJts(diff, lat0)
     }
 
+    /**
+     * True when [ring] encloses an area without crossing itself.
+     *
+     * For checking geometry that came from somewhere else — a map matcher hands
+     * back a *path*, and a path fed a closed loop fails at the seam where the end
+     * meets the start more than anywhere else: it doubles back, or crosses. A
+     * figure-of-eight has an area and a perimeter that both look reasonable, so
+     * nothing but a topology check catches it, and JTS will happily compute a
+     * nonsense difference against one later.
+     *
+     * Answers false rather than throwing on anything it can't build, matching the
+     * rest of this object: unusable input is not valid input.
+     */
+    fun isSimpleRing(ring: GeoRing): Boolean {
+        if (ring.size < 3) return false
+        val lat0 = ring.map { it.lat }.average()
+        val polygon = polygonToJts(listOf(ring), lat0) ?: return false
+        return runCatching { polygon.isValid && !polygon.isEmpty }.getOrDefault(false)
+    }
+
     // --- projection ----------------------------------------------------------
 
     private fun project(p: LatLng, lat0: Double): Coordinate = Coordinate(

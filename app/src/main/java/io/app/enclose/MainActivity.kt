@@ -40,6 +40,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import io.app.enclose.data.SnapDisplay
 import io.app.enclose.tracking.TrackingManager
 import io.app.enclose.ui.EncloseViewModel
 import io.app.enclose.ui.FloatingWalkCard
@@ -212,9 +213,8 @@ class MainActivity : ComponentActivity() {
                             territoryId = current.id,
                             onBack = { screen = Screen.Map },
                             onShowOnMap = { territory ->
-                                val pts = territory.polygons.flatten().flatten()
-                                    .ifEmpty { territory.ring }
-                                pendingFocus = pts
+                                // Frame whatever is actually drawn — see SnapDisplay.
+                                pendingFocus = SnapDisplay.pointsFor(territory)
                                 screen = Screen.Map
                             },
                             onDelete = { territory ->

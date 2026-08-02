@@ -83,6 +83,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.app.enclose.data.SyncStatus
+import io.app.enclose.data.SnapDisplay
 import io.app.enclose.data.Territory
 import io.app.enclose.geo.LatLng
 import io.app.enclose.ui.theme.LocalEncloseAccents
@@ -665,7 +666,8 @@ private fun ColorSwatch(hex: String, selected: Boolean, onClick: () -> Unit) {
 @Composable
 fun PolygonThumbnail(territory: Territory, modifier: Modifier = Modifier) {
     val color = hexColor(territory.colorHex)
-    val rings = territory.polygons.flatten().ifEmpty { listOf(territory.ring) }
+    // SnapDisplay owns the as-walked / road-matched choice and the fallbacks.
+    val rings = SnapDisplay.polygonsFor(territory).flatten()
     Canvas(modifier) {
         val pts = rings.flatten()
         if (pts.size < 3) return@Canvas

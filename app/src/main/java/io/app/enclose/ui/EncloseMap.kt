@@ -24,6 +24,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import io.app.enclose.data.MapCamera
+import io.app.enclose.data.SnapDisplay
 import io.app.enclose.data.Territory
 import io.app.enclose.geo.Geo
 import io.app.enclose.geo.LatLng
@@ -666,7 +667,10 @@ private fun closedRing(ring: List<LatLng>): List<Point> {
 private fun territoriesToFeatures(territories: List<Territory>): FeatureCollection {
     val features = territories.mapNotNull { t ->
         // MultiPolygon: [ [ exterior, hole... ], ... ] — supports carved-out claims.
-        val multi = t.polygons
+        // Via SnapDisplay, which is the one place that decides between the
+        // as-walked outline and the road-matched one. Do not reach for
+        // `t.polygons` directly here.
+        val multi = SnapDisplay.polygonsFor(t)
             .map { poly -> poly.map { ring -> closedRing(ring) } }
             .filter { poly -> (poly.firstOrNull()?.size ?: 0) >= 4 }
         if (multi.isEmpty()) return@mapNotNull null

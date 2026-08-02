@@ -1,5 +1,6 @@
 package io.app.enclose.data
 
+import io.app.enclose.geo.LatLng
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -9,7 +10,7 @@ import kotlinx.coroutines.flow.map
  * offline. Sync to a backend is a separate, best-effort concern (see the sync
  * package) that reads [pending] and calls [markSynced].
  */
-class TerritoryRepository(private val dao: TerritoryDao) {
+class TerritoryRepository(private val dao: TerritoryDao) : SnapStore {
 
     /** Claims still standing. Conquered ones are excluded — see [conquered]. */
     val territories: Flow<List<Territory>> =
@@ -46,4 +47,22 @@ class TerritoryRepository(private val dao: TerritoryDao) {
 
     suspend fun setPlace(id: String, city: String, country: String) =
         dao.updatePlace(id, city, country)
+
+    /** Claims never offered to the route matcher (see [TerritoryDao.withoutSnap]). */
+    override suspend fun withoutSnap(): List<Territory> = dao.withoutSnap().map { it.toDomain() }
+
+    /** How many claims a backfill would upload, so the UI can say so before it does. */
+    override suspend fun withoutSnapCount(): Int = dao.withoutSnapCount()
+
+    /**
+     * Record a match attempt. An empty [ring] records a refusal — the timestamp
+     * is written either way, so a walk with no roads to match onto isn't
+     * re-uploaded on every backfill for the rest of its life.
+     */
+    override suspend fun setSnappedRing(id: String, ring: List<LatLng>, atEpochMs: Long) =
+        dao.updateSnap(
+            id = id,
+            json = if (ring.isEmpty()) "" else TerritoryEntity.ringToJson(ring),
+            at = atEpochMs,
+        )
 }

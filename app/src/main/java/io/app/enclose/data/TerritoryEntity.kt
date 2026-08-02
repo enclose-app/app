@@ -30,6 +30,12 @@ data class TerritoryEntity(
     val conqueredAtEpochMs: Long? = null,
     /** The territory that took this one. */
     val conqueredById: String? = null,
+    /** Road-matched boundary, JSON of [{lat,lng}, ...]. Blank until matched. */
+    val snappedJson: String = "",
+    /** When matching was last attempted; null means never. */
+    val snappedAtEpochMs: Long? = null,
+    /** When a later claim last carved this one; null while it stands as walked. */
+    val carvedAtEpochMs: Long? = null,
     val syncStatus: SyncStatus,
 ) {
     fun toDomain(): Territory = Territory(
@@ -48,6 +54,13 @@ data class TerritoryEntity(
         country = country,
         conqueredAtEpochMs = conqueredAtEpochMs,
         conqueredById = conqueredById,
+        // Guarded, not passed straight in: `JSONArray("")` throws, and every row
+        // written before this column existed holds "". Without this, the first
+        // read after upgrading would throw inside a Flow collector — for every
+        // user, on every territory they have ever walked.
+        snappedRing = if (snappedJson.isBlank()) emptyList() else ringFromJson(snappedJson),
+        snappedAtEpochMs = snappedAtEpochMs,
+        carvedAtEpochMs = carvedAtEpochMs,
         syncStatus = syncStatus,
     )
 
@@ -69,6 +82,13 @@ data class TerritoryEntity(
             country = t.country,
             conqueredAtEpochMs = t.conqueredAtEpochMs,
             conqueredById = t.conqueredById,
+            // Carried through here as well as in toDomain(), and both matter:
+            // `upsert` is a whole-row REPLACE, so a field missing from this
+            // mapping is silently reset by the next rename, recolor or notes
+            // edit — with no compile error to catch it.
+            snappedJson = if (t.snappedRing.isEmpty()) "" else ringToJson(t.snappedRing),
+            snappedAtEpochMs = t.snappedAtEpochMs,
+            carvedAtEpochMs = t.carvedAtEpochMs,
             syncStatus = t.syncStatus,
         )
 
