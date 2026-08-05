@@ -10,3 +10,26 @@ How long it runs.
 Only between Start and Stop, typically 20 minutes to two hours. It never starts by itself. If the system restarts the service and there  is no walk in progress, the service shuts itself down immediately rather than using location for nothing.
 
 What the user sees. An ongoing notification, "Enclose is tracking your walk", for the whole time. The path is drawn live on the map, and an optional floating window shows it over other apps.
+
+## License
+
+Copyright (C) 2026 dimitrmo
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with this program. If not, see <https://www.gnu.org/licenses/>.
+
+SPDX-License-Identifier: `AGPL-3.0-or-later`. The full text is in [LICENSE](LICENSE).
+
+The AGPL's section 13 applies to the sync seam: `RemoteSyncApi` currently has no
+backend bound, but anyone who binds one and lets users interact with this app
+over a network owes those users the corresponding source of the whole modified
+work, server side included.
