@@ -297,28 +297,35 @@ fun ProfileScreen(
                     onClick = encloseViewModel::openHowItWorks,
                 )
 
-                HorizontalDivider(Modifier.padding(vertical = 12.dp))
+                // Debug builds only. In a shipped build the switch would offer to
+                // replace GPS with map taps, so a walk started after finding it
+                // records nothing and the route is gone — see
+                // EncloseViewModel.devToolsAvailable.
+                if (encloseViewModel.devToolsAvailable) {
+                    HorizontalDivider(Modifier.padding(vertical = 12.dp))
 
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        Icons.Filled.TouchApp,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Spacer(Modifier.width(14.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("Test mode", style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            "Tap the map to drop points instead of walking.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Filled.TouchApp,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
                         )
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Test mode", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "Tap the map to drop points instead of walking. " +
+                                    "Nothing is recorded from GPS while it's on.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(checked = testMode, onCheckedChange = encloseViewModel::setTestMode)
                     }
-                    Switch(checked = testMode, onCheckedChange = encloseViewModel::setTestMode)
                 }
 
                 // Hidden entirely where no matching service is bound: a switch
@@ -381,20 +388,23 @@ fun ProfileScreen(
                     }
                 }
 
-                // Only while test mode is on: outside it the imported points
-                // would be competing with live GPS for the same walk.
-                if (testMode) {
-                    Spacer(Modifier.height(4.dp))
-                    DetailAction(
-                        icon = Icons.Filled.UploadFile,
-                        title = "Import GPX…",
-                        subtitle = "Replay a recorded track as a test walk.",
-                        // Most providers hand GPX over as
-                        // application/octet-stream or nothing at all, so a narrow
-                        // filter mostly hides the file the user came to pick.
-                        onClick = { gpxPicker.launch(arrayOf("*/*")) },
-                    )
-                }
+                // Not test-mode-only any more: sharing a track into Enclose from
+                // another app imports it in every build, and a picker that only
+                // exists in debug would make the same capability reachable by one
+                // door and not the other. Refused while a GPS walk is running —
+                // see EncloseViewModel.importGpx.
+                HorizontalDivider(Modifier.padding(vertical = 12.dp))
+
+                DetailAction(
+                    icon = Icons.Filled.UploadFile,
+                    title = "Import GPX…",
+                    subtitle = "Replay a track recorded elsewhere, then close the loop " +
+                        "to claim it. You can also share a GPX straight to Enclose.",
+                    // Most providers hand GPX over as application/octet-stream or
+                    // nothing at all, so a narrow filter mostly hides the file the
+                    // user came to pick.
+                    onClick = { gpxPicker.launch(arrayOf("*/*")) },
+                )
             }
 
             Spacer(Modifier.height(8.dp))

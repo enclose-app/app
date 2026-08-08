@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import io.app.enclose.BuildConfig
 import io.app.enclose.EncloseApp
 import io.app.enclose.export.GpxImporter
 import io.app.enclose.data.Conquest
@@ -238,8 +239,26 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         settings.territorySortName = sort.name
     }
 
-    /** Test mode: tap the map to inject points instead of walking with GPS. */
-    private val _testMode = MutableStateFlow(settings.testMode)
+    /**
+     * Whether the developer affordances exist in this build at all.
+     *
+     * Test mode replaces GPS with map taps, so a user who finds the switch in a
+     * shipped build gets a walk that records nothing and a route they can't get
+     * back — the same failure the whole `LocationReadiness` path exists to stop,
+     * only self-inflicted. Read once here rather than at each call site so there
+     * is one answer to "is this a dev build".
+     */
+    val devToolsAvailable: Boolean get() = BuildConfig.DEBUG
+
+    /**
+     * Test mode: tap the map to inject points instead of walking with GPS.
+     *
+     * Forced off where [devToolsAvailable] is false rather than merely hidden: a
+     * stored `true` (from a debug build, or a restored backup) would otherwise
+     * survive into a release build as a walk that silently never starts the
+     * location service.
+     */
+    private val _testMode = MutableStateFlow(devToolsAvailable && settings.testMode)
     val testMode: StateFlow<Boolean> = _testMode.asStateFlow()
 
     /**
@@ -343,20 +362,43 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     /** User dismissed the modal without claiming. */
     fun discardClaim() = TrackingManager.clearPending()
 
-    fun startWalk() {
+    /**
+     * Whether the walk in progress is fed by injected points — map taps in test
+     * mode, or a replayed GPX track — rather than by [LocationService].
+     *
+     * Tracked rather than re-derived from [testMode], because a GPX import runs
+     * outside test mode too and the two need opposite things: an injected walk
+     * never started the service, and a real one must always stop it. Reading the
+     * switch at stop time also gets it wrong on its own — a walk started with the
+     * switch in one position can be stopped with it in the other.
+     *
+     * Observable because the panel has to know as well: an imported walk with a
+     * GPS accuracy chip beside it reads as "acquiring…" forever, describing a
+     * receiver that was never switched on.
+     */
+    private val _injectedWalk = MutableStateFlow(false)
+    val injectedWalk: StateFlow<Boolean> = _injectedWalk.asStateFlow()
+
+    fun startWalk() = beginWalk(injected = _testMode.value)
+
+    /**
+     * Start a walk, with [injected] saying where the points will come from.
+     * Injected walks use relaxed distance thresholds (a tapped or replayed route
+     * jumps between points) and never run the location service.
+     */
+    private fun beginWalk(injected: Boolean) {
         // The previous attempt's explanation doesn't belong on top of this one.
         _recordingFailure.value = null
-        // Test walks use relaxed thresholds so a tap-built loop can close.
+        _injectedWalk.value = injected
         TrackingManager.startWalk(
-            relaxedThresholds = _testMode.value,
+            relaxedThresholds = injected,
             activityType = _activityType.value,
         )
-        // In test mode we feed points from map taps, so skip the GPS service.
-        if (!_testMode.value) LocationService.start(getApplication())
+        if (!injected) LocationService.start(getApplication())
     }
 
     fun stopWalk() {
-        if (!_testMode.value) LocationService.stop(getApplication())
+        if (!_injectedWalk.value) LocationService.stop(getApplication())
         // Claims the loop if it's ready to close; otherwise abandons the walk.
         TrackingManager.finishWalk()
     }
@@ -367,15 +409,21 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
      * before calling this so an unfinished route is never silently thrown away.
      */
     fun cancelWalk() {
-        if (!_testMode.value) LocationService.stop(getApplication())
+        if (!_injectedWalk.value) LocationService.stop(getApplication())
         TrackingManager.cancelWalk()
     }
 
     fun setTestMode(enabled: Boolean) {
+        // Guarded rather than trusted, in the same idiom as setActivityType: the
+        // switch is hidden in a release build, so it must not be reachable by any
+        // other route either.
+        if (enabled && !devToolsAvailable) return
         _testMode.value = enabled
         settings.testMode = enabled
-        // Leaving test mode abandons any tap-built walk in progress.
-        if (!enabled && walk.value.isTracking) TrackingManager.cancelWalk()
+        // Leaving test mode abandons any tap-built walk in progress. Only a
+        // tapped one: an imported walk can be running outside test mode, and a
+        // real GPS walk must never be thrown away by a settings toggle.
+        if (!enabled && walk.value.isTracking && _injectedWalk.value) TrackingManager.cancelWalk()
     }
 
     /**
@@ -453,13 +501,25 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Replay a GPX track as a test walk: the same injection path as tapping the
-     * map, fed from a route recorded elsewhere. Test mode only — outside it the
-     * points would be competing with real GPS for the same walk.
+     * Replay a GPX track as a walk: the same injection path as tapping the map,
+     * fed from a route recorded elsewhere — the picker in the profile screen, or
+     * a track shared straight into Enclose from another app (see
+     * `MainActivity`'s SEND/VIEW filters).
      *
-     * Any walk in progress is abandoned first. In test mode that can only be
-     * another tapped or imported route, never one someone went out and walked,
-     * so there is nothing here that the no-data-loss rule protects.
+     * **Not test mode only, and that is a deliberate widening.** Recording with
+     * a watch or a phone health app and claiming the loop afterwards is a real
+     * way to use this, and it has to work in the build that ships — where test
+     * mode no longer exists. It has a cost worth stating plainly: replayed points
+     * carry no timestamps, so the motion gate is bypassed exactly as it is for map
+     * taps, and a GPX of a drive will claim territory. Everything else about a
+     * claim is unchanged — the loop still has to close, and Stop is still what
+     * closes it. If a backend or a leaderboard ever lands, this is the hole to
+     * close first.
+     *
+     * A walk fed by GPS is never thrown away for an import: the loop someone is
+     * out walking outranks the file they just tapped, so the import is refused
+     * rather than replacing it. Another injected walk (tapped or imported) is
+     * abandoned, since nothing there was walked.
      *
      * The loop is deliberately *not* closed at the end. Importing a track is the
      * same as walking it — whether it becomes a claim is still the user's call,
@@ -472,9 +532,14 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
      * go and show it.
      */
     fun importGpx(uri: Uri) {
-        if (!_testMode.value) {
+        // A share can arrive at any moment, including on top of an import that is
+        // still replaying. Two replays feeding one tracker would interleave two
+        // routes into a single walk.
+        if (_gpxImport.value?.isRunning == true) return
+        if (walk.value.isTracking && !_injectedWalk.value) {
             _gpxImport.value = GpxImport.Failed(
-                "Turn on test mode first — imported points stand in for GPS fixes.",
+                "There's a walk in progress. Stop it first — importing a track would " +
+                    "throw away the route you're recording.",
             )
             return
         }
@@ -500,7 +565,10 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             if (walk.value.isTracking) TrackingManager.cancelWalk()
-            startWalk()
+            // Injected regardless of test mode: these points stand in for fixes,
+            // so the location service must stay out of the way and the jitter
+            // thresholds have to be the relaxed ones.
+            beginWalk(injected = true)
             _gpxImport.value = GpxImport.Replaying(done = 0, total = points.size)
             points.forEachIndexed { index, point ->
                 // No timestamp: the motion gate is bypassed, as with map taps.
@@ -659,4 +727,11 @@ sealed interface GpxImport {
 
     /** Nothing was imported, and this is why. */
     data class Failed(val reason: String) : GpxImport
+
+    /**
+     * True while the file is still being turned into a walk. [Done] and [Failed]
+     * are reports left on screen for the user to dismiss, not work in progress,
+     * so a second import may start on top of them.
+     */
+    val isRunning: Boolean get() = this is Reading || this is Replaying
 }

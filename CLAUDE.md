@@ -548,22 +548,73 @@ uploads walks.
 
 ### Test mode
 
-**The UI no longer advertises it.** The single remaining mention is the switch in
-the profile screen's *App* section; the explainer sheet, the permission-recovery
-block, the top-row status chip and the panel's copy have all had it stripped,
-because the mode is expected to be removed. Anything added here stays behind that
-one switch — don't re-introduce it into user-facing copy.
+**It does not exist in a release build.** `EncloseViewModel.devToolsAvailable`
+(`BuildConfig.DEBUG`) hides the switch in the profile screen's *App* section, and
+`setTestMode` refuses to turn it on regardless — the stored preference is also
+read as false there, so a `true` carried over from a debug build or a restored
+backup can't survive into a shipped one as a walk that silently never starts the
+location service. `buildConfig = true` in `app/build.gradle.kts` is what makes
+`BuildConfig` exist at all; AGP stopped generating it by default in 8.0.
+
+**The UI otherwise doesn't advertise it.** The explainer sheet, the
+permission-recovery block, the top-row status chip and the panel's copy have all
+had it stripped, because the mode is expected to be removed. Anything added here
+stays behind that one switch — don't re-introduce it into user-facing copy.
 
 A dev affordance on the map: taps inject points instead of GPS. It uses relaxed
 distance thresholds (`TrackingManager`'s `*_TEST_METERS` constants), skips
 starting `LocationService`, and bypasses `MotionGate` entirely — tapped points
 teleport and would always read as a vehicle.
 
+**Start asks first while it's on.** `TestWalkWarningDialog` stands between the
+panel's Start button and `startWalk()`, because a test walk is indistinguishable
+from a real one on screen — same panel, same figures, same Stop — while recording
+nothing of where the user actually went, and that is only discoverable at the end,
+when the route is gone. The dialog leads with "Turn it off & start" and re-runs
+the `location.canRecord` guard on that branch: test mode is exactly the state in
+which `PanelSummary` offers Start without checking location, so the real walk
+underneath it may still need a permission prompt. Map taps don't warn — tapping
+the map *is* the unambiguous request for an injected point.
+
 **GPX import** (`EncloseViewModel.importGpx`) rides the same injection path, fed
 from a route recorded elsewhere rather than tapped out: same relaxed thresholds,
 same gate bypass, same rule that the loop is only closed when the user presses
-Stop. The menu entry appears only while test mode is on, since outside it the
-imported points would be competing with live GPS for the same walk.
+Stop.
+
+**Import is not test-mode-gated, and works in every build.** Recording with a
+watch or a health app and claiming the loop afterwards is a real way to use this,
+so it has to survive into the build where test mode doesn't exist. Two doors, one
+path: the picker in the profile screen's *App* section, and a track shared or
+"opened with" from another app (Samsung Health → share → Enclose), which
+`MainActivity`'s SEND/VIEW filters accept and import on arrival. The cost is
+stated rather than hidden: replayed points carry no timestamps, so **a GPX of a
+drive will claim territory**. If a backend or a leaderboard ever lands, this is
+the first hole to close.
+
+Three rules hold the widened path together:
+
+- **A GPS walk is never thrown away for an import.** `importGpx` refuses while
+  one is running rather than cancelling it (the old KDoc's "in test mode this can
+  only be a tapped route" reasoning stopped being true). Another *injected* walk
+  is still abandoned, since nothing there was walked.
+- **`EncloseViewModel.injectedWalk` is what says "no GPS behind this walk"**, not
+  `testMode` — an import runs outside test mode, and a walk started with the
+  switch in one position can be stopped with it in the other. It decides whether
+  `LocationService` is started and stopped, and the panel reads it to stand the
+  GPS accuracy chip and the signal-gap notice down; left on `testMode`, an
+  imported walk shows "acquiring…" for a receiver that was never switched on.
+- **A share is state, not an event.** `MainActivity.sharedTrack` is set from
+  `onCreate` (fresh creates only — the system re-delivers the starting intent
+  after a process kill, which would replay an old track into a new walk) and from
+  `onNewIntent`, which is where `singleTask` routes the second track someone
+  shares. The composition consumes it, switches to the map — the only screen that
+  draws import progress and frames the result — and clears it.
+
+The SEND filter accepts four mime types for the same reason the picker filters on
+`*/*`: GPX has a registered type nobody uses, and fitness apps hand the file over
+as `application/octet-stream` or plain XML far more often. VIEW is kept to
+`application/gpx+xml` alone, since VIEW on octet-stream would offer Enclose as a
+way to open every unrecognised file on the device.
 
 `GpxImporter` is a hand-rolled scanner rather than an XML parser, for a reason
 worth keeping: `XmlPullParser` and `DocumentBuilderFactory` are both stubbed out

@@ -35,6 +35,11 @@ android {
     }
     buildFeatures {
         compose = true
+        // BuildConfig.DEBUG is what keeps the developer affordances (test mode,
+        // and with it the tap-to-inject path that records no GPS at all) out of
+        // the build that ships. AGP stopped generating BuildConfig by default in
+        // 8.0, so this has to be asked for.
+        buildConfig = true
     }
 }
 

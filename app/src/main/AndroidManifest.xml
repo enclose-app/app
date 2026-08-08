@@ -67,6 +67,43 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!--
+              Share a recorded track straight into Enclose — Samsung Health,
+              a watch app, a file manager — and it is replayed as a walk on
+              arrival. See EncloseViewModel.importGpx.
+
+              The mime list is wide on purpose, and matches why the in-app
+              picker filters on */*: GPX has a registered type nobody uses.
+              Health and fitness apps hand the file over as octet-stream or as
+              plain xml far more often than as application/gpx+xml, so a
+              correct-but-narrow filter would leave Enclose out of the share
+              sheet on exactly the devices this is for. What is shared is only
+              ever read, and anything that isn't a track reports itself as
+              "no track points in that file".
+            -->
+            <intent-filter android:label="@string/import_gpx_label">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/gpx+xml" />
+                <data android:mimeType="application/xml" />
+                <data android:mimeType="text/xml" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+
+            <!--
+              "Open with" from a file manager. Kept to the GPX type alone: VIEW
+              on octet-stream would offer Enclose as a way to open every
+              unrecognised file on the device.
+            -->
+            <intent-filter android:label="@string/import_gpx_label">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/gpx+xml" />
+            </intent-filter>
         </activity>
 
         <service

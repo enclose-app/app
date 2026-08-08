@@ -1,5 +1,8 @@
 <resources>
     <string name="app_name">Enclose</string>
+    <!-- The row Enclose shows as in another app's share sheet. Says what will
+         happen to the file, since "Enclose" alone doesn't. -->
+    <string name="import_gpx_label">Import as a walk</string>
     <string name="tracking_channel_name">Walk tracking</string>
     <string name="tracking_notification_title">Enclose is tracking your walk</string>
 </resources>

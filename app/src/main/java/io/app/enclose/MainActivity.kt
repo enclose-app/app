@@ -67,10 +67,25 @@ class MainActivity : ComponentActivity() {
     /** True while the app is the small floating window. */
     private val pictureInPicture = mutableStateOf(false)
 
+    /**
+     * A track shared into Enclose from another app, waiting to be imported.
+     *
+     * Held as state rather than read from `getIntent()` in the composition:
+     * `singleTask` means a second share arrives at the *running* activity
+     * through [onNewIntent], which nothing recomposes on. Cleared by the
+     * composition once handed to the ViewModel, so a configuration change can't
+     * replay the same file into a second walk.
+     */
+    private val sharedTrack = mutableStateOf<Uri?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         multiWindow.value = isInMultiWindowMode && !isInPictureInPictureMode
+        // Only on a fresh create. After a process kill the system re-delivers the
+        // intent that started the task, which would replay a track shared hours
+        // ago into a brand new walk.
+        if (savedInstanceState == null) sharedTrack.value = trackUriFrom(intent)
         setContent {
             EncloseTheme {
                 val viewModel: EncloseViewModel = viewModel()
@@ -127,6 +142,23 @@ class MainActivity : ComponentActivity() {
                 // and process death don't throw the user back to the map.
                 var screen by rememberSaveable(stateSaver = ScreenSaver) {
                     mutableStateOf<Screen>(Screen.Map)
+                }
+
+                // A track shared in from another app is imported on arrival —
+                // that is the whole point of the share, so making the user find a
+                // button afterwards would only be a step in the way.
+                //
+                // On the map, deliberately: the map is what frames the imported
+                // route and offers the Stop that turns it into a claim, and the
+                // detail screen draws no import progress at all. Sits after the
+                // picture-in-picture branch above, so a share arriving while the
+                // window is floating waits (state, not an event) and lands the
+                // moment the app is full-screen again.
+                LaunchedEffect(sharedTrack.value) {
+                    val uri = sharedTrack.value ?: return@LaunchedEffect
+                    sharedTrack.value = null
+                    screen = Screen.Map
+                    viewModel.importGpx(uri)
                 }
 
                 // One-shot hand-offs from the detail screen back to the map:
@@ -226,6 +258,33 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * A share that lands while Enclose is already running. `singleTask` routes it
+     * here instead of starting a second copy of the app, so without this the
+     * second track someone shares would do nothing at all.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // So anything that later reads getIntent() sees the one that's current.
+        setIntent(intent)
+        trackUriFrom(intent)?.let { sharedTrack.value = it }
+    }
+
+    /**
+     * The track in an incoming share or "open with", or null when the intent
+     * isn't carrying one.
+     *
+     * Nothing is inspected beyond the uri: the mime type a provider claims for a
+     * GPX is unreliable enough that the filters in the manifest already accept
+     * four of them, and [io.app.enclose.ui.EncloseViewModel.importGpx] reports a
+     * file with no track points in it far better than a silent no-op here would.
+     */
+    private fun trackUriFrom(intent: Intent?): Uri? = when (intent?.action) {
+        Intent.ACTION_SEND -> intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        Intent.ACTION_VIEW -> intent.data
+        else -> null
     }
 
     override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean, newConfig: Configuration) {

@@ -61,6 +61,7 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Splitscreen
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -178,6 +179,7 @@ fun MapScreen(
     val territories by viewModel.territories.collectAsStateWithLifecycle()
     val walksById by viewModel.walksById.collectAsStateWithLifecycle()
     val testMode by viewModel.testMode.collectAsStateWithLifecycle()
+    val injectedWalk by viewModel.injectedWalk.collectAsStateWithLifecycle()
     val activityType by viewModel.activityType.collectAsStateWithLifecycle()
     val pendingClaim by viewModel.pendingClaim.collectAsStateWithLifecycle()
     val showHowItWorks by viewModel.showHowItWorks.collectAsStateWithLifecycle()
@@ -201,6 +203,10 @@ fun MapScreen(
     var showList by rememberSaveable { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var confirmDiscardWalk by remember { mutableStateOf(false) }
+    // Debug builds only, since that's the only place test mode exists: Start
+    // while it's on begins a walk that records no GPS at all, and finding that
+    // out at the end costs the whole route.
+    var confirmTestWalk by remember { mutableStateOf(false) }
     // Home button dialogs: the position being offered as home, the reset
     // confirmation behind the hold, and "there's no fix to save yet".
     var confirmSetHome by remember { mutableStateOf<LatLng?>(null) }
@@ -649,15 +655,24 @@ fun MapScreen(
         ControlPanel(
             walk = walk,
             testMode = testMode,
+            injectedWalk = injectedWalk,
             activityType = activityType,
             onSelectActivity = viewModel::setActivityType,
             location = location,
             onStart = {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                // Guarded rather than trusted: PanelSummary only offers Start when
-                // location is ready, and starting a walk that cannot record is the
-                // failure this whole path exists to stop.
-                if (testMode || location.canRecord) viewModel.startWalk() else onRequestPermission()
+                when {
+                    // Ask first rather than start: in test mode the GPS service
+                    // never runs, so a walk begun here follows map taps and
+                    // records nothing of where the user actually goes. That is
+                    // indistinguishable from a working walk until Stop.
+                    testMode -> confirmTestWalk = true
+                    // Guarded rather than trusted: PanelSummary only offers Start
+                    // when location is ready, and starting a walk that cannot
+                    // record is the failure this whole path exists to stop.
+                    location.canRecord -> viewModel.startWalk()
+                    else -> onRequestPermission()
+                }
             },
             onClaim = {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -858,6 +873,26 @@ fun MapScreen(
         )
     }
 
+    if (confirmTestWalk) {
+        TestWalkWarningDialog(
+            noun = walk.activityType.noun,
+            onStartTestWalk = {
+                confirmTestWalk = false
+                viewModel.startWalk()
+            },
+            onLeaveTestMode = {
+                confirmTestWalk = false
+                viewModel.setTestMode(false)
+                // Straight into the real walk they were asking for. Location can
+                // be un-ready here in a way it never is on the branch above —
+                // test mode is exactly the state in which the panel offers Start
+                // without checking — so it goes back through the same guard.
+                if (location.canRecord) viewModel.startWalk() else onRequestPermission()
+            },
+            onDismiss = { confirmTestWalk = false },
+        )
+    }
+
     if (showList) {
         TerritoryListSheet(
             territories = territories,
@@ -924,6 +959,12 @@ private fun MapLoadingIndicator() {
 private fun ControlPanel(
     walk: TrackingManager.WalkState,
     testMode: Boolean,
+    /**
+     * The walk in progress is fed by injected points rather than GPS. Separate
+     * from [testMode]: an imported track replays in every build, test mode or
+     * not, and the GPS read-outs have to stand down for it just the same.
+     */
+    injectedWalk: Boolean,
     activityType: ActivityType,
     onSelectActivity: (ActivityType) -> Unit,
     location: LocationReadiness,
@@ -1015,7 +1056,7 @@ private fun ControlPanel(
 
             when (summary.status) {
                 PanelStatus.TRACKING, PanelStatus.BLOCKED, PanelStatus.READY -> {
-                    LiveStats(walk, testMode = testMode)
+                    LiveStats(walk, injected = injectedWalk)
                     WalkActions(
                         walk = walk,
                         onClaim = onClaim,
@@ -1394,8 +1435,13 @@ private fun WalkActions(
     }
 }
 
+/**
+ * @param injected the walk's points are being fed in rather than recorded from
+ *   GPS — map taps in test mode, or a replayed GPX track. No receiver is running,
+ *   so anything reporting on one would describe a device that isn't listening.
+ */
 @Composable
-private fun LiveStats(walk: TrackingManager.WalkState, testMode: Boolean) {
+private fun LiveStats(walk: TrackingManager.WalkState, injected: Boolean) {
     // Tick once a second so elapsed time and pace advance live.
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(walk.isTracking) {
@@ -1435,8 +1481,9 @@ private fun LiveStats(walk: TrackingManager.WalkState, testMode: Boolean) {
                 style = MaterialTheme.typography.titleMedium,
             )
         }
-        // No GPS is involved in test mode, so don't report on it.
-        if (!testMode) GpsAccuracyIndicator(walk.accuracyMeters)
+        // No GPS is involved in an injected walk, so don't report on it — the
+        // chip would sit on "acquiring…" for as long as the walk lasted.
+        if (!injected) GpsAccuracyIndicator(walk.accuracyMeters)
     }
 
     // Five figures over two rows rather than one: at 20sp a fifth column leaves
@@ -1499,7 +1546,7 @@ private fun LiveStats(walk: TrackingManager.WalkState, testMode: Boolean) {
 
     // A gap is not a failure and doesn't stop the walk, so it sits below the
     // checklist as a footnote rather than replacing it.
-    if (walk.hadSignalGap && !testMode) SignalGapNotice()
+    if (walk.hadSignalGap && !injected) SignalGapNotice()
 }
 
 /**
@@ -1537,6 +1584,42 @@ private fun SignalGapNotice() {
             )
         }
     }
+}
+
+/**
+ * Shown when Start is pressed with test mode on (a debug build only).
+ *
+ * Test mode skips the location service entirely, so the walk it begins follows
+ * map taps and records nothing of where the user actually goes — and nothing on
+ * the panel afterwards distinguishes it from a real one until Stop, by which
+ * time the route is unrecoverable. The way out is offered beside the way on,
+ * because someone who pressed Start on a map almost always meant the real thing.
+ */
+@Composable
+private fun TestWalkWarningDialog(
+    noun: String,
+    onStartTestWalk: () -> Unit,
+    onLeaveTestMode: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = MaterialTheme.shapes.extraLarge,
+        title = { Text("Test mode is on") },
+        text = {
+            Text(
+                "This $noun won't use GPS. Tap the map to drop points instead — " +
+                    "nothing you actually walk is recorded, and the route can't be " +
+                    "recovered afterwards.",
+            )
+        },
+        confirmButton = {
+            Button(onClick = onLeaveTestMode) { Text("Turn it off & start") }
+        },
+        dismissButton = {
+            TextButton(onClick = onStartTestWalk) { Text("Start test $noun") }
+        },
+    )
 }
 
 /**
