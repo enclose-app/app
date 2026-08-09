@@ -22,6 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.app.enclose.data.Territory
+import io.app.enclose.geo.LatLng
 import io.app.enclose.tracking.TrackingManager
 import io.app.enclose.ui.theme.LocalEncloseAccents
 import kotlinx.coroutines.delay
@@ -51,6 +52,8 @@ fun FloatingWalkCard(
     territories: List<Territory>,
     hasLocationPermission: Boolean,
     basemap: BasemapStyle,
+    /** The suggested route being followed, drawn faintly under the trail. */
+    plannedRoute: List<LatLng> = emptyList(),
 ) {
     val accents = LocalEncloseAccents.current
     val controller = rememberMapController()
@@ -88,6 +91,7 @@ fun FloatingWalkCard(
             hasLocationPermission = hasLocationPermission,
             controller = controller,
             basemap = basemap,
+            plannedRoute = plannedRoute,
             // No initial camera on purpose: with none saved, the map flies to
             // the user as soon as it has a fix, which is the only framing a
             // window this size is any use at.

@@ -91,6 +91,8 @@ enum class BasemapStyle {
 }
 
 private const val SRC_CLAIMED = "src-claimed"
+private const val SRC_ROUTE = "src-route"
+private const val LYR_ROUTE = "lyr-route"
 private const val SRC_PATH = "src-path"
 private const val SRC_START = "src-start"
 private const val SRC_HOME = "src-home"
@@ -109,6 +111,7 @@ private const val LYR_START = "lyr-start"
 private class Overlays(
     val claimed: GeoJsonSource,
     val closeZone: GeoJsonSource,
+    val route: GeoJsonSource,
     val path: GeoJsonSource,
     val start: GeoJsonSource,
     val home: GeoJsonSource,
@@ -184,6 +187,32 @@ class MapController {
         return LatLng(loc.latitude, loc.longitude)
     }
 
+    /**
+     * Where the user is *now*, or null if the newest fix is older than
+     * [maxAgeMs].
+     *
+     * The last known location is not the same thing as where somebody is
+     * standing. It survives across sessions, so an app opened indoors — or on a
+     * device that has not had a fix since another city — hands out a position
+     * that is confidently, precisely wrong. That is tolerable for framing a map
+     * and not tolerable for planning a walk from: the route comes back drawn
+     * around wherever the phone last saw sky, off screen, looking for all the
+     * world like the feature is broken. (Found exactly this way on an emulator,
+     * which answers with Mountain View until its first mock fix lands.)
+     *
+     * Aged by `elapsedRealtimeNanos` rather than by wall clock, for the reason
+     * `LocationService` records: the wall clock can be stepped by the network
+     * while the monotonic one cannot.
+     */
+    fun recentLocation(maxAgeMs: Long): LatLng? {
+        val m = map ?: return null
+        val loc = runCatching { rawLastKnownLocation(m) }.getOrNull() ?: return null
+        val ageMs = (android.os.SystemClock.elapsedRealtimeNanos() - loc.elapsedRealtimeNanos) /
+            1_000_000
+        if (ageMs > maxAgeMs) return null
+        return LatLng(loc.latitude, loc.longitude)
+    }
+
     /** Animate to a fixed point (the saved home), at street-level zoom. */
     fun flyTo(point: LatLng) {
         val m = map ?: return
@@ -201,10 +230,26 @@ class MapController {
         runCatching { m.animateCamera(CameraUpdateFactory.zoomBy(delta), ZOOM_BUTTON_ANIM_MS) }
     }
 
-    /** Frame a set of points, e.g. a territory selected from the list. */
-    fun fitTo(points: List<LatLng>) {
+    /**
+     * Frame a set of points, e.g. a territory selected from the list.
+     *
+     * [bottomInsetPx] keeps the shape clear of something covering the lower part
+     * of the screen — the route planner's sheet, which takes up half of it and
+     * would otherwise sit on top of the very loop it is describing.
+     */
+    fun fitTo(points: List<LatLng>, bottomInsetPx: Int = 0) {
         val m = map ?: return
-        fitToPoints(m, points)
+        // Clamped to half the map, because the inset is a real measurement and
+        // the window is not always tall: a sheet that covers two thirds of a
+        // landscape phone would otherwise leave a strip to fit a 5 km loop into,
+        // and the camera answers that by zooming out to the next county.
+        val usable = runCatching { m.height }.getOrDefault(0f)
+        val inset = if (usable > 0f) {
+            bottomInsetPx.coerceAtMost((usable * MAX_FIT_INSET_FRACTION).toInt())
+        } else {
+            bottomInsetPx
+        }
+        fitToPoints(m, points, inset)
     }
 }
 
@@ -233,6 +278,16 @@ fun EncloseMap(
     modifier: Modifier = Modifier,
     /** The saved home position; null draws no marker at all. */
     home: LatLng? = null,
+    /**
+     * A suggested route to follow, drawn faintly under everything else. Empty
+     * draws nothing.
+     *
+     * Under, and faint, on purpose: this is the walk somebody was *offered*, and
+     * the moment they set off it is the walked trail that matters. A route drawn
+     * as boldly as the trail would leave them unable to see how far round they
+     * had got.
+     */
+    plannedRoute: List<LatLng> = emptyList(),
     /**
      * Whether the camera keeps up with the walker. False where the points are
      * coming from the user's own taps rather than from GPS: re-centring on each
@@ -452,6 +507,14 @@ fun EncloseMap(
         o.start.setGeoJson(pointToFeature(walk.start))
     }
 
+    // The suggested route changes only when one is accepted or cleared, so it
+    // gets its own effect rather than being rebuilt on every fix — it is the
+    // largest of these geometries and the least likely to have changed.
+    LaunchedEffect(overlays, plannedRoute) {
+        val o = overlays ?: return@LaunchedEffect
+        o.route.setGeoJson(pathToFeature(plannedRoute))
+    }
+
     // Home changes on its own schedule — it's set and reset from the button, not
     // by walking — so it gets its own effect rather than redrawing every overlay
     // on each GPS fix.
@@ -463,19 +526,30 @@ fun EncloseMap(
 
 @SuppressLint("MissingPermission") // Only called after canLocate (permission checked).
 private fun lastKnownLocation(map: MapLibreMap): MlLatLng? {
-    val loc = runCatching { map.locationComponent.lastKnownLocation }.getOrNull() ?: return null
+    val loc = rawLastKnownLocation(map) ?: return null
     return MlLatLng(loc.latitude, loc.longitude)
 }
 
+/** The fix itself, for callers that need its age as well as its position. */
+@SuppressLint("MissingPermission") // Only called after canLocate (permission checked).
+private fun rawLastKnownLocation(map: MapLibreMap): android.location.Location? =
+    runCatching { map.locationComponent.lastKnownLocation }.getOrNull()
+
 /** Animate the camera to frame a set of points (e.g. a claimed territory). */
-private fun fitToPoints(map: MapLibreMap, points: List<LatLng>) {
+private fun fitToPoints(map: MapLibreMap, points: List<LatLng>, bottomInsetPx: Int = 0) {
     runCatching {
         when {
             points.size >= 2 -> {
                 val builder = LatLngBounds.Builder()
                 points.forEach { builder.include(MlLatLng(it.lat, it.lng)) }
                 map.animateCamera(
-                    CameraUpdateFactory.newLatLngBounds(builder.build(), FIT_PADDING_PX),
+                    CameraUpdateFactory.newLatLngBounds(
+                        builder.build(),
+                        FIT_PADDING_PX,
+                        FIT_PADDING_PX,
+                        FIT_PADDING_PX,
+                        FIT_PADDING_PX + bottomInsetPx,
+                    ),
                     FIT_ANIM_MS,
                 )
             }
@@ -515,11 +589,13 @@ private fun installOverlays(
 ): Overlays {
     val claimed = GeoJsonSource(SRC_CLAIMED)
     val closeZone = GeoJsonSource(SRC_CLOSE_ZONE)
+    val route = GeoJsonSource(SRC_ROUTE)
     val path = GeoJsonSource(SRC_PATH)
     val start = GeoJsonSource(SRC_START)
     val home = GeoJsonSource(SRC_HOME)
     style.addSource(claimed)
     style.addSource(closeZone)
+    style.addSource(route)
     style.addSource(path)
     style.addSource(start)
     style.addSource(home)
@@ -554,6 +630,21 @@ private fun installOverlays(
             PropertyFactory.lineColor(Expression.get("color")),
             PropertyFactory.lineWidth(2f),
             PropertyFactory.lineDasharray(arrayOf(2f, 2f)),
+        ),
+    )
+    // The suggested route, under the trail and behind it in every sense: dashed
+    // so it reads as "not walked yet" even where it runs along a street the map
+    // has drawn in a similar colour, and half-transparent so the basemap's own
+    // road names stay readable through it — somebody following this needs the
+    // street names more than they need a bold line.
+    style.addLayer(
+        LineLayer(LYR_ROUTE, SRC_ROUTE).withProperties(
+            PropertyFactory.lineColor(accents.route.toHexString()),
+            PropertyFactory.lineOpacity(0.55f),
+            PropertyFactory.lineWidth(7f),
+            PropertyFactory.lineDasharray(arrayOf(1.6f, 1.1f)),
+            PropertyFactory.lineCap("round"),
+            PropertyFactory.lineJoin("round"),
         ),
     )
     // Casing under the trail: keeps the amber line legible over both pale
@@ -595,7 +686,7 @@ private fun installOverlays(
             PropertyFactory.iconIgnorePlacement(true),
         ),
     )
-    return Overlays(claimed, closeZone, path, start, home)
+    return Overlays(claimed, closeZone, route, path, start, home)
 }
 
 @SuppressLint("MissingPermission") // Caller guards on hasLocationPermission.
@@ -644,6 +735,13 @@ private const val ZOOM_BUTTON_ANIM_MS = 220
 // Framing a selected territory.
 private const val FIT_PADDING_PX = 140
 private const val FIT_ANIM_MS = 800
+
+/**
+ * The most of the map a caller's inset may claim when framing something. Past
+ * half, what's left is too thin to read a loop in and the camera compensates by
+ * zooming out until the loop is a dot.
+ */
+private const val MAX_FIT_INSET_FRACTION = 0.5f
 
 // Map ornament placement: the attribution (ⓘ) is offset past the logo so the two
 // don't overlap in the bottom-left corner. The MapLibre logo asset is 88dp wide

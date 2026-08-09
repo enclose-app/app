@@ -133,6 +133,15 @@ data class EncloseAccents(
      * mistaken for the start of a walk.
      */
     val home: Color,
+    /**
+     * A suggested route, drawn under everything else while it's being followed.
+     *
+     * Deliberately not [trail]: the walked line and the line you were *meant* to
+     * walk sit on top of each other for most of a loop, and two shades of the
+     * same amber would make it impossible to see how much of the route is
+     * actually done.
+     */
+    val route: Color,
     /** Closing zone once the loop is long enough to claim. */
     val zoneReady: Color,
     /** Closing zone while conditions aren't met yet. */
@@ -147,6 +156,7 @@ internal val LightAccents = EncloseAccents(
     trail = Color(0xFFE07B1F),
     anchor = Color(0xFFE07B1F),
     home = BrandPurple,
+    route = Color(0xFF1E88A8),
     zoneReady = BrandPurple,
     zoneWaiting = Color(0xFF8B8194),
     gpsGood = Color(0xFF2E7D32),
@@ -159,6 +169,7 @@ internal val DarkAccents = EncloseAccents(
     trail = BrandAmber,
     anchor = BrandAmber,
     home = Color(0xFFC286DC),
+    route = Color(0xFF6FC7E4),
     zoneReady = Color(0xFFC286DC),
     zoneWaiting = Color(0xFF9E93A8),
     gpsGood = Color(0xFF7ED18A),

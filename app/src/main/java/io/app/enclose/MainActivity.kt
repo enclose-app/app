@@ -127,11 +127,17 @@ class MainActivity : ComponentActivity() {
                 if (pictureInPicture.value) {
                     val territories by viewModel.territories.collectAsStateWithLifecycle()
                     val basemap by viewModel.basemapStyle.collectAsStateWithLifecycle()
+                    val plannedRoute by viewModel.plannedRoute.collectAsStateWithLifecycle()
                     FloatingWalkCard(
                         walk = walk,
                         territories = territories,
                         hasLocationPermission = location.hasPermission,
                         basemap = basemap,
+                        // The route being followed belongs here more than
+                        // anywhere: this window is what's on screen while the
+                        // walker is out with the phone in a pocket, glancing at
+                        // it to see where the next turn is.
+                        plannedRoute = plannedRoute,
                     )
                     return@EncloseTheme
                 }

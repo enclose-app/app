@@ -68,25 +68,32 @@ object Geo {
     }
 
     /**
+     * The point [distanceMeters] from [from] along [bearingRadians], measured
+     * clockwise from north. Spherical, so it stays honest over the few
+     * kilometres a route planner reaches out across.
+     */
+    fun destination(from: LatLng, bearingRadians: Double, distanceMeters: Double): LatLng {
+        val lat1 = Math.toRadians(from.lat)
+        val lng1 = Math.toRadians(from.lng)
+        val angular = distanceMeters / EARTH_RADIUS_M
+        val lat2 = kotlin.math.asin(
+            sin(lat1) * cos(angular) + cos(lat1) * sin(angular) * cos(bearingRadians),
+        )
+        val lng2 = lng1 + atan2(
+            sin(bearingRadians) * sin(angular) * cos(lat1),
+            cos(angular) - sin(lat1) * sin(lat2),
+        )
+        return LatLng(Math.toDegrees(lat2), Math.toDegrees(lng2))
+    }
+
+    /**
      * A closed ring approximating a circle of [radiusMeters] around [center],
      * as [segments] points on the sphere. Used to draw the loop-closing zone.
      */
-    fun circlePolygon(center: LatLng, radiusMeters: Double, segments: Int = 64): List<LatLng> {
-        val lat1 = Math.toRadians(center.lat)
-        val lng1 = Math.toRadians(center.lng)
-        val angular = radiusMeters / EARTH_RADIUS_M
-        return (0 until segments).map { i ->
-            val bearing = 2 * PI * i / segments
-            val lat2 = kotlin.math.asin(
-                sin(lat1) * cos(angular) + cos(lat1) * sin(angular) * cos(bearing),
-            )
-            val lng2 = lng1 + atan2(
-                sin(bearing) * sin(angular) * cos(lat1),
-                cos(angular) - sin(lat1) * sin(lat2),
-            )
-            LatLng(Math.toDegrees(lat2), Math.toDegrees(lng2))
+    fun circlePolygon(center: LatLng, radiusMeters: Double, segments: Int = 64): List<LatLng> =
+        (0 until segments).map { i ->
+            destination(center, 2 * PI * i / segments, radiusMeters)
         }
-    }
 
     /** Total area of a multipolygon: each polygon's exterior minus its holes. */
     fun areaOfPolygons(polygons: List<GeoPolygon>): Double =

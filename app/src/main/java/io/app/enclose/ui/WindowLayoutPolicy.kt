@@ -60,10 +60,21 @@ internal object WindowLayoutPolicy {
      *     empty at every window size, and zoom is a pair of buttons people press
      *     repeatedly while looking at the map. Burying those in a menu would be
      *     the worst possible trade; the horizontal room is free.
-     *  2. **Whatever still doesn't fit moves to the ⋮ menu**, lowest priority
-     *     first ([RAIL_PRIORITY]) — recenter and zoom are what a walker reaches
-     *     for mid-stride, while the window controls are pressed once and then not
-     *     again.
+     *  2. **The left rail then takes the overflow as well**, lowest priority
+     *     first. This step used to be missing, and its absence was visible on
+     *     exactly the windows the whole policy exists for: a split-screen half
+     *     put three controls in the ⋮ menu while the left edge held two zoom
+     *     buttons and a hand's worth of empty space. A control on the far rail is
+     *     still one press; a control in the menu is two and has to be found.
+     *  3. **Only what neither rail can hold moves to the ⋮ menu**, lowest
+     *     priority first ([RAIL_PRIORITY]) — recenter and zoom are what a walker
+     *     reaches for mid-stride, while the window controls are pressed once and
+     *     then not again.
+     *
+     * [railHeightDp] is the room the *right* rail has. The left is treated as
+     * having the same: it starts higher up to clear the OpenStreetMap
+     * attribution, and the right gives up a slot to the map's compass, which
+     * comes to within a few dp of the same number.
      *
      * [available] is in the order the rails draw them, top to bottom, and each
      * result preserves that order: growing the window puts a control back exactly
@@ -74,16 +85,30 @@ internal object WindowLayoutPolicy {
         if (available.size <= fits) return ControlLayout(right = available)
 
         // Step 1: zoom to the left edge, which frees two slots on the right.
-        val left = available.filter { it in ZOOM_CONTROLS }
-        val rest = available - left.toSet()
-        if (rest.size <= fits) return ControlLayout(right = rest, left = left)
+        val crossed = available.filter { it in ZOOM_CONTROLS }.toMutableSet()
+        var right = available.filterNot { it in crossed }
 
-        // Step 2: the right rail still can't hold the remainder.
-        val kept = rest.sortedBy { RAIL_PRIORITY.indexOf(it) }.take(fits).toSet()
+        // Step 2: keep crossing, lowest priority first, while the left rail has
+        // room and the right one is still over-full.
+        if (right.size > fits) {
+            val room = (fits - crossed.size).coerceAtLeast(0)
+            val overflow = right.size - fits
+            available
+                .filterNot { it in crossed }
+                .sortedByDescending { RAIL_PRIORITY.indexOf(it) }
+                .take(minOf(room, overflow))
+                .forEach { crossed.add(it) }
+            right = available.filterNot { it in crossed }
+        }
+        val left = available.filter { it in crossed }
+        if (right.size <= fits) return ControlLayout(right = right, left = left)
+
+        // Step 3: neither rail can hold the remainder.
+        val kept = right.sortedBy { RAIL_PRIORITY.indexOf(it) }.take(fits).toSet()
         return ControlLayout(
-            right = rest.filter { it in kept },
+            right = right.filter { it in kept },
             left = left,
-            menu = rest.filterNot { it in kept },
+            menu = right.filterNot { it in kept },
         )
     }
 
@@ -98,6 +123,10 @@ internal object WindowLayoutPolicy {
         MapControl.RECENTER,
         MapControl.ZOOM_IN,
         MapControl.ZOOM_OUT,
+        // Above home and the basemap: planning a route is the thing somebody
+        // opens this app to do before setting off, and it reads as a button
+        // rather than as a menu item.
+        MapControl.PLAN,
         MapControl.HOME,
         MapControl.BASEMAP,
         MapControl.FLOAT,
@@ -130,4 +159,7 @@ internal enum class MapControl {
     HOME,
     RECENTER,
     BASEMAP,
+
+    /** Opens the route planner — "suggest me a walk of this many kilometres". */
+    PLAN,
 }

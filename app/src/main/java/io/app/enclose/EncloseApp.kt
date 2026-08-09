@@ -4,6 +4,7 @@ import android.app.Application
 import io.app.enclose.data.CityTagger
 import io.app.enclose.data.EncloseDatabase
 import io.app.enclose.data.ProfileRepository
+import io.app.enclose.data.RouteSuggester
 import io.app.enclose.data.SnapTagger
 import io.app.enclose.data.TerritoryRepository
 import io.app.enclose.data.UserSettings
@@ -11,6 +12,7 @@ import io.app.enclose.data.WalkProgressRepository
 import io.app.enclose.data.WalkRepository
 import io.app.enclose.geo.CityResolver
 import io.app.enclose.geo.NoRouteMatcher
+import io.app.enclose.geo.OpenFreeMapWalkableArea
 import io.app.enclose.geo.RouteMatcher
 import io.app.enclose.offline.OfflineTileCache
 import io.app.enclose.offline.OfflineTileSync
@@ -84,6 +86,21 @@ class EncloseApp : Application() {
             enabled = { settings.snapToPaths },
         )
     }
+
+    /**
+     * Suggests a loop of the length the user asks for, starting from where they
+     * are standing.
+     *
+     * Shared for the same reason [cityResolver] is: the tile cache behind it is
+     * what makes pressing "another one" free, and a second instance would be a
+     * second empty cache re-downloading the same square kilometre.
+     *
+     * Note what is *not* here — no key, no new host, no new terms. The roads
+     * come out of the same OpenFreeMap vector tiles the basemap already draws
+     * (see [io.app.enclose.geo.OpenFreeMapWalkableArea]), which is why this
+     * feature could be built at all where [routeMatcher] is still unbound.
+     */
+    val routeSuggester by lazy { RouteSuggester(OpenFreeMapWalkableArea()) }
 
     /**
      * Keeps map tiles for claimed cities on the device, so walking out of

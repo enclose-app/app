@@ -61,8 +61,15 @@ class WindowLayoutPolicyTest {
         MapControl.ZOOM_OUT,
         MapControl.HOME,
         MapControl.RECENTER,
+        MapControl.PLAN,
         MapControl.BASEMAP,
     )
+
+    /** Every control there is, so a new one can't be forgotten here. */
+    @Test
+    fun `the fixture covers the whole enum`() {
+        assertEquals(MapControl.entries.toSet(), allControls.toSet())
+    }
 
     @Test
     fun `a tall window keeps every control on the right rail`() {
@@ -78,9 +85,10 @@ class WindowLayoutPolicyTest {
      */
     @Test
     fun `a short window moves zoom to the left rather than hiding anything`() {
-        // Five slots: seven controls don't fit, five do once zoom moves.
-        val layout = WindowLayoutPolicy.placeControls(allControls, railHeightDp = 290)
-        assertEquals(listOf(MapControl.ZOOM_IN, MapControl.ZOOM_OUT), layout.left)
+        // Six slots: eight controls don't fit, six do once zoom moves.
+        val layout = WindowLayoutPolicy.placeControls(allControls, railHeightDp = 340)
+
+        assertEquals(ZOOM, layout.left)
         assertTrue("nothing needs the menu yet", layout.menu.isEmpty())
         assertEquals(
             listOf(
@@ -88,6 +96,7 @@ class WindowLayoutPolicyTest {
                 MapControl.SPLIT,
                 MapControl.HOME,
                 MapControl.RECENTER,
+                MapControl.PLAN,
                 MapControl.BASEMAP,
             ),
             layout.right,
@@ -95,16 +104,47 @@ class WindowLayoutPolicyTest {
     }
 
     /**
+     * The bug this rule exists for: a split-screen half used to put three
+     * controls in the ⋮ menu while the left edge held two zoom buttons and a
+     * hand's worth of nothing. The far rail is one press; the menu is two.
+     */
+    @Test
+    fun `the left rail fills up before anything goes to the menu`() {
+        // Three slots a side. Eight controls: three right, three left, two out.
+        val layout = WindowLayoutPolicy.placeControls(allControls, railHeightDp = 170)
+
+        assertEquals(3, layout.left.size)
+        assertEquals(3, layout.right.size)
+        assertEquals(2, layout.menu.size)
+        assertTrue("zoom always crosses", layout.left.containsAll(ZOOM))
+        // What a walker reaches for mid-stride stays on the thumb's side.
+        assertTrue(layout.right.contains(MapControl.RECENTER))
+        assertTrue(layout.right.contains(MapControl.PLAN))
+    }
+
+    /**
      * Only once both edges are full does anything leave the screen — and what
      * leaves is what a walker doesn't reach for mid-stride.
      */
     @Test
-    fun `only the controls that still don't fit go to the menu`() {
-        // Three slots on the right, after zoom has already moved left.
+    fun `what reaches the menu is the lowest priority of all`() {
         val layout = WindowLayoutPolicy.placeControls(allControls, railHeightDp = 170)
-        assertEquals(listOf(MapControl.ZOOM_IN, MapControl.ZOOM_OUT), layout.left)
-        assertEquals(listOf(MapControl.HOME, MapControl.RECENTER, MapControl.BASEMAP), layout.right)
-        assertEquals(listOf(MapControl.FLOAT, MapControl.SPLIT), layout.menu)
+
+        assertEquals(listOf(MapControl.FLOAT, MapControl.BASEMAP), layout.menu)
+    }
+
+    /**
+     * Nothing crosses that doesn't have to: with room for everything but one,
+     * the left rail takes zoom and exactly one more.
+     */
+    @Test
+    fun `only the overflow crosses, not everything that could`() {
+        // Five slots: eight controls, six left on the right after zoom crosses.
+        val layout = WindowLayoutPolicy.placeControls(allControls, railHeightDp = 290)
+
+        assertEquals(3, layout.left.size)
+        assertEquals(5, layout.right.size)
+        assertTrue("nothing needs the menu yet", layout.menu.isEmpty())
     }
 
     /**
@@ -118,6 +158,8 @@ class WindowLayoutPolicyTest {
         assertEquals(layout.left, allControls.filter { it in layout.left })
         assertEquals(layout.menu, allControls.filter { it in layout.menu })
     }
+
+    private val ZOOM = listOf(MapControl.ZOOM_IN, MapControl.ZOOM_OUT)
 
     @Test
     fun `every control is placed exactly once`() {
