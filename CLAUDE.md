@@ -418,6 +418,16 @@ Seven constraints, none of them incidental:
   the measured length; seeds are spread by the golden angle so consecutive
   presses go somewhere visibly different, and the whole search is deterministic
   per seed so a rotation can't quietly swap the route out.
+- **A route on the map hides the claims.** While `plannedRoute` is non-empty
+  `EncloseMap` draws no territories at all: the route is a thin line through
+  streets and the claims are filled polygons over exactly the ground it crosses,
+  so together they are unreadable and the one you need is the one you haven't
+  walked. They come back the instant the route goes — cleared by hand, or by the
+  walk ending, which is why **all three** endings clear it (`stopWalk`,
+  `cancelWalk`, and the `voidEvents` collector; the last was the one that used to
+  leave a route drawn over a map with nothing on it). Decided inside `EncloseMap`
+  rather than by its callers so the full screen and the floating window can't
+  disagree.
 - **A suggestion is drawn while it is being considered, not only once taken.**
   Choosing between loops described only as "4.6 km, new ground" is choosing
   blind; the map is the answer to "do I want to walk that?". So `MapScreen`

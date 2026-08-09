@@ -286,6 +286,9 @@ fun EncloseMap(
      * the moment they set off it is the walked trail that matters. A route drawn
      * as boldly as the trail would leave them unable to see how far round they
      * had got.
+     *
+     * **While this is non-empty the claimed territories are not drawn at all** —
+     * see the overlay effect below for why.
      */
     plannedRoute: List<LatLng> = emptyList(),
     /**
@@ -499,9 +502,20 @@ fun EncloseMap(
     }
 
     // Redraw overlays whenever the walk or the claimed set changes.
-    LaunchedEffect(overlays, walk, territories) {
+    LaunchedEffect(overlays, walk, territories, plannedRoute) {
         val o = overlays ?: return@LaunchedEffect
-        o.claimed.setGeoJson(territoriesToFeatures(territories))
+        // **Claims stand down while a route is on the map.** A suggested route is
+        // a line to follow through streets, and the claims are filled polygons
+        // covering exactly the ground it runs across — read together they are
+        // unreadable, and the one you need to see is the one you haven't walked
+        // yet. They come back the moment the route goes, which includes the walk
+        // ending: stopping clears the route (see EncloseViewModel), so the map a
+        // walker returns to is the map of what they hold.
+        //
+        // Decided here rather than in the callers so the full screen and the
+        // floating window can't disagree about it.
+        val claims = if (plannedRoute.isEmpty()) territories else emptyList()
+        o.claimed.setGeoJson(territoriesToFeatures(claims))
         o.closeZone.setGeoJson(closeZoneFeature(walk, accents))
         o.path.setGeoJson(pathToFeature(walk.path))
         o.start.setGeoJson(pointToFeature(walk.start))

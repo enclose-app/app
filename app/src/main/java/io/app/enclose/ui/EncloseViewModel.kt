@@ -69,6 +69,12 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             TrackingManager.voidEvents.collect { reason ->
                 LocationService.stop(getApplication())
+                // A voided walk is a walk that ended, so the suggested route
+                // ends with it — and with it gone the claims come back to the
+                // map. Stop and Discard do this in [stopWalk]/[cancelWalk]; this
+                // is the third way a walk can finish, and it used to be the one
+                // that left a route drawn over an empty map.
+                clearPlannedRoute()
                 _voidedWalk.value = reason
             }
         }
