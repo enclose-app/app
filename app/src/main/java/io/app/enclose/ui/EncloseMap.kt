@@ -26,6 +26,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import io.app.enclose.data.MapCamera
 import io.app.enclose.data.SnapDisplay
 import io.app.enclose.data.Territory
+import io.app.enclose.geo.DistanceMarker
+import io.app.enclose.geo.DistanceMarkers
 import io.app.enclose.geo.Geo
 import io.app.enclose.geo.LatLng
 import io.app.enclose.tracking.TrackingManager
@@ -106,6 +108,11 @@ private const val LYR_CLOSE_ZONE_LINE = "lyr-close-zone-line"
 private const val LYR_PATH_CASING = "lyr-path-casing"
 private const val LYR_PATH = "lyr-path"
 private const val LYR_START = "lyr-start"
+private const val SRC_MILESTONES = "src-milestones"
+private const val LYR_MILESTONES = "lyr-milestones"
+
+/** Image id for the badge carrying the number [index]; one image per kilometre. */
+private fun milestoneImageId(index: Int): String = "img-milestone-$index"
 
 /** Holds references to the GeoJSON sources so overlays can be updated cheaply. */
 private class Overlays(
@@ -115,7 +122,30 @@ private class Overlays(
     val path: GeoJsonSource,
     val start: GeoJsonSource,
     val home: GeoJsonSource,
-)
+    val milestones: GeoJsonSource,
+) {
+    /**
+     * Highest kilometre badge registered on the style so far.
+     *
+     * Kept here rather than in composition state because it is a property of
+     * *this style*: images belong to the style, and a basemap swap builds a new
+     * one, taking every badge with it. Rebuilding [Overlays] is exactly the
+     * moment the count has to go back to zero, so the two can't fall out of step.
+     */
+    var registeredMilestones: Int = 0
+
+    /**
+     * The (fill, label) colours those badges were drawn in.
+     *
+     * A badge is a bitmap, so unlike every other overlay here its colour is
+     * baked in at the moment it is drawn — and the app's theme can change
+     * *without* the style being rebuilt, which is what happens when the basemap
+     * has been pinned to light or dark by hand. Without this the badges keep the
+     * theme they were born in while the trail under them and the panel below
+     * change, which is the exact drift [EncloseAccents] exists to prevent.
+     */
+    var milestoneColors: Pair<Int, Int>? = null
+}
 
 /**
  * Imperative handle on the map, owned by the caller.
@@ -501,8 +531,11 @@ fun EncloseMap(
         if (followWalker && controller.followUser && controller.isStyleLoaded) controller.panTo(here)
     }
 
-    // Redraw overlays whenever the walk or the claimed set changes.
-    LaunchedEffect(overlays, walk, territories, plannedRoute) {
+    // Redraw overlays whenever the walk or the claimed set changes. Keyed on the
+    // style and the accents too, because the kilometre badges are images owned by
+    // the style and painted from the theme: a basemap swap drops them, and a
+    // theme change has to repaint them (see [Overlays.milestoneColors]).
+    LaunchedEffect(overlays, style, accents, walk, territories, plannedRoute) {
         val o = overlays ?: return@LaunchedEffect
         // **Claims stand down while a route is on the map.** A suggested route is
         // a line to follow through streets, and the claims are filled polygons
@@ -519,6 +552,16 @@ fun EncloseMap(
         o.closeZone.setGeoJson(closeZoneFeature(walk, accents))
         o.path.setGeoJson(pathToFeature(walk.path))
         o.start.setGeoJson(pointToFeature(walk.start))
+
+        // Kilometre badges along the trail. Recomputed from the whole path on
+        // each fix rather than accumulated: the same walk state that draws the
+        // line draws the marks on it, so the two can't disagree after a restore
+        // from process death, where an accumulated count would come back empty
+        // and start again at 1 halfway round the loop.
+        val markers = DistanceMarkers.along(walk.path)
+        val s = style
+        if (s != null) ensureMilestoneImages(s, o, markers.size, accents, context)
+        o.milestones.setGeoJson(milestonesToFeatures(markers))
     }
 
     // The suggested route changes only when one is accepted or cleared, so it
@@ -607,12 +650,14 @@ private fun installOverlays(
     val path = GeoJsonSource(SRC_PATH)
     val start = GeoJsonSource(SRC_START)
     val home = GeoJsonSource(SRC_HOME)
+    val milestones = GeoJsonSource(SRC_MILESTONES)
     style.addSource(claimed)
     style.addSource(closeZone)
     style.addSource(route)
     style.addSource(path)
     style.addSource(start)
     style.addSource(home)
+    style.addSource(milestones)
     // Images belong to the style, so the marker is registered here rather than
     // once at startup — a light/dark swap builds a whole new style, and an image
     // added to the old one goes with it.
@@ -680,6 +725,23 @@ private fun installOverlays(
             PropertyFactory.lineJoin("round"),
         ),
     )
+    // Kilometre badges, above the trail they mark and below the start anchor —
+    // the anchor is the one point on the map that has to stay findable, and a
+    // loop that comes back on itself will drop a badge right on top of it.
+    //
+    // Overlap is allowed rather than left to the collision engine: this layer is
+    // added last of the walk overlays, so it would lose every contest with the
+    // basemap's own street labels, and a marker that vanishes at some zooms and
+    // not others reads as a bug in the count. [MILESTONE_MIN_ZOOM] is what keeps
+    // that honest — zoomed out far enough for the badges to crowd, they simply
+    // aren't drawn.
+    style.addLayer(
+        SymbolLayer(LYR_MILESTONES, SRC_MILESTONES).withProperties(
+            PropertyFactory.iconImage(Expression.get("icon")),
+            PropertyFactory.iconAllowOverlap(true),
+            PropertyFactory.iconIgnorePlacement(true),
+        ).apply { minZoom = MILESTONE_MIN_ZOOM },
+    )
     style.addLayer(
         CircleLayer(LYR_START, SRC_START).withProperties(
             PropertyFactory.circleColor(accents.anchor.toHexString()),
@@ -700,7 +762,42 @@ private fun installOverlays(
             PropertyFactory.iconIgnorePlacement(true),
         ),
     )
-    return Overlays(claimed, closeZone, route, path, start, home)
+    return Overlays(claimed, closeZone, route, path, start, home, milestones)
+}
+
+/**
+ * Make sure badges 1..[upTo] exist on the style, drawing whatever is missing.
+ *
+ * Called as the walk grows, so each kilometre costs one small bitmap once —
+ * building all [io.app.enclose.geo.DistanceMarkers.MAX_MARKERS] of them up front
+ * would be 200 bitmaps on every style load for a walk that will use four.
+ */
+private fun ensureMilestoneImages(
+    style: Style,
+    overlays: Overlays,
+    upTo: Int,
+    accents: EncloseAccents,
+    context: android.content.Context,
+) {
+    val colors = accents.milestone.toArgb() to accents.onMilestone.toArgb()
+    // A theme change repaints every badge, not just the new ones: adding an image
+    // under an id the style already has replaces it, so the ones already on the
+    // map take the new colours rather than being left behind in the old theme.
+    val from = if (colors == overlays.milestoneColors) overlays.registeredMilestones else 0
+    if (upTo <= from) return
+    for (index in from + 1..upTo) {
+        style.addImage(
+            milestoneImageId(index),
+            milestoneMarkerBitmap(
+                context = context,
+                label = index.toString(),
+                fillColor = colors.first,
+                textColor = colors.second,
+            ),
+        )
+    }
+    overlays.registeredMilestones = upTo
+    overlays.milestoneColors = colors
 }
 
 @SuppressLint("MissingPermission") // Caller guards on hasLocationPermission.
@@ -745,6 +842,13 @@ private const val FOLLOW_ANIM_MS = 900
 // On-screen zoom buttons.
 internal const val ZOOM_BUTTON_STEP = 1.0
 private const val ZOOM_BUTTON_ANIM_MS = 220
+
+/**
+ * Below this zoom the kilometre badges aren't drawn at all. A kilometre is about
+ * 30 px on screen here, which is barely wider than a badge — any further out and
+ * the marks stop being marks on a trail and become a row of dots covering it.
+ */
+private const val MILESTONE_MIN_ZOOM = 12f
 
 // Framing a selected territory.
 private const val FIT_PADDING_PX = 140
@@ -797,6 +901,16 @@ private fun pathToFeature(path: List<LatLng>): FeatureCollection {
     if (path.size < 2) return FeatureCollection.fromFeatures(emptyList())
     val line = LineString.fromLngLats(path.map(::point))
     return FeatureCollection.fromFeatures(listOf(Feature.fromGeometry(line)))
+}
+
+/** One point per kilometre badge, each naming the image that draws it. */
+private fun milestonesToFeatures(markers: List<DistanceMarker>): FeatureCollection {
+    val features = markers.map { marker ->
+        Feature.fromGeometry(point(marker.position)).apply {
+            addStringProperty("icon", milestoneImageId(marker.index))
+        }
+    }
+    return FeatureCollection.fromFeatures(features)
 }
 
 private fun pointToFeature(p: LatLng?): FeatureCollection {

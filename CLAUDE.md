@@ -79,6 +79,7 @@ test that*, leaving the Android shell thin:
 | `LoopPlanner` | `LoopPlannerTest` | a graph, a target and a seed — no clock |
 | `PastRoutes` | `PastRoutesTest` | domain objects only |
 | `RouteSuggester` | `RouteSuggesterTest` | the `WalkableArea` seam |
+| `DistanceMarkers` | `DistanceMarkersTest` | points in, marker positions out |
 
 JTS is pure Java and works fine in JVM tests. `TrackingManager` is a singleton
 `object`, so tests touching it must reset state in `@After`.
@@ -648,15 +649,31 @@ uploads walks.
   the OpenStreetMap attribution. PiP sends touches to the system, so the card is
   a read-out, not a control panel.
 - `EncloseMap` wraps MapLibre's `MapView` in an `AndroidView`, forwarding the
-  Compose lifecycle. State reaches the map by updating six named
+  Compose lifecycle. State reaches the map by updating seven named
   `GeoJsonSource`s (claimed polygons, closing zone, the suggested route, live
-  path, start anchor, and the saved home). The suggested route is drawn dashed,
+  path, start anchor, the saved home, and the kilometre markers). The suggested route is drawn dashed,
   half-transparent and **under** the trail on purpose — it is the walk you were
   offered, and once you set off it is the walked line that matters; drawn as
   boldly as the trail it would hide how far round you had got. Camera actions
   go through the imperative `MapController` handle, which
   exposes `isStyleLoaded`/`canLocate` so the UI can disable controls that would
   otherwise silently no-op.
+- **Kilometre markers are numbered bitmaps, not map labels.** `DistanceMarkers`
+  (pure, tested) interpolates a point into the segment each whole kilometre falls
+  in, rather than picking the nearest fix — across a signal gap the path is one
+  straight segment kilometres long, and "nearest fix" would put one marker on it
+  or none. The badges are drawn in code (`MilestoneMarker.kt`) and registered
+  with `style.addImage` for the same reason the home marker is, plus one more
+  that decides it: **a `text-field` renders from glyphs the basemap serves over
+  HTTP**, so a walk with no signal would get dots with no numbers on them, which
+  is the walk they are most use on. Two consequences to keep: images belong to
+  the style, so `Overlays` counts how many are registered and starts again at
+  zero when a basemap swap rebuilds it; and the colour is *baked into the bitmap*,
+  so `Overlays.milestoneColors` re-paints every badge when the theme changes
+  without the style being rebuilt — which is what happens whenever the basemap has
+  been pinned to light or dark by hand. Below `MILESTONE_MIN_ZOOM` they aren't
+  drawn at all: a kilometre is ~30 px there, and the marks would cover the trail
+  they mark.
 - **The map follows the walker.** `MapController.followUser` turns on when a walk
   starts and when the recenter button is pressed, and off the instant the user
   pans — detected via `REASON_API_GESTURE`, so the app's own fly-to animations

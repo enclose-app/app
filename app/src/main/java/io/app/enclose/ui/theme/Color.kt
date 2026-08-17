@@ -142,6 +142,19 @@ data class EncloseAccents(
      * actually done.
      */
     val route: Color,
+    /**
+     * The kilometre ticks along the trail. Kin to [trail] but darker (light) or
+     * lighter (dark) than it, because a marker in the trail's own colour is
+     * invisible on the line it sits on — which is the only place it is ever
+     * drawn.
+     */
+    val milestone: Color,
+    /**
+     * The number inside a [milestone] dot. Paired with it deliberately: the dot
+     * is ~18 dp across, so a label that fails contrast at that size is a smudge
+     * rather than a distance.
+     */
+    val onMilestone: Color,
     /** Closing zone once the loop is long enough to claim. */
     val zoneReady: Color,
     /** Closing zone while conditions aren't met yet. */
@@ -157,6 +170,8 @@ internal val LightAccents = EncloseAccents(
     anchor = Color(0xFFE07B1F),
     home = BrandPurple,
     route = Color(0xFF1E88A8),
+    milestone = Color(0xFF8A4B10),
+    onMilestone = Color.White,
     zoneReady = BrandPurple,
     zoneWaiting = Color(0xFF8B8194),
     gpsGood = Color(0xFF2E7D32),
@@ -170,6 +185,8 @@ internal val DarkAccents = EncloseAccents(
     anchor = BrandAmber,
     home = Color(0xFFC286DC),
     route = Color(0xFF6FC7E4),
+    milestone = Color(0xFFFFD9A8),
+    onMilestone = Color(0xFF3A2410),
     zoneReady = Color(0xFFC286DC),
     zoneWaiting = Color(0xFF9E93A8),
     gpsGood = Color(0xFF7ED18A),
