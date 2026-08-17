@@ -15,6 +15,17 @@ interface WalkDao {
     @Query("SELECT * FROM walks WHERE syncStatus = 'PENDING'")
     suspend fun pendingSync(): List<WalkEntity>
 
+    /** Every walk ever closed, claimed or not, for a backup. */
+    @Query("SELECT * FROM walks ORDER BY closedAtEpochMs ASC")
+    suspend fun all(): List<WalkEntity>
+
+    /** Ids only, so a restore can report what it added versus replaced. */
+    @Query("SELECT id FROM walks")
+    suspend fun allIds(): List<String>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(entities: List<WalkEntity>)
+
     /**
      * Record a freshly closed loop. IGNORE so it can't clobber a row the claim
      * flow may have already written as claimed (order-independent, race-safe).

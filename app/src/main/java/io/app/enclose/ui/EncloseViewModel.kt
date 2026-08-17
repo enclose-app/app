@@ -8,7 +8,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.app.enclose.BuildConfig
 import io.app.enclose.EncloseApp
+import io.app.enclose.export.Backup
 import io.app.enclose.export.GpxImporter
+import io.app.enclose.data.BackupReport
 import io.app.enclose.data.Conquest
 import io.app.enclose.data.MapCamera
 import io.app.enclose.data.RouteOutcome
@@ -52,6 +54,7 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     private val snapTagger = (app as EncloseApp).snapTagger
     private val offlineTileSync = (app as EncloseApp).offlineTileSync
     private val routeSuggester = (app as EncloseApp).routeSuggester
+    private val backupRepository = (app as EncloseApp).backupRepository
 
     /** Everything remembered between launches. See [UserSettings]. */
     private val settings = (app as EncloseApp).settings
@@ -782,6 +785,223 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * How a backup or a restore is going. Modelled like [gpxImport], and for the
+     * same reason: it happens off screen, and silence is indistinguishable from
+     * a feature that doesn't work.
+     */
+    private val _backup = MutableStateFlow<BackupJob?>(null)
+    val backup: StateFlow<BackupJob?> = _backup.asStateFlow()
+
+    fun dismissBackup() {
+        _backup.value = null
+    }
+
+    /** The name to offer the file picker, dated so a folder of backups reads. */
+    fun suggestedBackupFileName(): String = Backup.fileName(System.currentTimeMillis())
+
+    /**
+     * Write every claim, walk, the profile, the walk in progress, the cached
+     * regions and every setting to [uri] as one file.
+     *
+     * Exporting is allowed **during a walk**, deliberately: the walk in progress
+     * is already mirrored to disk fix by fix ([WalkProgressRepository]), so what
+     * lands in the file is a true snapshot, and refusing would deny a backup to
+     * someone half way round a loop who is about to change phones.
+     */
+    fun exportBackup(uri: Uri) {
+        if (_backup.value?.isRunning == true) return
+        viewModelScope.launch {
+            _backup.value = BackupJob.Exporting
+            val app = getApplication<Application>()
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val data = backupRepository.collect(
+                        appVersionName = BuildConfig.VERSION_NAME,
+                        createdAtEpochMs = System.currentTimeMillis(),
+                    )
+                    val text = Backup.encode(data)
+                    // Truncating first, because a picker that "creates" a file
+                    // will happily hand back one the user chose to overwrite —
+                    // and a shorter backup written over a longer one would
+                    // otherwise leave the tail of the old file attached to it.
+                    app.contentResolver.openOutputStream(uri, "wt")
+                        ?.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                        ?: error("no output stream")
+                    data to text.length
+                }
+            }
+            _backup.value = result.fold(
+                onSuccess = { (data, bytes) ->
+                    BackupJob.Done(
+                        headline = "${data.territories.size} " +
+                            "${if (data.territories.size == 1) "claim" else "claims"} · " +
+                            "${data.walks.size} " +
+                            "${if (data.walks.size == 1) "walk" else "walks"} · " +
+                            formatFileSize(bytes.toLong()),
+                        detail = "Saved. The file holds everything on this device — every " +
+                            "claim standing and fallen, every walk, your profile, and your " +
+                            "settings. Anyone who opens it can read where you walk, so keep " +
+                            "it somewhere you'd keep a diary.",
+                    )
+                },
+                onFailure = {
+                    BackupJob.Failed("Couldn't write the backup. The file wasn't saved.")
+                },
+            )
+        }
+    }
+
+    /**
+     * Read a backup file at [uri] and merge it into this device.
+     *
+     * **Refused while a walk is running.** A restore rewrites `walk_progress`,
+     * which is where the walk being recorded right now lives; the points already
+     * walked exist nowhere else, and no file is worth them. Everything else is a
+     * merge — see [io.app.enclose.data.BackupRepository] — so nothing already on
+     * the device is deleted by this.
+     */
+    fun importBackup(uri: Uri) {
+        if (_backup.value?.isRunning == true) return
+        if (walk.value.isTracking) {
+            _backup.value = BackupJob.Failed(
+                "There's a walk in progress. Stop it first — restoring would overwrite the " +
+                    "walk being recorded, and those points aren't anywhere else yet.",
+            )
+            return
+        }
+        viewModelScope.launch {
+            _backup.value = BackupJob.Importing
+            val app = getApplication<Application>()
+            val text = withContext(Dispatchers.IO) {
+                runCatching {
+                    app.contentResolver.openInputStream(uri)?.use { stream ->
+                        // One byte past the cap, so a file that fills it exactly
+                        // can be told apart from one that was truncated — the
+                        // difference between "too large" and "not valid JSON",
+                        // which are very different things to be told.
+                        stream.readNBytes(MAX_BACKUP_BYTES + 1)
+                    }
+                }.getOrNull()
+            }
+            if (text == null) {
+                _backup.value = BackupJob.Failed("Couldn't read that file.")
+                return@launch
+            }
+            if (text.size > MAX_BACKUP_BYTES) {
+                _backup.value = BackupJob.Failed(
+                    "That file is larger than ${formatFileSize(MAX_BACKUP_BYTES.toLong())}, " +
+                        "which is past anything Enclose writes. It's probably not a backup.",
+                )
+                return@launch
+            }
+
+            val decoded = withContext(Dispatchers.Default) {
+                Backup.decode(
+                    text = text.toString(Charsets.UTF_8),
+                    currentSchemaVersion = backupRepository.currentSchemaVersion(),
+                )
+            }
+            when (decoded) {
+                is Backup.Decoded.Failed -> _backup.value = BackupJob.Failed(decoded.reason)
+                is Backup.Decoded.Ok -> {
+                    val report = runCatching { backupRepository.restore(decoded.data) }.getOrNull()
+                    _backup.value = if (report == null) {
+                        BackupJob.Failed(
+                            "Couldn't write the backup into the app. Nothing was changed.",
+                        )
+                    } else {
+                        // Re-read the settings that are held in memory: they were
+                        // loaded at construction, so without this the restored
+                        // home, basemap and the rest sit on disk while the screen
+                        // goes on showing what was there before.
+                        reloadSettings()
+                        BackupJob.Done(
+                            headline = restoreHeadline(report),
+                            detail = listOfNotNull(
+                                decoded.note,
+                                restoreDetail(report),
+                            ).joinToString("\n\n"),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Pull the settings back out of storage into the flows the UI reads.
+     *
+     * These are cached in memory at construction — every `MutableStateFlow` above
+     * is seeded from [settings] — so a restore that only wrote the preferences
+     * file would be invisible until the app was killed and reopened, which reads
+     * exactly like a restore that didn't work.
+     */
+    private fun reloadSettings() {
+        _activityType.value = ActivityType.resolve(settings.activityTypeName)
+        _basemapStyle.value = runCatching {
+            BasemapStyle.valueOf(settings.basemapStyleName ?: "")
+        }.getOrDefault(BasemapStyle.SYSTEM)
+        _home.value = settings.home
+        _panelCollapsed.value = settings.panelCollapsed
+        _floatingWindow.value = settings.floatingWindow
+        _snapToPaths.value = settings.snapToPaths
+        _testMode.value = devToolsAvailable && settings.testMode
+        _routeTargetMeters.value = settings.plannedDistanceMeters.toDouble()
+        _territorySort.value = runCatching {
+            TerritorySort.valueOf(settings.territorySortName ?: "")
+        }.getOrDefault(TerritorySort.RECENT)
+        _plannedRoute.value = settings.plannedRoute
+            ?.let { Polyline.decode(it, Polyline.PRECISION_5) }
+            ?: emptyList()
+        // `seenIntro` is deliberately not pushed into [showHowItWorks]. It is
+        // restored on disk and read at the next launch like any other; acting on
+        // it here would throw the explainer sheet up over the report of the
+        // restore that had just finished.
+    }
+
+    private fun restoreHeadline(report: BackupReport): String {
+        val claims = report.territoriesAdded + report.territoriesReplaced
+        val walks = report.walksAdded + report.walksReplaced
+        return "${report.territoriesAdded} new " +
+            "${if (report.territoriesAdded == 1) "claim" else "claims"} of $claims · " +
+            "${report.walksAdded} new ${if (report.walksAdded == 1) "walk" else "walks"} of $walks"
+    }
+
+    /**
+     * The parts of a restore the counts don't cover — each line is there because
+     * its absence would have to be discovered by the user instead.
+     */
+    private fun restoreDetail(report: BackupReport): String = buildString {
+        append("Nothing already on this device was deleted. ")
+        val replaced = report.territoriesReplaced + report.walksReplaced
+        if (replaced > 0) {
+            append(
+                "$replaced ${if (replaced == 1) "record" else "records"} the backup also had " +
+                    "were replaced with its version. ",
+            )
+        }
+        if (report.profileRestored) append("Your profile and settings came back too. ")
+        if (report.walkInProgressRestored) {
+            append(
+                "It also held a walk that was still being recorded — it's back, and will " +
+                    "carry on from where it stopped the next time you start recording. ",
+            )
+        }
+        if (report.walkInProgressSkipped) {
+            append(
+                "It also held an unfinished walk, which was left alone: this device already " +
+                    "has one, and overwriting it would lose those points. ",
+            )
+        }
+        if (report.offlineRegionsSkipped > 0) {
+            append(
+                "Downloaded map areas aren't restored — the tiles themselves aren't in the " +
+                    "file — so they'll download again on Wi-Fi.",
+            )
+        }
+    }.trim()
+
     fun renameTerritory(id: String, newName: String) {
         val name = newName.trim()
         if (name.isEmpty()) return
@@ -861,6 +1081,15 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         const val MAX_GPX_BYTES = 8_000_000
 
         /**
+         * ~64 MB of backup. A backup is the whole database as text, and the
+         * database is dominated by walked points: at roughly 50 bytes a point
+         * this is a few hundred thousand of them, past a lifetime of walking.
+         * The cap exists so a video picked by mistake can't be pulled into
+         * memory whole on a phone.
+         */
+        const val MAX_BACKUP_BYTES = 64_000_000
+
+        /**
          * Points replayed between yields. Small enough that the progress bar
          * moves smoothly on a long track, large enough that the yielding itself
          * doesn't dominate the replay of a short one.
@@ -895,6 +1124,31 @@ sealed interface RoutePlan {
      * yields on the next.
      */
     data class Unavailable(val reason: RouteUnavailable, val attempt: Int) : RoutePlan
+}
+
+/**
+ * What a backup or a restore is doing.
+ *
+ * One type for both directions: they are never running at the same time (each
+ * refuses to start while the other is), and a single state is what stops the UI
+ * having to decide which of two reports to show.
+ */
+sealed interface BackupJob {
+
+    /** Reading the database and writing the file. */
+    data object Exporting : BackupJob
+
+    /** Reading the file and writing it into the database. */
+    data object Importing : BackupJob
+
+    /** Finished. Both directions report counts, because both can surprise. */
+    data class Done(val headline: String, val detail: String) : BackupJob
+
+    /** Nothing was written, and this is why. */
+    data class Failed(val reason: String) : BackupJob
+
+    /** True only while work is actually happening — see [GpxImport.isRunning]. */
+    val isRunning: Boolean get() = this is Exporting || this is Importing
 }
 
 /**

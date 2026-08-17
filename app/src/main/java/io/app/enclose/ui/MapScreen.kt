@@ -187,6 +187,7 @@ fun MapScreen(
     val voidedWalk by viewModel.voidedWalk.collectAsStateWithLifecycle()
     val recordingFailure by viewModel.recordingFailure.collectAsStateWithLifecycle()
     val gpxImport by viewModel.gpxImport.collectAsStateWithLifecycle()
+    val backupJob by viewModel.backup.collectAsStateWithLifecycle()
     val basemapStyle by viewModel.basemapStyle.collectAsStateWithLifecycle()
     val home by viewModel.home.collectAsStateWithLifecycle()
     val panelCollapsed by viewModel.panelCollapsed.collectAsStateWithLifecycle()
@@ -851,6 +852,7 @@ fun MapScreen(
     }
 
     GpxImportDialogs(gpxImport, onDismiss = viewModel::dismissGpxImport)
+    BackupDialogs(backupJob, onDismiss = viewModel::dismissBackup)
 
     confirmSetHome?.let { here ->
         ConfirmDialog(
@@ -1776,6 +1778,47 @@ internal fun GpxImportDialogs(state: GpxImport?, onDismiss: () -> Unit) {
 }
 
 /**
+ * How a backup or a restore is going — drawn by both screens for the reason
+ * [GpxImportDialogs] is: the work runs on the ViewModel's scope and outlives the
+ * profile screen it was started from, and a restore whose report nobody ever sees
+ * is a restore the user has no reason to believe happened.
+ *
+ * The progress dialog takes no dismissal. An export is reading every table while
+ * the file is open for writing, and a restore is inside a transaction; letting
+ * the user walk away mid-way and start something else is how you get half a
+ * backup that looks like a whole one.
+ */
+@Composable
+internal fun BackupDialogs(state: BackupJob?, onDismiss: () -> Unit) {
+    when (state) {
+        null -> Unit
+        is BackupJob.Exporting -> GpxProgressDialog(
+            title = "Backing up",
+            label = "Collecting everything on this device…",
+            progress = null,
+        )
+
+        is BackupJob.Importing -> GpxProgressDialog(
+            title = "Restoring",
+            label = "Reading the backup and putting it back…",
+            progress = null,
+        )
+
+        is BackupJob.Done -> NoticeDialog(
+            title = "Done",
+            message = "${state.headline}\n\n${state.detail}",
+            onDismiss = onDismiss,
+        )
+
+        is BackupJob.Failed -> NoticeDialog(
+            title = "That didn't work",
+            message = state.reason,
+            onDismiss = onDismiss,
+        )
+    }
+}
+
+/**
  * Import in progress. Deliberately has no dismiss button and ignores the scrim:
  * the replay is feeding the tracker, and letting the user start tapping points
  * into the middle of it would interleave two routes into one walk.
@@ -1785,7 +1828,7 @@ internal fun GpxImportDialogs(state: GpxImport?, onDismiss: () -> Unit) {
  * file is still being read, when there is genuinely nothing to count.
  */
 @Composable
-internal fun GpxProgressDialog(label: String, progress: Float?) {
+internal fun GpxProgressDialog(label: String, progress: Float?, title: String = "Importing GPX") {
     androidx.compose.ui.window.Dialog(
         onDismissRequest = {},
         properties = androidx.compose.ui.window.DialogProperties(
@@ -1804,7 +1847,7 @@ internal fun GpxProgressDialog(label: String, progress: Float?) {
                     .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text("Importing GPX", style = MaterialTheme.typography.titleMedium)
+                Text(title, style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(16.dp))
                 if (progress == null) {
                     CircularProgressIndicator(Modifier.size(36.dp))

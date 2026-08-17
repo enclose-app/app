@@ -4,6 +4,16 @@ import android.content.Context
 import androidx.core.content.edit
 import io.app.enclose.geo.LatLng
 
+/**
+ * The distance a suggested route aims for until the user says otherwise: 5 km, a
+ * common hour's walk and a length most street layouts can make.
+ *
+ * At file scope because both [UserSettings] and [SettingsSnapshot] have to agree
+ * on it — a snapshot that defaulted to something else would restore a preference
+ * the user never set.
+ */
+internal const val DEFAULT_PLANNED_DISTANCE_M = 5_000
+
 /** Where the map was left: centre, zoom, and orientation. */
 data class MapCamera(
     val lat: Double,
@@ -11,6 +21,37 @@ data class MapCamera(
     val zoom: Double,
     val bearing: Double = 0.0,
     val tilt: Double = 0.0,
+)
+
+/**
+ * Every remembered preference as one value, so a backup can carry them without
+ * needing a `Context` to read them back.
+ *
+ * Deliberately a mirror of [UserSettings] rather than a subset: this is what
+ * "back up everything" means for the preferences file, and a snapshot that
+ * quietly omitted a setting would restore a device that looked almost right.
+ * The defaults here are the same ones [UserSettings] hands out for an unset key,
+ * so a backup with a missing field restores as "never chosen" rather than as
+ * somebody's choice.
+ *
+ * Adding a setting means adding it here, in [UserSettings.snapshot] and in
+ * [UserSettings.restore] — the three sit together so the omission is visible.
+ */
+data class SettingsSnapshot(
+    val seenIntro: Boolean = false,
+    val activityTypeName: String? = null,
+    val basemapStyleName: String? = null,
+    val territorySortName: String? = null,
+    val testMode: Boolean = false,
+    val snapToPaths: Boolean = false,
+    val panelCollapsed: Boolean = false,
+    val floatingWindow: Boolean = false,
+    val plannedDistanceMeters: Int = DEFAULT_PLANNED_DISTANCE_M,
+    val plannedRoute: String? = null,
+    val offlineStyleUrl: String? = null,
+    val offlinePixelRatio: Float = 1f,
+    val camera: MapCamera? = null,
+    val home: LatLng? = null,
 )
 
 /**
@@ -222,6 +263,56 @@ class UserSettings(context: Context) {
             }
         }
 
+    /** Everything above, as one value a backup can carry. */
+    fun snapshot(): SettingsSnapshot = SettingsSnapshot(
+        seenIntro = seenIntro,
+        activityTypeName = activityTypeName,
+        basemapStyleName = basemapStyleName,
+        territorySortName = territorySortName,
+        testMode = testMode,
+        snapToPaths = snapToPaths,
+        panelCollapsed = panelCollapsed,
+        floatingWindow = floatingWindow,
+        plannedDistanceMeters = plannedDistanceMeters,
+        plannedRoute = plannedRoute,
+        offlineStyleUrl = offlineStyleUrl,
+        offlinePixelRatio = offlinePixelRatio,
+        camera = camera,
+        home = home,
+    )
+
+    /**
+     * Write a snapshot back over the current preferences.
+     *
+     * Everything is applied, including the settings that describe *this device*
+     * (the map camera, the offline downloader's style and pixel ratio). They are
+     * cheap to be wrong about — the camera is replaced the first time the map
+     * settles, and the downloader's two are rewritten by the map as soon as it
+     * loads — and leaving them out would mean a restored phone opens on a world
+     * view when the backup knew exactly where its owner walks.
+     *
+     * [snapToPaths] is the one that matters most to get right, and it is carried
+     * faithfully in both directions: it is the app's only feature that sends
+     * anything off the device, so a restore must neither turn it on for someone
+     * who had it off, nor quietly turn it off for someone relying on it.
+     */
+    fun restore(snapshot: SettingsSnapshot) {
+        seenIntro = snapshot.seenIntro
+        activityTypeName = snapshot.activityTypeName
+        basemapStyleName = snapshot.basemapStyleName
+        territorySortName = snapshot.territorySortName
+        testMode = snapshot.testMode
+        snapToPaths = snapshot.snapToPaths
+        panelCollapsed = snapshot.panelCollapsed
+        floatingWindow = snapshot.floatingWindow
+        plannedDistanceMeters = snapshot.plannedDistanceMeters
+        plannedRoute = snapshot.plannedRoute
+        offlineStyleUrl = snapshot.offlineStyleUrl
+        offlinePixelRatio = snapshot.offlinePixelRatio
+        camera = snapshot.camera
+        home = snapshot.home
+    }
+
     private companion object {
         // Unchanged from the inline version — renaming would silently reset
         // choices users have already made.
@@ -249,7 +340,5 @@ class UserSettings(context: Context) {
 
         const val DEFAULT_ZOOM = 16f
 
-        /** 5 km: a common hour's walk, and a length most street layouts can make. */
-        const val DEFAULT_PLANNED_DISTANCE_M = 5_000
     }
 }

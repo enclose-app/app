@@ -31,6 +31,23 @@ abstract class TerritoryDao {
     @Query("SELECT * FROM territories WHERE syncStatus = 'PENDING'")
     abstract suspend fun pendingSync(): List<TerritoryEntity>
 
+    /**
+     * Every row, standing and fallen alike, for a backup.
+     *
+     * Deliberately not [observeActive] with the conquered ones added: a fallen
+     * claim keeps the geometry it held when it fell and is shown in the profile's
+     * history, so a backup that dropped it would lose walking that happened.
+     */
+    @Query("SELECT * FROM territories ORDER BY claimedAtEpochMs ASC")
+    abstract suspend fun all(): List<TerritoryEntity>
+
+    /** Ids only, so a restore can report what it added versus replaced. */
+    @Query("SELECT id FROM territories")
+    abstract suspend fun allIds(): List<String>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    abstract suspend fun upsertAll(entities: List<TerritoryEntity>)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     abstract suspend fun upsert(entity: TerritoryEntity)
 

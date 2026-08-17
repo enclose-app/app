@@ -1,6 +1,7 @@
 package io.app.enclose
 
 import android.app.Application
+import io.app.enclose.data.BackupRepository
 import io.app.enclose.data.CityTagger
 import io.app.enclose.data.EncloseDatabase
 import io.app.enclose.data.ProfileRepository
@@ -60,6 +61,13 @@ class EncloseApp : Application() {
 
     /** Everything the app remembers between launches. */
     val settings by lazy { UserSettings(this) }
+
+    /**
+     * Reads and writes the whole dataset for backup/restore. Takes the database
+     * rather than the repositories: a backup is every table, and going through
+     * the domain layer would quietly drop whatever the domain models don't carry.
+     */
+    val backupRepository by lazy { BackupRepository(database, settings) }
 
     /**
      * Matches claimed routes onto real roads and paths.

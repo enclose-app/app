@@ -40,7 +40,9 @@ import androidx.compose.material.icons.filled.Terrain
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Route
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.HorizontalDivider
@@ -75,6 +77,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.app.enclose.data.CityCoverage
+import io.app.enclose.export.Backup
 import io.app.enclose.data.CountryStamp
 import io.app.enclose.data.Profile
 import io.app.enclose.ui.theme.PillShape
@@ -102,6 +105,7 @@ fun ProfileScreen(
     val snapBacklog by encloseViewModel.snapBacklog.collectAsStateWithLifecycle()
     val snappingExisting by encloseViewModel.snappingExisting.collectAsStateWithLifecycle()
     val gpxImport by encloseViewModel.gpxImport.collectAsStateWithLifecycle()
+    val backupJob by encloseViewModel.backup.collectAsStateWithLifecycle()
     val showHowItWorks by encloseViewModel.showHowItWorks.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf(false) }
     var showCities by rememberSaveable { mutableStateOf(false) }
@@ -115,6 +119,16 @@ fun ProfileScreen(
     val gpxPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri -> uri?.let(encloseViewModel::importGpx) }
+
+    // The backup goes wherever the user says — a cloud folder, an SD card, a
+    // cable's reach away — rather than into the app's own storage, which is the
+    // one place a backup is no use: uninstalling takes it with it.
+    val backupWriter = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(Backup.MIME_TYPE),
+    ) { uri -> uri?.let(encloseViewModel::exportBackup) }
+    val backupReader = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let(encloseViewModel::importBackup) }
 
     Scaffold(
         topBar = {
@@ -405,6 +419,37 @@ fun ProfileScreen(
                     // user came to pick.
                     onClick = { gpxPicker.launch(arrayOf("*/*")) },
                 )
+
+                // Backup and restore sit together, in that order: the two are one
+                // idea, and the one people come looking for first is the one they
+                // need *before* anything has gone wrong.
+                HorizontalDivider(Modifier.padding(vertical = 12.dp))
+
+                DetailAction(
+                    icon = Icons.Filled.Save,
+                    title = "Back up everything…",
+                    // Says what is in it, because the user is about to put it
+                    // somewhere: this file is a record of where they walk.
+                    subtitle = "Writes one file holding every claim, every walk, your " +
+                        "profile and your settings. Keep it somewhere safe — anyone who " +
+                        "opens it can read where you walk.",
+                    onClick = {
+                        backupWriter.launch(encloseViewModel.suggestedBackupFileName())
+                    },
+                )
+
+                DetailAction(
+                    icon = Icons.Filled.Restore,
+                    title = "Restore from a backup…",
+                    // The promise that makes this safe to press is the one worth
+                    // making on the button itself — see BackupRepository.
+                    subtitle = "Brings back everything in a backup file. Nothing already " +
+                        "on this phone is deleted.",
+                    // Same wide filter as the GPX picker: providers hand JSON over
+                    // as octet-stream at least as often as by its real type, and a
+                    // correct filter would hide the file the user came to find.
+                    onClick = { backupReader.launch(arrayOf("*/*")) },
+                )
             }
 
             Spacer(Modifier.height(8.dp))
@@ -414,6 +459,7 @@ fun ProfileScreen(
     // Both started from here, so both report back here — the import outlives
     // this screen, but the user is standing on it when they kick it off.
     GpxImportDialogs(gpxImport, onDismiss = encloseViewModel::dismissGpxImport)
+    BackupDialogs(backupJob, onDismiss = encloseViewModel::dismissBackup)
     if (showHowItWorks) HowItWorksSheet(onDismiss = encloseViewModel::dismissHowItWorks)
 
     if (showCities && state.stats.cities.isNotEmpty()) {

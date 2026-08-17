@@ -80,6 +80,8 @@ test that*, leaving the Android shell thin:
 | `PastRoutes` | `PastRoutesTest` | domain objects only |
 | `RouteSuggester` | `RouteSuggesterTest` | the `WalkableArea` seam |
 | `DistanceMarkers` | `DistanceMarkersTest` | points in, marker positions out |
+| `Json` | `JsonTest` | hand-rolled, so no `org.json` |
+| `Backup` | `BackupTest` | entities are plain data classes |
 
 JTS is pure Java and works fine in JVM tests. `TrackingManager` is a singleton
 `object`, so tests touching it must reset state in `@After`.
@@ -519,7 +521,10 @@ box between two cities is mostly countryside.
 
 `UserSettings` (SharedPreferences, file `enclose_ui`) holds **every** preference:
 seen-intro, activity type, basemap, territory sort, test mode, snap-to-paths, panel-collapsed,
-floating-window, home, the planned route and the distance it was asked for, and the map camera. It exists as one class because the previous ad-hoc `prefs.getString(...)`
+floating-window, home, the planned route and the distance it was asked for, the offline
+downloader's style and pixel ratio, and the map camera. `SettingsSnapshot` mirrors
+the lot for backup — add a preference in three places (the class, `snapshot()`,
+`restore()`) or it silently won't be backed up. It exists as one class because the previous ad-hoc `prefs.getString(...)`
 calls scattered through `EncloseViewModel` are exactly why the camera and two
 toggles went unpersisted for so long — there was nowhere to notice the gap. Add
 new preferences here, not inline.
@@ -542,6 +547,54 @@ list pre-filtered would hide claims.
 
 Stats need no persistence work — every figure on the profile screen derives from
 Room, so they are durable by construction.
+
+### Backup and restore
+
+**One file, everything in it.** `BackupRepository.collect` reads every table in
+`EncloseDatabase` — territories (standing *and* fallen), walks, the profile, the
+walk in progress with its points, the cached-region rows — plus
+`UserSettings.snapshot()`, which mirrors the whole preferences file. The check
+for "is this complete?" is against the schema, not against memory: a new table or
+a new preference means a new field in `BackupData` and `SettingsSnapshot`, and
+`SettingsSnapshot` sits next to `snapshot()`/`restore()` so the omission is
+visible when you add one.
+
+`Backup` and `Json` (both pure, tested) are the format. Three decisions worth
+keeping:
+
+- **The codec is hand-rolled.** `org.json` is stubbed in the mockable
+  `android.jar` — the same reason `GpxImporter` scans XML by hand — and a backup
+  format is the last place to accept a codec no test can reach. `GeoExporter`
+  uses `org.json` and correspondingly has no tests.
+- **Columns are carried verbatim, geometry included.** A ring is already a JSON
+  string in the column and stays a string in the file. It is uglier and it is the
+  point: re-encoding geometry on the way out and back is how a walked outline
+  comes back subtly different.
+- **Every field is read with a default**, so a file from an older build restores
+  into a newer schema — a column added since takes the default a migration would
+  have given it. A newer *format* version is refused outright (half-restoring an
+  unknown shape is worse than not restoring); a newer *schema* is accepted with a
+  note saying what may have been dropped.
+
+**A restore merges and never deletes**, which follows directly from "nothing the
+user walked for is ever destroyed": wiping first would delete claims walked since
+the backup was taken. Rows land by primary key, so onto a fresh install it is a
+complete restore, and the report says how many were new versus replaced. Two
+things it will not do: it refuses entirely while a walk is running, and it adopts
+the file's unfinished walk **only** when the device has none of its own — those
+points exist nowhere else. The database half is one `withTransaction`; the
+preferences are written after it commits, and `EncloseViewModel.reloadSettings`
+then re-seeds the in-memory flows, without which a restore is invisible until the
+app is killed.
+
+**Cached map regions are backed up but not restored**, and that asymmetry is
+deliberate: `offline_regions` holds MapLibre's id for a tile pyramid that lives
+outside the file, and `OfflineTileSync` skips any city it finds a row for — so
+restoring the rows would mean those cities never download again. The report says
+so rather than leaving it to be discovered.
+
+Unit tests cover the format; the database half needs `device-check` (the round
+trip that matters is export → `pm clear` → restore).
 
 ### Offline tiles
 

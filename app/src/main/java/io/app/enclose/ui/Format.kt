@@ -74,6 +74,17 @@ internal fun formatPace(distanceMeters: Double, elapsedMs: Long): String {
     return String.format(Locale.US, "%d:%02d /km", mm, ss)
 }
 
+/**
+ * A file size as "812 KB" / "4.3 MB". Whole kilobytes but one decimal on
+ * megabytes, because the number people compare a backup against is how much room
+ * they have, and "4 MB" and "4.9 MB" are not the same answer to that.
+ */
+internal fun formatFileSize(bytes: Long): String = when {
+    bytes >= 1_000_000 -> String.format(Locale.US, "%.1f MB", bytes / 1_000_000.0)
+    bytes >= 1_000 -> "${(bytes / 1_000.0).roundToInt()} KB"
+    else -> "$bytes bytes"
+}
+
 internal fun formatDate(epochMs: Long): String =
     SimpleDateFormat("MMM d, yyyy · HH:mm", Locale.getDefault()).format(Date(epochMs))
 
