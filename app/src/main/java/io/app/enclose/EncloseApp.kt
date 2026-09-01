@@ -54,7 +54,7 @@ class EncloseApp : Application() {
 
     /**
      * Shared so its lookup cache is shared too: the territory detail screen and
-     * the tagger ask about the same coordinates, and the geocoder is a network
+     * the tagger ask about the same coordinates, and the Geocoder is a network
      * call worth making once.
      */
     val cityResolver by lazy { CityResolver(this) }
@@ -112,7 +112,7 @@ class EncloseApp : Application() {
 
     /**
      * Keeps map tiles for claimed cities on the device, so walking out of
-     * signal doesn't leave a grey screen. Shared so the worker and the map
+     * signal doesn't leave a gray screen. Shared so the worker and the map
      * agree on which regions exist.
      */
     val offlineTileSync by lazy {

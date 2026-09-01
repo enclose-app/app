@@ -122,6 +122,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import io.app.enclose.data.SnapDisplay
 import io.app.enclose.data.Territory
 import io.app.enclose.data.TerritoryHit
+import io.app.enclose.geo.Geo
 import io.app.enclose.geo.LatLng
 import io.app.enclose.tracking.BlockReason
 import io.app.enclose.tracking.ActivityType
@@ -612,6 +613,25 @@ fun MapScreen(
                         territories = if (drawnRoute.isEmpty()) territories else emptyList(),
                     )
                     onSelectClaim(hit?.id)
+                    // Not while the map is keeping up with a walk in progress:
+                    // the next fix would pull the camera straight back, so the
+                    // centring would be a lurch and nothing more. The card still
+                    // appears, and panning away — which is what following reads
+                    // as "look somewhere else" — makes the next tap centre.
+                    if (hit != null && !(walk.isTracking && controller.followUser)) {
+                        // Bring the claim to the middle of the map the user can
+                        // see, not the middle of the window: the panel and the
+                        // card about to appear own the foot of the screen. The
+                        // card's height is the last one measured rather than
+                        // the one currently on screen — there isn't one yet at
+                        // this point, and half a card's height only matters on
+                        // the very first selection of a session.
+                        controller.centerOn(
+                            point = Geo.centroid(SnapDisplay.pointsFor(hit)),
+                            bottomInsetPx = panelHeightPx + claimCardHeightPx +
+                                with(density) { CLAIM_CARD_GAP.roundToPx() },
+                        )
+                    }
                     hit != null
                 }
             },

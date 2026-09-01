@@ -28,7 +28,7 @@ data class BackupReport(
  * Two decisions shape everything here.
  *
  * **A restore merges; it never deletes.** Rows are written by primary key, so a
- * backup restored onto an empty install is a complete restore, and restored onto
+ * backup restored onto an empty installation is a complete restore, and restored onto
  * a device that has been walked on since is an addition. The alternative —
  * wiping first, so the device ends up an exact copy of the file — would delete
  * territories walked after the backup was taken, and this app's standing rule is
@@ -84,7 +84,7 @@ class BackupRepository(
      * The database half runs in one transaction: a restore interrupted half way
      * would otherwise leave claims whose walks are missing, which reads to the
      * user as data loss caused by the very feature meant to prevent it. The
-     * preferences are written afterwards and outside it — `SharedPreferences` has
+     * preferences are written afterward and outside it — `SharedPreferences` has
      * no part in a SQLite transaction, and doing them last means a failed restore
      * leaves the device's own settings alone.
      */
@@ -95,7 +95,7 @@ class BackupRepository(
 
             val existingTerritories = territoryDao.allIds().toSet()
             val existingWalks = walkDao.allIds().toSet()
-            // Counted before writing, because afterwards every id exists and the
+            // Counted before writing, because afterward every id exists and the
             // difference between "added" and "replaced" is gone.
             val territoriesReplaced = data.territories.count { it.id in existingTerritories }
             val walksReplaced = data.walks.count { it.id in existingWalks }

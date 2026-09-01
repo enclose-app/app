@@ -249,6 +249,37 @@ class MapController {
         return LatLng(loc.latitude, loc.longitude)
     }
 
+    /**
+     * Centre on a point, leaving the zoom exactly as the user set it.
+     *
+     * Distinct from [flyTo], which pulls the camera to a fixed street-level
+     * zoom, and from [fitTo], which frames a whole shape: this is for a claim
+     * the user has just tapped, where they have already chosen how much ground
+     * they want to see and re-zooming would take that choice off them.
+     *
+     * [bottomInsetPx] is the UI covering the foot of the map — the panel and
+     * the claim card. Without it the claim lands in the middle of the *window*,
+     * which is below the middle of the map anyone can actually see. The shift
+     * is measured through the live projection rather than guessed at in
+     * degrees, since a pixel is worth a different number of degrees at every
+     * zoom and latitude; that is exact here because the zoom does not change.
+     */
+    fun centerOn(point: LatLng, bottomInsetPx: Int = 0) {
+        val m = map ?: return
+        runCatching {
+            val target = MlLatLng(point.lat, point.lng)
+            val centre = if (bottomInsetPx > 0) {
+                val screen = m.projection.toScreenLocation(target)
+                m.projection.fromScreenLocation(
+                    android.graphics.PointF(screen.x, screen.y + bottomInsetPx / 2f),
+                )
+            } else {
+                target
+            }
+            m.animateCamera(CameraUpdateFactory.newLatLng(centre), CENTER_ANIM_MS)
+        }
+    }
+
     /** Animate to a fixed point (the saved home), at street-level zoom. */
     fun flyTo(point: LatLng) {
         val m = map ?: return
@@ -870,6 +901,12 @@ private fun enableUserLocation(map: MapLibreMap, style: Style, context: android.
 private const val WORLD_LAT = 20.0
 private const val WORLD_LNG = 0.0
 private const val WORLD_ZOOM = 2.0
+
+/**
+ * Centring on a tapped claim. Shorter than a fly-to: the shape is usually
+ * already on screen and this is a nudge, not a journey.
+ */
+private const val CENTER_ANIM_MS = 500
 
 private const val FOCUS_ZOOM = 16.0
 private const val FOCUS_ANIM_MS = 1200
