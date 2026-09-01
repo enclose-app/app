@@ -66,6 +66,8 @@ test that*, leaving the Android shell thin:
 | `RouteSimplify` | `RouteSimplifyTest` | points in, points out |
 | `SnapPolicy` | `SnapPolicyTest` | geometry only, no storage or network |
 | `SnapDisplay` | `SnapDisplayTest` | takes a `Territory`, returns what to draw |
+| `TerritoryHit` | `TerritoryHitTest` | a point and a list in, a `Territory` out |
+| `Geo.ringContains` | `GeoContainsTest` | plain rings, no map library |
 | `SnapTagger` | `SnapTaggerTest` | the `SnapStore` + `RouteMatcher` seams |
 | `FixWatch` | `FixWatchTest` | counts and an accuracy, no clock of its own |
 | `TrackingManager.reportRecordingUnavailable` | `TrackingManagerRecordingFailureTest` | manager has no Android/DB deps |
@@ -671,6 +673,25 @@ uploads walks.
   unreachable, and an empty menu never takes up the corner. `GpxImportDialogs`
   and `HowItWorksSheet` are `internal` because both screens can now show them:
   the import outlives the screen that started it.
+- **Tapping the map selects the claim under the finger.** `TerritoryHit` (pure,
+  tested) answers which one, and it hit-tests **what is drawn** — i.e. through
+  `SnapDisplay`, so a snapped outline is selected where the snapped outline is
+  what the eye sees. A tap on open ground clears the selection, which is the
+  same gesture read the other way round, and only a tap that *hit* something is
+  consumed, so nothing else on the map loses a gesture to this. Three details
+  are load-bearing: the selection is held **by id**, since the territory flow
+  hands back a new `Territory` on a rename, a city resolving or a later claim
+  carving into this one — and holding the id is also what makes a delete take
+  the card and the highlight with it. It lives in **`MainActivity`**, not in
+  `MapScreen`, because opening a claim disposes the map screen and a selection
+  remembered inside it would be gone on the way back, un-highlighting the claim
+  the user just came from. And the card **raises everything anchored to the
+  panel** — both rails, the snackbar, and MapLibre's logo and attribution — off
+  its measured height: a card that covers the last button on a rail makes that
+  control unreachable for as long as a claim is selected, and the attribution is
+  a licence requirement. The selection stands down entirely while a suggested
+  route is drawn, for the same reason the claims themselves do, and test mode
+  keeps the map tap for injecting points.
 - **The map's controls are data, not hard-coded buttons.** `MapControlSpec`
   describes each one once; `WindowLayoutPolicy.placeControls` (pure, tested)
   decides whether it's drawn on the right rail, the left rail or in the ⋮ menu,

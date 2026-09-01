@@ -103,6 +103,48 @@ object Geo {
             (exterior - holes).coerceAtLeast(0.0)
         }
 
+    /**
+     * Whether [point] falls inside [ring], which is treated as implicitly
+     * closed (the last point joins back to the first).
+     *
+     * Even-odd ray casting, done in degrees rather than in projected metres.
+     * That is not a shortcut: the equirectangular projection used everywhere
+     * else here scales each axis by a positive constant, and a positive scale
+     * per axis cannot change how many times a horizontal ray crosses an edge —
+     * so the answer is identical to projecting first, for a third of the work.
+     *
+     * A point exactly on an edge is not promised either answer; the caller for
+     * this is a fingertip on a map, where a metre either way is noise.
+     */
+    fun ringContains(ring: List<LatLng>, point: LatLng): Boolean {
+        if (ring.size < 3) return false
+        var inside = false
+        var j = ring.size - 1
+        for (i in ring.indices) {
+            val a = ring[i]
+            val b = ring[j]
+            // Only edges straddling the point's latitude can be crossed by a ray
+            // cast east from it.
+            if ((a.lat > point.lat) != (b.lat > point.lat)) {
+                val crossingLng = a.lng + (b.lng - a.lng) * (point.lat - a.lat) / (b.lat - a.lat)
+                if (point.lng < crossingLng) inside = !inside
+            }
+            j = i
+        }
+        return inside
+    }
+
+    /** Whether [point] is inside [polygon]'s exterior and in none of its holes. */
+    fun polygonContains(polygon: GeoPolygon, point: LatLng): Boolean {
+        val exterior = polygon.firstOrNull() ?: return false
+        if (!ringContains(exterior, point)) return false
+        return polygon.drop(1).none { hole -> ringContains(hole, point) }
+    }
+
+    /** Whether [point] falls in any part of a multipolygon. */
+    fun polygonsContain(polygons: List<GeoPolygon>, point: LatLng): Boolean =
+        polygons.any { polygonContains(it, point) }
+
     /** Centroid of a set of points (simple average). Useful for camera focus. */
     fun centroid(points: List<LatLng>): LatLng {
         val lat = points.map { it.lat }.average()

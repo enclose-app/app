@@ -102,6 +102,10 @@ private const val IMG_HOME = "img-home"
 private const val LYR_HOME = "lyr-home"
 private const val LYR_CLAIMED_FILL = "lyr-claimed-fill"
 private const val LYR_CLAIMED_LINE = "lyr-claimed-line"
+private const val SRC_SELECTED = "src-selected"
+private const val LYR_SELECTED_FILL = "lyr-selected-fill"
+private const val LYR_SELECTED_CASING = "lyr-selected-casing"
+private const val LYR_SELECTED_LINE = "lyr-selected-line"
 private const val SRC_CLOSE_ZONE = "src-close-zone"
 private const val LYR_CLOSE_ZONE_FILL = "lyr-close-zone-fill"
 private const val LYR_CLOSE_ZONE_LINE = "lyr-close-zone-line"
@@ -117,6 +121,8 @@ private fun milestoneImageId(index: Int): String = "img-milestone-$index"
 /** Holds references to the GeoJSON sources so overlays can be updated cheaply. */
 private class Overlays(
     val claimed: GeoJsonSource,
+    /** The one claim a map tap picked out, redrawn on top of the rest. */
+    val selected: GeoJsonSource,
     val closeZone: GeoJsonSource,
     val route: GeoJsonSource,
     val path: GeoJsonSource,
@@ -303,6 +309,13 @@ fun rememberMapController(): MapController {
 fun EncloseMap(
     walk: TrackingManager.WalkState,
     territories: List<Territory>,
+    /**
+     * The claim the user tapped, drawn brighter and outlined over the rest.
+     * Null draws no highlight. It is expected to be one of [territories]; a
+     * claim that is not in the list is still drawn, which is what keeps a
+     * selection visible for the frame in which the list is being replaced.
+     */
+    selected: Territory? = null,
     hasLocationPermission: Boolean,
     controller: MapController,
     modifier: Modifier = Modifier,
@@ -328,8 +341,15 @@ fun EncloseMap(
      * a tapped loop into a spiral.
      */
     followWalker: Boolean = true,
-    /** When non-null, map taps are forwarded here (test mode) and consumed. */
-    onMapTap: ((LatLng) -> Unit)? = null,
+    /**
+     * Map taps, in map coordinates. Returning true consumes the tap.
+     *
+     * Two callers share this: test mode, which turns a tap into a walk point,
+     * and the selection hit-test, which turns it into a claim. A tap that
+     * neither wanted — open ground, no test walk — is handed back to the map
+     * rather than swallowed.
+     */
+    onMapTap: ((LatLng) -> Boolean)? = null,
     /** Space (px) reserved at the bottom by UI, so map ornaments clear it. */
     bottomInsetPx: Int = 0,
     /** Space (px) reserved at the top by UI, so the compass clears it. */
@@ -438,12 +458,7 @@ fun EncloseMap(
                     }
                     mlMap.addOnMapClickListener { point ->
                         val handler = currentOnMapTap
-                        if (handler != null) {
-                            handler(LatLng(point.latitude, point.longitude))
-                            true // consume the tap in test mode
-                        } else {
-                            false
-                        }
+                        handler?.invoke(LatLng(point.latitude, point.longitude)) ?: false
                     }
                     // Mouse-wheel zoom (emulator/desktop): zoom toward the cursor.
                     view.setOnGenericMotionListener { _, event ->
@@ -535,7 +550,7 @@ fun EncloseMap(
     // style and the accents too, because the kilometre badges are images owned by
     // the style and painted from the theme: a basemap swap drops them, and a
     // theme change has to repaint them (see [Overlays.milestoneColors]).
-    LaunchedEffect(overlays, style, accents, walk, territories, plannedRoute) {
+    LaunchedEffect(overlays, style, accents, walk, territories, selected, plannedRoute) {
         val o = overlays ?: return@LaunchedEffect
         // **Claims stand down while a route is on the map.** A suggested route is
         // a line to follow through streets, and the claims are filled polygons
@@ -549,6 +564,10 @@ fun EncloseMap(
         // floating window can't disagree about it.
         val claims = if (plannedRoute.isEmpty()) territories else emptyList()
         o.claimed.setGeoJson(territoriesToFeatures(claims))
+        // The highlight stands down with the claims themselves: with a route on
+        // the map there is nothing drawn for it to be the selected one *of*.
+        val highlighted = if (plannedRoute.isEmpty()) listOfNotNull(selected) else emptyList()
+        o.selected.setGeoJson(territoriesToFeatures(highlighted))
         o.closeZone.setGeoJson(closeZoneFeature(walk, accents))
         o.path.setGeoJson(pathToFeature(walk.path))
         o.start.setGeoJson(pointToFeature(walk.start))
@@ -645,6 +664,7 @@ private fun installOverlays(
     context: android.content.Context,
 ): Overlays {
     val claimed = GeoJsonSource(SRC_CLAIMED)
+    val selected = GeoJsonSource(SRC_SELECTED)
     val closeZone = GeoJsonSource(SRC_CLOSE_ZONE)
     val route = GeoJsonSource(SRC_ROUTE)
     val path = GeoJsonSource(SRC_PATH)
@@ -652,6 +672,7 @@ private fun installOverlays(
     val home = GeoJsonSource(SRC_HOME)
     val milestones = GeoJsonSource(SRC_MILESTONES)
     style.addSource(claimed)
+    style.addSource(selected)
     style.addSource(closeZone)
     style.addSource(route)
     style.addSource(path)
@@ -674,6 +695,33 @@ private fun installOverlays(
         LineLayer(LYR_CLAIMED_LINE, SRC_CLAIMED).withProperties(
             PropertyFactory.lineColor(Expression.get("color")),
             PropertyFactory.lineWidth(2.5f),
+            PropertyFactory.lineJoin("round"),
+        ),
+    )
+    // The tapped claim, drawn over the others in its own colour: a stronger
+    // fill, and a white casing under a thicker outline so the edge reads
+    // against neighbouring claims of a similar colour on either basemap. Kept
+    // to the claim's own colour rather than a highlight colour of its own —
+    // the card naming it is a few pixels away, and a claim that changes colour
+    // when you touch it stops looking like the claim you touched.
+    style.addLayer(
+        FillLayer(LYR_SELECTED_FILL, SRC_SELECTED).withProperties(
+            PropertyFactory.fillColor(Expression.get("color")),
+            PropertyFactory.fillOpacity(0.5f),
+        ),
+    )
+    style.addLayer(
+        LineLayer(LYR_SELECTED_CASING, SRC_SELECTED).withProperties(
+            PropertyFactory.lineColor("#FFFFFF"),
+            PropertyFactory.lineOpacity(0.85f),
+            PropertyFactory.lineWidth(7f),
+            PropertyFactory.lineJoin("round"),
+        ),
+    )
+    style.addLayer(
+        LineLayer(LYR_SELECTED_LINE, SRC_SELECTED).withProperties(
+            PropertyFactory.lineColor(Expression.get("color")),
+            PropertyFactory.lineWidth(3.5f),
             PropertyFactory.lineJoin("round"),
         ),
     )
@@ -762,7 +810,7 @@ private fun installOverlays(
             PropertyFactory.iconIgnorePlacement(true),
         ),
     )
-    return Overlays(claimed, closeZone, route, path, start, home, milestones)
+    return Overlays(claimed, selected, closeZone, route, path, start, home, milestones)
 }
 
 /**

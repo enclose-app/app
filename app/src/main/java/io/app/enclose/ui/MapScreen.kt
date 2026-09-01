@@ -37,6 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
@@ -46,6 +47,7 @@ import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LocationOff
@@ -119,6 +121,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.app.enclose.data.SnapDisplay
 import io.app.enclose.data.Territory
+import io.app.enclose.data.TerritoryHit
 import io.app.enclose.geo.LatLng
 import io.app.enclose.tracking.BlockReason
 import io.app.enclose.tracking.ActivityType
@@ -166,6 +169,13 @@ fun MapScreen(
     onEnterFloatingWindow: () -> Boolean = { false },
     onOpenProfile: () -> Unit = {},
     onOpenTerritory: (String) -> Unit = {},
+    /**
+     * The claim a map tap picked out, by id. Hoisted because opening a claim
+     * disposes this screen, and a selection kept here would not be there on the
+     * way back — see [MainActivity].
+     */
+    selectedClaimId: String? = null,
+    onSelectClaim: (String?) -> Unit = {},
     /** Points to fit the camera to once (e.g. from "Show on map"). */
     pendingFocus: List<LatLng>? = null,
     /** Called after [pendingFocus] has been consumed so it fires only once. */
@@ -218,6 +228,15 @@ fun MapScreen(
     // The basemap follows the system theme until the user overrides it.
     val basemapDark = basemapStyle.isDark(isSystemInDarkTheme())
 
+    /**
+     * The selected claim, or null — including when it has just been deleted,
+     * which is how the card and the highlight go away without being told.
+     * Withheld while a route is drawn, since the claims aren't drawn then and a
+     * card naming something invisible is a card about nothing.
+     */
+    val selectedTerritory = territories.firstOrNull { it.id == selectedClaimId }
+        ?.takeIf { drawnRoute.isEmpty() }
+
     var showList by rememberSaveable { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     // Saved: a rotation with the planner open shouldn't drop the user back on
@@ -249,6 +268,20 @@ fun MapScreen(
     var plannerHeightPx by remember { mutableIntStateOf(0) }
     var topBarHeightPx by remember { mutableIntStateOf(0) }
     val panelHeight = with(density) { panelHeightPx.toDp() }
+
+    // Measured height of the selected-claim card, and the space it takes at the
+    // bottom of the map: everything anchored to the panel — both control rails,
+    // the snackbar, and MapLibre's own logo and attribution — is raised by it.
+    // A card that covers the last button on a rail makes that control
+    // unreachable for as long as a claim is selected, and the attribution is a
+    // licence requirement, not a decoration.
+    var claimCardHeightPx by remember { mutableIntStateOf(0) }
+    val claimCardSpace = if (selectedTerritory != null) {
+        with(density) { claimCardHeightPx.toDp() } + CLAIM_CARD_GAP
+    } else {
+        0.dp
+    }
+    val claimCardSpacePx = with(density) { claimCardSpace.roundToPx() }
 
     // A split-screen half is about half the height the expanded panel was drawn
     // for, so the window itself gets a say in whether the panel is folded.
@@ -539,7 +572,7 @@ fun MapScreen(
     // rather than assumed — the panel's height depends on what the walk is
     // doing, so a guess would be wrong exactly when the window is tightest.
     val railHeightDp = windowHeightDp -
-        with(density) { (panelHeightPx + topBarHeightPx).toDp().value.toInt() } -
+        with(density) { (panelHeightPx + claimCardSpacePx + topBarHeightPx).toDp().value.toInt() } -
         RAIL_MARGIN_DP -
         COMPASS_CLEARANCE_DP
     val layout = WindowLayoutPolicy.placeControls(controls.map { it.control }, railHeightDp)
@@ -563,8 +596,26 @@ fun MapScreen(
             // Tapped points place themselves; a camera that chases them moves the
             // map out from under the finger placing the next one.
             followWalker = !testMode,
-            onMapTap = if (testMode) viewModel::addTestPoint else null,
-            bottomInsetPx = panelHeightPx,
+            selected = selectedTerritory,
+            onMapTap = { point ->
+                if (testMode) {
+                    viewModel.addTestPoint(point)
+                    true
+                } else {
+                    // Only what the map is drawing can be picked: with a route
+                    // up the claims are hidden, and selecting one the user
+                    // cannot see would be the map answering for a shape that
+                    // isn't there. A tap on open ground clears the selection,
+                    // which is the same gesture read the other way round.
+                    val hit = TerritoryHit.at(
+                        point = point,
+                        territories = if (drawnRoute.isEmpty()) territories else emptyList(),
+                    )
+                    onSelectClaim(hit?.id)
+                    hit != null
+                }
+            },
+            bottomInsetPx = panelHeightPx + claimCardSpacePx,
             topInsetPx = topBarHeightPx,
             basemap = basemapStyle,
             // Read once per composition: stable while the map lives, refreshed
@@ -668,7 +719,7 @@ fun MapScreen(
                 .padding(end = 12.dp)
                 // The panel's measured height already includes its own bottom
                 // inset, so the rail must not add one as well.
-                .padding(bottom = panelHeight + 12.dp),
+                .padding(bottom = panelHeight + claimCardSpace + 12.dp),
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -697,7 +748,7 @@ fun MapScreen(
                         WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
                     )
                     .padding(start = 12.dp)
-                    .padding(bottom = panelHeight + ORNAMENT_CLEARANCE),
+                    .padding(bottom = panelHeight + claimCardSpace + ORNAMENT_CLEARANCE),
                 horizontalAlignment = Alignment.Start,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -713,13 +764,38 @@ fun MapScreen(
             }
         }
 
+        // The claim under the last tap, named where the finger already is.
+        // Anchored to the panel like the snackbar: a card that names a claim is
+        // no use if the controls are sitting on top of it. It survives a trip
+        // to the detail screen and back, so returning lands on the same claim,
+        // still highlighted.
+        selectedTerritory?.let { territory ->
+            SelectedClaimCard(
+                territory = territory,
+                onOpen = { onOpenTerritory(territory.id) },
+                onDismiss = { onSelectClaim(null) },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
+                    )
+                    .padding(bottom = panelHeight + CLAIM_CARD_GAP)
+                    .padding(horizontal = 12.dp)
+                    // Innermost, so what is measured is the card itself — the
+                    // paddings above it are the space it is being held clear of,
+                    // and counting them here would raise the rails by the height
+                    // of the panel a second time.
+                    .onSizeChanged { claimCardHeightPx = it.height },
+            )
+        }
+
         // The snackbar sits directly above the panel — anchored to the panel's
         // measured height so an "Undo" action is never covered.
         SnackbarHost(
             snackbarHost,
             Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = panelHeight + 8.dp)
+                .padding(bottom = panelHeight + claimCardSpace + 8.dp)
                 .padding(horizontal = 12.dp),
         )
 
@@ -1072,6 +1148,87 @@ private fun MapLoadingIndicator() {
         ) {
             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
             Text("Loading map…", style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+/**
+ * The claim a map tap picked out: what it is, and the way into it.
+ *
+ * Deliberately a card and not a sheet. A tap on the map is a question about the
+ * ground under the finger — "whose is this, how big was it?" — and answering it
+ * by covering half the map with the very thing being asked about is the wrong
+ * trade. Everything else about the claim is one more tap away, on the detail
+ * screen this opens.
+ */
+@Composable
+private fun SelectedClaimCard(
+    territory: Territory,
+    onOpen: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val now = rememberNow()
+    // Area first, then where and when — the same order the list rows use, so a
+    // claim reads the same wherever it is met.
+    val summary = listOfNotNull(
+        formatArea(territory.areaSqMeters),
+        territory.city.takeIf { it.isNotBlank() },
+        formatRelativeDay(territory.claimedAtEpochMs, now),
+    ).joinToString(" · ")
+
+    MapSurface(
+        modifier = modifier.widthIn(max = PANEL_MAX_WIDTH),
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable(
+                    onClickLabel = "Open ${territory.name}",
+                    role = Role.Button,
+                    onClick = onOpen,
+                )
+                .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            // The claim's own colour, which is what identifies it on the map.
+            Box(
+                Modifier
+                    .size(14.dp)
+                    .clip(CircleShape)
+                    .background(hexColor(territory.colorHex)),
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    territory.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    summary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            // Tapping open ground clears the selection too; this is for the
+            // times the ground you want to tap is another claim.
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = "Clear selected claim",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -2551,6 +2708,9 @@ private const val COMPASS_CLEARANCE_DP = 60
  * at one end and the button at the other stop reading as one control — which is
  * what a landscape phone and any tablet would otherwise produce.
  */
+/** Breathing room between the selected-claim card and the panel below it. */
+private val CLAIM_CARD_GAP = 8.dp
+
 private val PANEL_MAX_WIDTH = 600.dp
 
 /**

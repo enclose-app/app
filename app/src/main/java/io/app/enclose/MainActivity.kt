@@ -176,6 +176,14 @@ class MainActivity : ComponentActivity() {
                     mutableStateOf<io.app.enclose.data.Territory?>(null)
                 }
 
+                // The claim picked out by a tap on the map. Hoisted to here
+                // rather than kept inside MapScreen because opening a claim
+                // leaves the map: the `when` below disposes MapScreen, and a
+                // selection remembered inside it would be gone on the way back,
+                // dropping the highlight off the very claim the user just came
+                // from. Saved by id, so a rotation or a process kill keeps it.
+                var selectedClaimId by rememberSaveable { mutableStateOf<String?>(null) }
+
                 val permissionLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestMultiplePermissions(),
                 ) { result ->
@@ -237,6 +245,8 @@ class MainActivity : ComponentActivity() {
                             onEnterFloatingWindow = ::enterFloatingWindow,
                             onOpenProfile = { screen = Screen.Profile },
                             onOpenTerritory = { id -> screen = Screen.TerritoryDetail(id) },
+                            selectedClaimId = selectedClaimId,
+                            onSelectClaim = { id -> selectedClaimId = id },
                             pendingFocus = pendingFocus,
                             onFocusConsumed = { pendingFocus = null },
                             pendingDelete = pendingDelete,
