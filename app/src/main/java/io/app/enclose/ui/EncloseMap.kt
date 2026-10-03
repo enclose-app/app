@@ -93,8 +93,6 @@ enum class BasemapStyle {
 }
 
 private const val SRC_CLAIMED = "src-claimed"
-private const val SRC_ROUTE = "src-route"
-private const val LYR_ROUTE = "lyr-route"
 private const val SRC_PATH = "src-path"
 private const val SRC_START = "src-start"
 private const val SRC_HOME = "src-home"
@@ -124,7 +122,6 @@ private class Overlays(
     /** The one claim a map tap picked out, redrawn on top of the rest. */
     val selected: GeoJsonSource,
     val closeZone: GeoJsonSource,
-    val route: GeoJsonSource,
     val path: GeoJsonSource,
     val start: GeoJsonSource,
     val home: GeoJsonSource,
@@ -220,32 +217,6 @@ class MapController {
     fun currentLocation(): LatLng? {
         val m = map ?: return null
         val loc = lastKnownLocation(m) ?: return null
-        return LatLng(loc.latitude, loc.longitude)
-    }
-
-    /**
-     * Where the user is *now*, or null if the newest fix is older than
-     * [maxAgeMs].
-     *
-     * The last known location is not the same thing as where somebody is
-     * standing. It survives across sessions, so an app opened indoors — or on a
-     * device that has not had a fix since another city — hands out a position
-     * that is confidently, precisely wrong. That is tolerable for framing a map
-     * and not tolerable for planning a walk from: the route comes back drawn
-     * around wherever the phone last saw sky, off screen, looking for all the
-     * world like the feature is broken. (Found exactly this way on an emulator,
-     * which answers with Mountain View until its first mock fix lands.)
-     *
-     * Aged by `elapsedRealtimeNanos` rather than by wall clock, for the reason
-     * `LocationService` records: the wall clock can be stepped by the network
-     * while the monotonic one cannot.
-     */
-    fun recentLocation(maxAgeMs: Long): LatLng? {
-        val m = map ?: return null
-        val loc = runCatching { rawLastKnownLocation(m) }.getOrNull() ?: return null
-        val ageMs = (android.os.SystemClock.elapsedRealtimeNanos() - loc.elapsedRealtimeNanos) /
-            1_000_000
-        if (ageMs > maxAgeMs) return null
         return LatLng(loc.latitude, loc.longitude)
     }
 
@@ -352,19 +323,6 @@ fun EncloseMap(
     modifier: Modifier = Modifier,
     /** The saved home position; null draws no marker at all. */
     home: LatLng? = null,
-    /**
-     * A suggested route to follow, drawn faintly under everything else. Empty
-     * draws nothing.
-     *
-     * Under, and faint, on purpose: this is the walk somebody was *offered*, and
-     * the moment they set off it is the walked trail that matters. A route drawn
-     * as boldly as the trail would leave them unable to see how far round they
-     * had got.
-     *
-     * **While this is non-empty the claimed territories are not drawn at all** —
-     * see the overlay effect below for why.
-     */
-    plannedRoute: List<LatLng> = emptyList(),
     /**
      * Whether the camera keeps up with the walker. False where the points are
      * coming from the user's own taps rather than from GPS: re-centring on each
@@ -581,24 +539,10 @@ fun EncloseMap(
     // style and the accents too, because the kilometre badges are images owned by
     // the style and painted from the theme: a basemap swap drops them, and a
     // theme change has to repaint them (see [Overlays.milestoneColors]).
-    LaunchedEffect(overlays, style, accents, walk, territories, selected, plannedRoute) {
+    LaunchedEffect(overlays, style, accents, walk, territories, selected) {
         val o = overlays ?: return@LaunchedEffect
-        // **Claims stand down while a route is on the map.** A suggested route is
-        // a line to follow through streets, and the claims are filled polygons
-        // covering exactly the ground it runs across — read together they are
-        // unreadable, and the one you need to see is the one you haven't walked
-        // yet. They come back the moment the route goes, which includes the walk
-        // ending: stopping clears the route (see EncloseViewModel), so the map a
-        // walker returns to is the map of what they hold.
-        //
-        // Decided here rather than in the callers so the full screen and the
-        // floating window can't disagree about it.
-        val claims = if (plannedRoute.isEmpty()) territories else emptyList()
-        o.claimed.setGeoJson(territoriesToFeatures(claims))
-        // The highlight stands down with the claims themselves: with a route on
-        // the map there is nothing drawn for it to be the selected one *of*.
-        val highlighted = if (plannedRoute.isEmpty()) listOfNotNull(selected) else emptyList()
-        o.selected.setGeoJson(territoriesToFeatures(highlighted))
+        o.claimed.setGeoJson(territoriesToFeatures(territories))
+        o.selected.setGeoJson(territoriesToFeatures(listOfNotNull(selected)))
         o.closeZone.setGeoJson(closeZoneFeature(walk, accents))
         o.path.setGeoJson(pathToFeature(walk.path))
         o.start.setGeoJson(pointToFeature(walk.start))
@@ -612,14 +556,6 @@ fun EncloseMap(
         val s = style
         if (s != null) ensureMilestoneImages(s, o, markers.size, accents, context)
         o.milestones.setGeoJson(milestonesToFeatures(markers))
-    }
-
-    // The suggested route changes only when one is accepted or cleared, so it
-    // gets its own effect rather than being rebuilt on every fix — it is the
-    // largest of these geometries and the least likely to have changed.
-    LaunchedEffect(overlays, plannedRoute) {
-        val o = overlays ?: return@LaunchedEffect
-        o.route.setGeoJson(pathToFeature(plannedRoute))
     }
 
     // Home changes on its own schedule — it's set and reset from the button, not
@@ -697,7 +633,6 @@ private fun installOverlays(
     val claimed = GeoJsonSource(SRC_CLAIMED)
     val selected = GeoJsonSource(SRC_SELECTED)
     val closeZone = GeoJsonSource(SRC_CLOSE_ZONE)
-    val route = GeoJsonSource(SRC_ROUTE)
     val path = GeoJsonSource(SRC_PATH)
     val start = GeoJsonSource(SRC_START)
     val home = GeoJsonSource(SRC_HOME)
@@ -705,7 +640,6 @@ private fun installOverlays(
     style.addSource(claimed)
     style.addSource(selected)
     style.addSource(closeZone)
-    style.addSource(route)
     style.addSource(path)
     style.addSource(start)
     style.addSource(home)
@@ -770,21 +704,6 @@ private fun installOverlays(
             PropertyFactory.lineDasharray(arrayOf(2f, 2f)),
         ),
     )
-    // The suggested route, under the trail and behind it in every sense: dashed
-    // so it reads as "not walked yet" even where it runs along a street the map
-    // has drawn in a similar colour, and half-transparent so the basemap's own
-    // road names stay readable through it — somebody following this needs the
-    // street names more than they need a bold line.
-    style.addLayer(
-        LineLayer(LYR_ROUTE, SRC_ROUTE).withProperties(
-            PropertyFactory.lineColor(accents.route.toHexString()),
-            PropertyFactory.lineOpacity(0.55f),
-            PropertyFactory.lineWidth(7f),
-            PropertyFactory.lineDasharray(arrayOf(1.6f, 1.1f)),
-            PropertyFactory.lineCap("round"),
-            PropertyFactory.lineJoin("round"),
-        ),
-    )
     // Casing under the trail: keeps the amber line legible over both pale
     // pavement and dark parkland.
     style.addLayer(
@@ -841,7 +760,7 @@ private fun installOverlays(
             PropertyFactory.iconIgnorePlacement(true),
         ),
     )
-    return Overlays(claimed, selected, closeZone, route, path, start, home, milestones)
+    return Overlays(claimed, selected, closeZone, path, start, home, milestones)
 }
 
 /**

@@ -16,8 +16,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         WalkProgressEntity::class,
         WalkProgressPointEntity::class,
         OfflineRegionEntity::class,
+        VoidedWalkEntity::class,
     ],
-    version = 12,
+    version = 13,
     // Exported to app/schemas so every future migration can be written against
     // the real previous schema and verified, instead of guessed at.
     exportSchema = true,
@@ -34,6 +35,8 @@ abstract class EncloseDatabase : RoomDatabase() {
     abstract fun walkProgressDao(): WalkProgressDao
 
     abstract fun offlineRegionDao(): OfflineRegionDao
+
+    abstract fun voidedWalkDao(): VoidedWalkDao
 
     companion object {
         @Volatile
@@ -166,6 +169,23 @@ abstract class EncloseDatabase : RoomDatabase() {
         }
 
         /**
+         * Adds `voided_walks`: walks the anti-cheat ended, kept rather than
+         * erased (see [VoidedWalk]). A new table, so nothing existing changes;
+         * the SQL is copied verbatim from schemas/13.json, which Room validates
+         * against. Starts empty — voids before this version were already gone.
+         */
+        private val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `voided_walks` (`id` TEXT NOT NULL, " +
+                        "`pathJson` TEXT NOT NULL, `startedAtEpochMs` INTEGER, " +
+                        "`voidedAtEpochMs` INTEGER NOT NULL, `distanceMeters` REAL NOT NULL, " +
+                        "`reason` TEXT NOT NULL, PRIMARY KEY(`id`))",
+                )
+            }
+        }
+
+        /**
          * There is deliberately **no** destructive-migration fallback here.
          *
          * A territory is a walk someone actually went out and did; it cannot be
@@ -193,6 +213,7 @@ abstract class EncloseDatabase : RoomDatabase() {
                         MIGRATION_9_10,
                         MIGRATION_10_11,
                         MIGRATION_11_12,
+                        MIGRATION_12_13,
                     )
                     .build().also { instance = it }
             }

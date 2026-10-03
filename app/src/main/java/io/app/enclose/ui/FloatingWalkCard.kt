@@ -52,8 +52,6 @@ fun FloatingWalkCard(
     territories: List<Territory>,
     hasLocationPermission: Boolean,
     basemap: BasemapStyle,
-    /** The suggested route being followed, drawn faintly under the trail. */
-    plannedRoute: List<LatLng> = emptyList(),
 ) {
     val accents = LocalEncloseAccents.current
     val controller = rememberMapController()
@@ -91,7 +89,6 @@ fun FloatingWalkCard(
             hasLocationPermission = hasLocationPermission,
             controller = controller,
             basemap = basemap,
-            plannedRoute = plannedRoute,
             // No initial camera on purpose: with none saved, the map flies to
             // the user as soon as it has a fix, which is the only framing a
             // window this size is any use at.

@@ -79,13 +79,6 @@ test that*, leaving the Android shell thin:
 | `WindowLayoutPolicy` | `WindowLayoutPolicyTest` | window size in as plain Ints, controls as an enum |
 | `SplitScreenSupport` | `SplitScreenSupportTest` | `Build` fields passed in, not read |
 | `ActivityType.resolve` | `ActivityTypeTest` | the stored name is just a String |
-| `Mvt` | `MvtTest` | bytes in, lines out — the test writes its own tiles |
-| `SlippyTile` | `SlippyTileTest` | tile arithmetic with no map library |
-| `WalkableWays` | `WalkableWaysTest` | tags in as a plain `Map<String, String>` |
-| `PathGraph` | `PathGraphTest` | ways in, junctions out |
-| `LoopPlanner` | `LoopPlannerTest` | a graph, a target and a seed — no clock |
-| `PastRoutes` | `PastRoutesTest` | domain objects only |
-| `RouteSuggester` | `RouteSuggesterTest` | the `WalkableArea` seam |
 | `DistanceMarkers` | `DistanceMarkersTest` | points in, marker positions out |
 | `Json` | `JsonTest` | hand-rolled, so no `org.json` |
 | `Backup` | `BackupTest` | entities are plain data classes |
@@ -264,6 +257,13 @@ Treat this as a standing constraint rather than a past fix:
   (which has an undo) removes a row.
 - **The claim write is atomic** — see `applyClaim` above.
 - **The walk in progress is on disk** — see below.
+- **A voided walk keeps its path.** The void stands (nothing is claimed), but
+  `TrackingManager.voidWalk` hands the path to `voidedRecordings` before it
+  resets, and `EncloseApp` saves it to `voided_walks` (`VoidedWalk`). It is kept
+  apart from `walks` on purpose — everything reading `walks` assumes a closed
+  loop. Profile lists them under "Walks that didn't count", with Share as GPX and
+  a confirmed Delete. `VoidedWalk.Reason` mirrors `VoidReason` by name, since
+  `data` doesn't import `tracking`; `TrackingManagerVoidTest` pins the mapping.
 
 A walked territory can't be re-created from the couch, which is what makes these
 different from ordinary state. Weigh any change here accordingly.
@@ -417,129 +417,9 @@ caller, including the two wire traps (Valhalla encodes polylines at 1e6, not 1e5
 `trace_route` re-routes through GPS gaps and returns one shape per leg with
 duplicated vertices).
 
-### Suggested routes
-
-Ask for a distance, get a loop to walk **from where you are standing**; press
-again for a different one; accept it and it is drawn faintly under the walk while
-you follow it. The map control is `MapControl.PLAN`; the sheet is
-`RoutePlannerSheet`; the state machine is `RoutePlan` in `EncloseViewModel`.
-
-Seven constraints, none of them incidental:
-
-- **Every suggestion starts from a *fresh* fix.** Not the camera centre, not
-  home, not the last walk — and specifically **not `currentLocation()`**, which
-  is the last known fix and therefore survives across sessions. Planning from a
-  stale one produces a real, correct route drawn around wherever the phone last
-  saw sky, off screen, looking exactly like a broken feature: found on an
-  emulator, whose last known location is Mountain View until the first mock fix
-  lands, and the same thing happens to anyone who opens the app indoors after
-  travelling. `MapController.recentLocation(FRESH_FIX_MS)` is what the sheet
-  passes, aged on `elapsedRealtimeNanos`, and no usable fix is its own reported
-  outcome (`RouteUnavailable.NO_FIX`). A previous walk is only offered when its
-  near end is within `PastRoutes.MAX_START_METERS`, and a planned loop is refused
-  outright when there is no mapped path within `PathGraph.NEAR_START_METERS`.
-- **No motorways, no trunk roads.** `WalkableWays` is an **allowlist** of road
-  classes, not a blocklist, because tiles gain classes over time and the failure
-  mode of guessing wrong points one way. `access`/`foot` restrictions are obeyed,
-  `foot` overrides `access`, and everything else is priced rather than banned —
-  steps and main roads are walkable, just expensive (`comfort` is a cost
-  multiplier, so a park path has to be under a third longer to win).
-- **The road network comes out of the basemap the app already draws.** There is
-  no routing host and no API key: `Mvt` (a hand-rolled vector-tile reader, in the
-  same idiom as `Polyline` and `GpxImporter`) decodes the `transportation` layer
-  of OpenFreeMap tiles, and `PathGraph` rebuilds a network from it. This is why
-  the feature could be built at all where `RouteMatcher` is still deliberately
-  unbound — **it reads tiles rather than uploading a route**, so nothing about
-  where anyone walked leaves the device; the only thing a server learns is which
-  ~4 km tile someone asked about.
-- **Zoom 13, capped and cached.** A zoom 14 tile is ~700 KB; zoom 13 covers four
-  times the ground for a quarter of that with the same streets and paths,
-  generalised to about a metre. `OpenFreeMapWalkableArea` caps a search at
-  `MAX_TILES` and caches decoded tiles so *shuffling costs nothing* — which is
-  the point, given `OfflineTilesWorker` refuses to spend mobile data at all. The
-  zoom, the cap and the cache are the feature, not tuning. `RouteSuggester`
-  caches the built graph too, for the same reason and the ART one: turning a
-  city's tiles into a network measured 150 ms on a desktop JVM, and this codebase
-  has already learned once what that figure is worth on a device.
-- **Three properties of vector tiles have to be undone before anything routes**,
-  and all three fail the same silent way — no route found, and nothing on screen
-  to say why. All three were found by running the pipeline over a real tile, and
-  each is pinned by a test in `PathGraphTest`:
-  1. Tiles **clip roads at their own edges**, so `Mvt` cuts at the boundary
-     **interpolating**, not dropping vertices — a dropped vertex leaves a gap the
-     width of a whole segment — and `PathGraph` snaps ends within `SNAP_METERS`.
-  2. Tiles are **simplified for drawing**, which removes the junction vertex
-     where a side street meets a road running straight past it. Vertex-to-vertex
-     snapping alone therefore finds no T-junctions at all (measured: 3 000
-     disconnected fragments, no loop findable anywhere), so a vertex lying within
-     `TOUCH_METERS` of another way's *segment* splits it. `WalkableWay.level`
-     (from `layer`/`brunnel`) is what stops that welding a footbridge to the road
-     beneath it; ways sharing a vertex join regardless of level, which is how a
-     bridge meets what it lands on.
-  3. A tile carries **fragments** — a service road whose link was simplified
-     away, a path drawn inside a park. One of them happened to hold the two nodes
-     nearest the middle of the test tile, so `nearestNode` handed the planner a
-     two-node island and every search died over an otherwise healthy graph.
-     Fragments are dropped at build time, by a **relative** rule
-     (`ISLAND_FRACTION` of the largest component): five junctions beside four
-     thousand is a stray, five junctions and nothing else is a village.
-
-  Runs of degree-2 vertices are then contracted into one edge that keeps its
-  polyline, so the search sees junctions while the drawing keeps every bend.
-- **Evidence before guesswork.** `PastRoutes` offers loops the walker has already
-  closed, ahead of anything generated: a walked route has no missing pavement and
-  no locked gate, and it closed once already. Generated loops are biased towards
-  claimed ground by `FamiliarGround`, which is a **discount, not a requirement** —
-  insisting on familiar ground would mean one claim yields one suggestion
-  forever. `LoopPlanner` is two shortest paths (out, then back with the outbound
-  edges charged `RETRACE_PENALTY` times over), with the radius refined against
-  the measured length; seeds are spread by the golden angle so consecutive
-  presses go somewhere visibly different, and the whole search is deterministic
-  per seed so a rotation can't quietly swap the route out.
-- **A route on the map hides the claims.** While `plannedRoute` is non-empty
-  `EncloseMap` draws no territories at all: the route is a thin line through
-  streets and the claims are filled polygons over exactly the ground it crosses,
-  so together they are unreadable and the one you need is the one you haven't
-  walked. They come back the instant the route goes — cleared by hand, or by the
-  walk ending, which is why **every** ending clears it (`stopWalk`,
-  `cancelWalk`, the `voidEvents` collector — the one that used to leave a route
-  drawn over a map with nothing on it — and, for Stop on the watch,
-  `WatchCommandService` clears the stored route while a view-model collector on
-  `isTracking` going false clears the on-screen copy). Decided inside `EncloseMap`
-  rather than by its callers so the full screen and the floating window can't
-  disagree.
-- **A suggestion is drawn while it is being considered, not only once taken.**
-  Choosing between loops described only as "4.6 km, new ground" is choosing
-  blind; the map is the answer to "do I want to walk that?". So `MapScreen`
-  draws the previewed route (falling back to the accepted one) and frames it
-  with `fitTo(route, bottomInsetPx)` in the half of the map the sheet isn't
-  covering — the sheet reports its own measured height for that. Three rules
-  follow: **dismissing the sheet keeps the suggestion** (looking at the map must
-  not be the gesture that loses it), **Clear in the sheet header takes whatever
-  is drawn off the map** — a suggestion being reviewed *or* an accepted route,
-  since to the person looking at the map they are the same thing, the line on it
-  — with holding the route control as the shortcut for the same (the Home/float
-  idiom), and the sheet's result area has a fixed minimum height and scrolls. That last one is not cosmetic: content growing when the first
-  suggestion arrives re-anchors the `ModalBottomSheet` and settles it to hidden,
-  so the very first press dismissed the sheet that asked for it.
-- **Accepting a route changes nothing about how a walk works.** It does not start
-  the walk by itself (the same `location.canRecord` guard as the Start button
-  runs, and test mode still warns), does not relax `MotionGate`, does not close
-  the loop, and has no bearing on what gets claimed. Stop is still what closes a
-  loop, exactly as everywhere else.
-
-**Online only, and the only thing in the app that is.** `EncloseViewModel`
-checks `NET_CAPABILITY_VALIDATED` before it does anything — up front rather than
-after a timeout, and it withholds previously walked routes too, because a planner
-that answered offline with history only would look like a broken shuffle button.
-
-The accepted route is persisted (`UserSettings.plannedRoute`, an encoded
-polyline) for one reason: a walk survives a low-memory kill, so the line being
-followed has to survive with it. It is cleared when the walk ends.
-
 ### Persistence
 
-Room (KSP), database version 12, six entities: `territories`, `walks`, a
+Room (KSP), database version 13, seven entities: `territories`, `walks`, `voided_walks`, a
 single-row `profile` (`id = "me"`, auto-created with a random guest name on
 first access), and the `walk_progress` / `walk_progress_points` pair backing the
 walk in progress, and `offline_regions`. Geometry is stored as **hand-rolled JSON strings** in
@@ -598,7 +478,7 @@ box between two cities is mostly countryside.
 
 `UserSettings` (SharedPreferences, file `enclose_ui`) holds **every** preference:
 seen-intro, activity type, basemap, territory sort, test mode, snap-to-paths, panel-collapsed,
-floating-window, home, the planned route and the distance it was asked for, the offline
+floating-window, home, the offline
 downloader's style and pixel ratio, and the map camera. `SettingsSnapshot` mirrors
 the lot for backup — add a preference in three places (the class, `snapshot()`,
 `restore()`) or it silently won't be backed up. It exists as one class because the previous ad-hoc `prefs.getString(...)`
@@ -805,12 +685,9 @@ uploads walks.
   the OpenStreetMap attribution. PiP sends touches to the system, so the card is
   a read-out, not a control panel.
 - `EncloseMap` wraps MapLibre's `MapView` in an `AndroidView`, forwarding the
-  Compose lifecycle. State reaches the map by updating seven named
-  `GeoJsonSource`s (claimed polygons, closing zone, the suggested route, live
-  path, start anchor, the saved home, and the kilometre markers). The suggested route is drawn dashed,
-  half-transparent and **under** the trail on purpose — it is the walk you were
-  offered, and once you set off it is the walked line that matters; drawn as
-  boldly as the trail it would hide how far round you had got. Camera actions
+  Compose lifecycle. State reaches the map by updating named `GeoJsonSource`s
+  (claimed polygons, the selected claim, closing zone, live path, start anchor,
+  the saved home, and the kilometre markers). Camera actions
   go through the imperative `MapController` handle, which
   exposes `isStyleLoaded`/`canLocate` so the UI can disable controls that would
   otherwise silently no-op.
@@ -889,6 +766,16 @@ the map *is* the unambiguous request for an injected point.
 from a route recorded elsewhere rather than tapped out: same relaxed thresholds,
 same gate bypass, same rule that the loop is only closed when the user presses
 Stop.
+
+**An import ends at its last return to the start** (`ImportClosure`, pure,
+tested), not at its last point. A recorder is stopped whenever it's stopped —
+often after walking on to the car — and replayed as-is such a track "ends" out
+there and can't close. The replay is cut at the last pass within the closing
+radius (the *last*, so a second lap is kept), and the import summary says how
+much was left out. The relaxed closing radius is 75 m (was 40 m) for the same
+reason: tracks stopped a few dozen metres short. That costs no anti-cheat — the
+injected path bypasses `MotionGate` anyway. When a track still can't close, the
+summary gives the gap and the radius rather than just "doesn't end near".
 
 **Import is not test-mode-gated, and works in every build.** Recording with a
 watch or a health app and claiming the loop afterwards is a real way to use this,

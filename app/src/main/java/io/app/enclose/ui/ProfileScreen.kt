@@ -1,5 +1,14 @@
 package io.app.enclose.ui
 
+import io.app.enclose.export.GeoExporter
+import io.app.enclose.data.VoidedWalk
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Delete
+import java.io.File
+import androidx.core.content.FileProvider
+import android.content.Intent
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -108,6 +117,10 @@ fun ProfileScreen(
     val backupJob by encloseViewModel.backup.collectAsStateWithLifecycle()
     val showHowItWorks by encloseViewModel.showHowItWorks.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf(false) }
+    // Held by id, so the dialog names the walk the user actually tapped.
+    var confirmDeleteVoided by remember { mutableStateOf<VoidedWalk?>(null) }
+    var shareError by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
     var showCities by rememberSaveable { mutableStateOf(false) }
 
     // Recount on every visit: claims are made elsewhere, so a count taken once
@@ -257,6 +270,35 @@ fun ProfileScreen(
                     )
                     Spacer(Modifier.height(10.dp))
                     state.fallen.forEach { fallen -> FallenClaimRow(fallen) }
+                }
+            }
+
+            // Only once there is one: a section explaining voids to someone who
+            // has never had one is noise.
+            if (state.voided.isNotEmpty()) {
+                SectionCard(title = "Walks that didn't count") {
+                    Text(
+                        "Ended by the anti-cheat — the movement read as a vehicle, or " +
+                            "picked up too far from where it stopped. They can't be " +
+                            "claimed, but what you walked is kept here.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    state.voided.forEach { walk ->
+                        VoidedWalkRow(
+                            walk = walk,
+                            onShare = { shareError = shareVoidedWalk(context, walk) },
+                            onDelete = { confirmDeleteVoided = walk },
+                        )
+                    }
+                    shareError?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             }
 
@@ -471,6 +513,28 @@ fun ProfileScreen(
 
     // Guarded on a loaded profile so the fields are never pre-filled from null.
     val loadedProfile = state.profile
+    confirmDeleteVoided?.let { walk ->
+        AlertDialog(
+            onDismissRequest = { confirmDeleteVoided = null },
+            shape = MaterialTheme.shapes.extraLarge,
+            title = { Text("Delete this walk?") },
+            text = {
+                Text(
+                    "${formatDistance(walk.distanceMeters)} walked " +
+                        "${formatRelativeDay(walk.startedAtEpochMs ?: walk.voidedAtEpochMs)}. " +
+                        "It's the only copy — share it as GPX first if you want to keep it.",
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.deleteVoided(walk.id)
+                    confirmDeleteVoided = null
+                }) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDeleteVoided = null }) { Text("Keep") } },
+        )
+    }
+
     if (editing && loadedProfile != null) {
         EditNameDialog(
             profile = loadedProfile,
@@ -584,6 +648,70 @@ private fun CountryStampRow(stamp: CountryStamp) {
         )
     }
 }
+
+/** One voided walk: when, how far, why it didn't count, and what can be done with it. */
+@Composable
+private fun VoidedWalkRow(walk: VoidedWalk, onShare: () -> Unit, onDelete: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.AutoMirrored.Filled.DirectionsWalk,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "${formatDistance(walk.distanceMeters)} · " +
+                    formatRelativeDay(walk.startedAtEpochMs ?: walk.voidedAtEpochMs),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                voidedReasonLabel(walk.reason),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        IconButton(onClick = onShare) {
+            Icon(Icons.Filled.Share, contentDescription = "Share as GPX")
+        }
+        IconButton(onClick = onDelete) {
+            Icon(Icons.Filled.Delete, contentDescription = "Delete walk")
+        }
+    }
+}
+
+private fun voidedReasonLabel(reason: VoidedWalk.Reason): String = when (reason) {
+    VoidedWalk.Reason.VEHICLE -> "Read as a vehicle"
+    VoidedWalk.Reason.TOO_FAST -> "Too fast for walking"
+    VoidedWalk.Reason.UNVERIFIED_GAP -> "Picked up again too far from where it stopped"
+}
+
+/**
+ * Write the walk as GPX to cacheDir and open the share sheet — the same route
+ * the territory screen's export takes. Returns a message on failure rather than
+ * throwing: a full cache must not take the screen down.
+ */
+private fun shareVoidedWalk(context: Context, walk: VoidedWalk): String? = runCatching {
+    val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+    val file = File(dir, "${GeoExporter.safeFileName(walk)}.gpx")
+    file.writeText(GeoExporter.toGpx(walk))
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "application/gpx+xml"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(
+        Intent.createChooser(send, "Share GPX").apply { addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) },
+    )
+    null
+}.getOrElse { "Couldn't share that walk" }
 
 /** One absorbed territory: what it was, how big, and what took it. */
 @Composable

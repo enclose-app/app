@@ -6,6 +6,7 @@ import io.app.enclose.data.ProfileEntity
 import io.app.enclose.data.SettingsSnapshot
 import io.app.enclose.data.SyncStatus
 import io.app.enclose.data.TerritoryEntity
+import io.app.enclose.data.VoidedWalkEntity
 import io.app.enclose.data.WalkEntity
 import io.app.enclose.data.WalkProgressEntity
 import io.app.enclose.geo.LatLng
@@ -24,7 +25,7 @@ import org.junit.Test
  */
 class BackupTest {
 
-    private val schema = 12
+    private val schema = 13
 
     private fun territory(id: String) = TerritoryEntity(
         id = id,
@@ -93,6 +94,16 @@ class BackupTest {
                 completedAtEpochMs = 1_700_000_100_000,
             ),
         ),
+        voidedWalks = listOf(
+            VoidedWalkEntity(
+                id = "v1",
+                pathJson = "[{\"lat\":37.9838,\"lng\":23.7275},{\"lat\":37.985,\"lng\":23.73}]",
+                startedAtEpochMs = 1_700_300_000_000,
+                voidedAtEpochMs = 1_700_300_600_000,
+                distanceMeters = 1_840.5,
+                reason = "VEHICLE",
+            ),
+        ),
         settings = SettingsSnapshot(
             seenIntro = true,
             activityTypeName = "RUN",
@@ -102,8 +113,6 @@ class BackupTest {
             snapToPaths = true,
             panelCollapsed = true,
             floatingWindow = true,
-            plannedDistanceMeters = 7_500,
-            plannedRoute = "_p~iF~ps|U",
             offlineStyleUrl = "https://tiles.openfreemap.org/styles/dark",
             offlinePixelRatio = 2.75f,
             camera = MapCamera(37.9838, 23.7275, 16.5, 90.0, 30.0),
@@ -130,6 +139,7 @@ class BackupTest {
         assertEquals(original.walkProgress, restored.walkProgress)
         assertEquals(original.walkProgressPoints, restored.walkProgressPoints)
         assertEquals(original.offlineRegions, restored.offlineRegions)
+        assertEquals(original.voidedWalks, restored.voidedWalks)
         assertEquals(original.settings, restored.settings)
         assertEquals(original.createdAtEpochMs, restored.createdAtEpochMs)
         assertEquals(original.schemaVersion, restored.schemaVersion)
@@ -203,6 +213,8 @@ class BackupTest {
         // as having begun in 1970.
         assertNull(data.walks.single().startedAtEpochMs)
         assertNull(data.walks.single().movingMs)
+        // Written before voided walks were kept: there are none, not an error.
+        assertTrue(data.voidedWalks.isEmpty())
         assertEquals(SettingsSnapshot(), data.settings)
     }
 

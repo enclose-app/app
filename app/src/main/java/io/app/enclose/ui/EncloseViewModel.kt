@@ -1,8 +1,6 @@
 package io.app.enclose.ui
 
 import android.app.Application
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -10,19 +8,15 @@ import io.app.enclose.BuildConfig
 import io.app.enclose.EncloseApp
 import io.app.enclose.export.Backup
 import io.app.enclose.export.GpxImporter
+import io.app.enclose.export.ImportClosure
 import io.app.enclose.data.BackupReport
 import io.app.enclose.data.Conquest
 import io.app.enclose.data.MapCamera
-import io.app.enclose.data.RouteOutcome
-import io.app.enclose.data.RouteRequest
-import io.app.enclose.data.RouteSuggester
-import io.app.enclose.data.RouteSuggestion
-import io.app.enclose.data.RouteUnavailable
 import io.app.enclose.data.SyncStatus
 import io.app.enclose.data.Territory
 import io.app.enclose.data.Walk
+import io.app.enclose.geo.Geo
 import io.app.enclose.geo.LatLng
-import io.app.enclose.geo.Polyline
 import io.app.enclose.offline.OfflineTilesScheduler
 import io.app.enclose.sync.SyncScheduler
 import io.app.enclose.tracking.ActivityType
@@ -39,7 +33,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.stateIn
@@ -47,7 +40,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import java.io.InputStream
-import kotlin.math.roundToInt
 
 class EncloseViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -56,7 +48,6 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     private val cityTagger = (app as EncloseApp).cityTagger
     private val snapTagger = (app as EncloseApp).snapTagger
     private val offlineTileSync = (app as EncloseApp).offlineTileSync
-    private val routeSuggester = (app as EncloseApp).routeSuggester
     private val backupRepository = (app as EncloseApp).backupRepository
 
     /** Everything remembered between launches. See [UserSettings]. */
@@ -68,28 +59,9 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         // stopped from the watch, a void while the phone is pocketed). What stays
         // here is what only matters to a screen.
         //
-        // A walk can also end without this view model's say-so — Stop on the
-        // watch goes straight to TrackingManager. The suggested route ends with
-        // the walk however it ended (see stopWalk), so drop it here as well.
-        // TrackingManager directly, not [walk]: that property isn't initialised
-        // yet while init runs.
-        viewModelScope.launch {
-            TrackingManager.walk
-                .map { it.isTracking }
-                .distinctUntilChanged()
-                .drop(1)
-                .filter { tracking -> !tracking }
-                .collect { clearPlannedRoute() }
-        }
         // A walk voided for vehicle movement: hand the reason to the UI to explain.
         viewModelScope.launch {
             TrackingManager.voidEvents.collect { reason ->
-                // A voided walk is a walk that ended, so the suggested route
-                // ends with it — and with it gone the claims come back to the
-                // map. Stop and Discard do this in [stopWalk]/[cancelWalk]; this
-                // is the third way a walk can finish, and it used to be the one
-                // that left a route drawn over an empty map.
-                clearPlannedRoute()
                 _voidedWalk.value = reason
             }
         }
@@ -431,9 +403,6 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
 
     fun stopWalk() {
         if (!_injectedWalk.value) LocationService.stop(getApplication())
-        // The suggested line was for the walk that just ended; leaving it drawn
-        // over an idle map turns a route into litter.
-        clearPlannedRoute()
         // Claims the loop if it's ready to close; otherwise abandons the walk.
         TrackingManager.finishWalk()
     }
@@ -445,7 +414,6 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun cancelWalk() {
         if (!_injectedWalk.value) LocationService.stop(getApplication())
-        clearPlannedRoute()
         TrackingManager.cancelWalk()
     }
 
@@ -516,151 +484,6 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
                 _snapBacklog.value = snapTagger.pendingCount()
             }
         }
-    }
-
-    // --- Suggested routes ----------------------------------------------------
-
-    /**
-     * How long a walk the user is asking for, in metres. Remembered between
-     * launches — see [UserSettings.plannedDistanceMeters].
-     */
-    private val _routeTargetMeters = MutableStateFlow(settings.plannedDistanceMeters.toDouble())
-    val routeTargetMeters: StateFlow<Double> = _routeTargetMeters.asStateFlow()
-
-    fun setRouteTarget(meters: Double) {
-        val clamped = meters.coerceIn(
-            RouteSuggester.MIN_TARGET_METERS,
-            RouteSuggester.MAX_TARGET_METERS,
-        )
-        _routeTargetMeters.value = clamped
-        settings.plannedDistanceMeters = clamped.roundToInt()
-    }
-
-    /** What the route planner is doing, for the sheet to draw. */
-    private val _routePlan = MutableStateFlow<RoutePlan>(RoutePlan.Idle)
-    val routePlan: StateFlow<RoutePlan> = _routePlan.asStateFlow()
-
-    /**
-     * The accepted route, drawn under the walk until it ends.
-     *
-     * Restored from storage rather than starting empty: a walk survives a
-     * low-memory kill, and the line the walker is following has to survive with
-     * it — see [UserSettings.plannedRoute].
-     */
-    private val _plannedRoute = MutableStateFlow(
-        settings.plannedRoute?.let { Polyline.decode(it, Polyline.PRECISION_5) } ?: emptyList(),
-    )
-    val plannedRoute: StateFlow<List<LatLng>> = _plannedRoute.asStateFlow()
-
-    /**
-     * Ask for a route of [routeTargetMeters] from where the walker is standing.
-     *
-     * [from] is the map's own current position, passed in rather than read here:
-     * the fix belongs to the location component, and a planner that quietly
-     * planned from the last camera centre would hand someone a loop round a
-     * neighbourhood they were looking at yesterday.
-     */
-    fun suggestRoute(from: LatLng?) = planRoute(from, attempt = 0)
-
-    /**
-     * Another route for the same distance — the shuffle button.
-     *
-     * Counts up from the suggestion on screen rather than randomising, because
-     * the sequence is what makes the results *different*: the planner spreads
-     * successive attempts around the compass, and previously walked routes are
-     * offered before generated ones. Starting again from zero would re-offer the
-     * one just turned down.
-     */
-    fun shuffleRoute(from: LatLng?) {
-        val next = when (val plan = _routePlan.value) {
-            is RoutePlan.Suggested -> plan.suggestion.attempt + 1
-            // A search that found no loop on this bearing gets the next one; a
-            // search that never got as far as looking (no fix, no network) is
-            // retried as it was, since moving on would skip a route nobody has
-            // been shown.
-            is RoutePlan.Unavailable ->
-                if (plan.reason == RouteUnavailable.NO_LOOP) plan.attempt + 1 else plan.attempt
-            else -> 0
-        }
-        planRoute(from, attempt = next)
-    }
-
-    private fun planRoute(from: LatLng?, attempt: Int) {
-        if (from == null) {
-            _routePlan.value = RoutePlan.Unavailable(RouteUnavailable.NO_FIX, attempt)
-            return
-        }
-        // The one online-only feature in the app, and it says so before it does
-        // anything rather than after a timeout. See [RouteUnavailable.OFFLINE]
-        // for why this also withholds routes that need no network at all.
-        if (!isOnline()) {
-            _routePlan.value = RoutePlan.Unavailable(RouteUnavailable.OFFLINE, attempt)
-            return
-        }
-        _routePlan.value = RoutePlan.Searching
-        viewModelScope.launch {
-            val outcome = routeSuggester.suggest(
-                RouteRequest(
-                    from = from,
-                    targetMeters = _routeTargetMeters.value,
-                    attempt = attempt,
-                    pastWalks = walkRepository.walks.first(),
-                    // Active claims only: the map hides conquered ones, and
-                    // steering someone back onto a claim they no longer hold is
-                    // a suggestion built on a map they can't see.
-                    claimRings = territories.value.map { it.ring },
-                ),
-            )
-            _routePlan.value = when (outcome) {
-                is RouteOutcome.Found -> RoutePlan.Suggested(outcome.suggestion)
-                is RouteOutcome.None -> RoutePlan.Unavailable(outcome.reason, attempt)
-            }
-        }
-    }
-
-    /**
-     * Take the route on screen: it becomes the line drawn under the map, and
-     * survives until the walk it was accepted for ends.
-     *
-     * Starting the walk is deliberately *not* done here. That still goes through
-     * the same location guard as the Start button — a route to follow is no
-     * reason to begin a walk that can't record anything.
-     */
-    fun acceptRoute() {
-        val suggestion = (_routePlan.value as? RoutePlan.Suggested)?.suggestion ?: return
-        _plannedRoute.value = suggestion.route
-        settings.plannedRoute = Polyline.encode(suggestion.route, Polyline.PRECISION_5)
-        _routePlan.value = RoutePlan.Idle
-    }
-
-    /**
-     * Whether there is a usable connection right now.
-     *
-     * `NET_CAPABILITY_VALIDATED` as well as `INTERNET`, because the case this
-     * exists for is the one where the two disagree — a captive-portal wifi, or a
-     * cell connection that has associated but isn't passing traffic yet. Read at
-     * the moment of the press rather than observed: this answers "can I fetch
-     * tiles now", and a callback-driven flag is only ever the answer to that
-     * question a moment ago.
-     */
-    private fun isOnline(): Boolean {
-        val manager = getApplication<Application>()
-            .getSystemService(ConnectivityManager::class.java) ?: return false
-        val network = manager.activeNetwork ?: return false
-        val capabilities = manager.getNetworkCapabilities(network) ?: return false
-        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-    }
-
-    /** Drop the planner's state without touching a route already accepted. */
-    fun dismissRoutePlan() {
-        _routePlan.value = RoutePlan.Idle
-    }
-
-    /** Stop drawing the accepted route. */
-    fun clearPlannedRoute() {
-        _plannedRoute.value = emptyList()
-        settings.plannedRoute = null
     }
 
     /** Inject a tapped point. The first tap auto-starts a (serviceless) walk. */
@@ -750,8 +573,23 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
             // so the location service must stay out of the way and the jitter
             // thresholds have to be the relaxed ones.
             beginWalk(injected = true)
-            _gpxImport.value = GpxImport.Replaying(done = 0, total = points.size)
-            points.forEachIndexed { index, point ->
+            // End on the walker's last return to the start, not wherever the
+            // recorder was finally switched off — see ImportClosure. Asked after
+            // beginWalk, which is what puts the relaxed thresholds in force.
+            val endIndex = ImportClosure.endIndex(
+                points.map { it.position },
+                closeRadiusMeters = TrackingManager.closureRadiusMeters,
+                leaveRadiusMeters = TrackingManager.leaveStartRadiusMeters,
+                minPerimeterMeters = TrackingManager.minPerimeterMeters,
+            )
+            val replayed = if (endIndex != null) points.subList(0, endIndex + 1) else points
+            val overshootMeters = if (endIndex != null) {
+                Geo.pathLengthMeters(points.subList(endIndex, points.size).map { it.position })
+            } else {
+                0.0
+            }
+            _gpxImport.value = GpxImport.Replaying(done = 0, total = replayed.size)
+            replayed.forEachIndexed { index, point ->
                 // No timestamp: the motion gate is bypassed, as with map taps.
                 // An imported track jumps between fixes by design and would
                 // otherwise read as a vehicle on its very first segment.
@@ -764,7 +602,7 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
                 // every so often is what lets the progress actually move
                 // instead of the screen sitting frozen until it's over.
                 if ((index + 1) % REPLAY_CHUNK == 0) {
-                    _gpxImport.value = GpxImport.Replaying(index + 1, points.size)
+                    _gpxImport.value = GpxImport.Replaying(index + 1, replayed.size)
                     yield()
                 }
             }
@@ -777,18 +615,33 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
                 // closer together than the jitter filter allows, which is most
                 // real tracks. Say so, or the counts look like a bug.
                 detail = buildString {
-                    if (walked.path.size < points.size) {
+                    if (walked.path.size < replayed.size) {
                         append(
                             "${walked.path.size} kept — the rest sat closer together " +
                                 "than the jitter filter allows. ",
+                        )
+                    }
+                    // Said, because the claim is now shorter than the file: the
+                    // part after the return to the start is left out of it.
+                    if (overshootMeters >= MIN_REPORTED_OVERSHOOT_M) {
+                        append(
+                            "Ended where the track came back to its start — the " +
+                                "${formatDistance(overshootMeters)} recorded after that " +
+                                "isn't part of the loop. ",
                         )
                     }
                     append(
                         if (walked.readyToClose) {
                             "The loop closes here: press Close loop & claim to keep it."
                         } else {
-                            "The track doesn't end near where it starts, so it can't be " +
-                                "claimed as a loop."
+                            // How far off, and how close it needed to be: "doesn't
+                            // end near" alone leaves the user guessing whether a
+                            // few metres or a few kilometres were missing.
+                            "The track ends " +
+                                "${formatDistance(ImportClosure.endGapMeters(points.map { it.position }))} " +
+                                "from where it starts and never comes back within " +
+                                "${formatDistance(TrackingManager.closureRadiusMeters)} of it, so it " +
+                                "can't be claimed as a loop."
                         },
                     )
                 },
@@ -959,13 +812,9 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         _floatingWindow.value = settings.floatingWindow
         _snapToPaths.value = settings.snapToPaths
         _testMode.value = devToolsAvailable && settings.testMode
-        _routeTargetMeters.value = settings.plannedDistanceMeters.toDouble()
         _territorySort.value = runCatching {
             TerritorySort.valueOf(settings.territorySortName ?: "")
         }.getOrDefault(TerritorySort.RECENT)
-        _plannedRoute.value = settings.plannedRoute
-            ?.let { Polyline.decode(it, Polyline.PRECISION_5) }
-            ?: emptyList()
         // `seenIntro` is deliberately not pushed into [showHowItWorks]. It is
         // restored on disk and read at the next launch like any other; acting on
         // it here would throw the explainer sheet up over the report of the
@@ -1072,6 +921,9 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         readNBytes(maxBytes).toString(Charsets.UTF_8)
 
     private companion object {
+        /** An overshoot shorter than this is GPS wander at the finish, not worth a sentence. */
+        const val MIN_REPORTED_OVERSHOOT_M = 20.0
+
         /**
          * ~8 MB of GPX — a couple of hundred thousand track points, well past
          * any single walk. Anything larger is the wrong file.
@@ -1094,34 +946,6 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
          */
         const val REPLAY_CHUNK = 100
     }
-}
-
-/**
- * What the route planner is doing.
- *
- * Modelled the same way [GpxImport] is, and for the same reason: the work
- * happens off screen (a tile fetch and a search over a few hundred thousand
- * edges), so every stage has to be able to say so. Silence while a button is
- * pressed is indistinguishable from a feature that doesn't work.
- */
-sealed interface RoutePlan {
-
-    /** Nothing asked for, or the last answer has been dealt with. */
-    data object Idle : RoutePlan
-
-    /** Fetching tiles and searching. */
-    data object Searching : RoutePlan
-
-    /** A route to look at, take, or shuffle past. */
-    data class Suggested(val suggestion: RouteSuggestion) : RoutePlan
-
-    /**
-     * No route this time, and why. [attempt] is kept so the shuffle button can
-     * carry on from where it got to instead of re-offering what was just
-     * refused — a street layout that yielded nothing on one bearing often
-     * yields on the next.
-     */
-    data class Unavailable(val reason: RouteUnavailable, val attempt: Int) : RoutePlan
 }
 
 /**

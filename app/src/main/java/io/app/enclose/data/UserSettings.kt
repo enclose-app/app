@@ -4,16 +4,6 @@ import android.content.Context
 import androidx.core.content.edit
 import io.app.enclose.geo.LatLng
 
-/**
- * The distance a suggested route aims for until the user says otherwise: 5 km, a
- * common hour's walk and a length most street layouts can make.
- *
- * At file scope because both [UserSettings] and [SettingsSnapshot] have to agree
- * on it — a snapshot that defaulted to something else would restore a preference
- * the user never set.
- */
-internal const val DEFAULT_PLANNED_DISTANCE_M = 5_000
-
 /** Where the map was left: centre, zoom, and orientation. */
 data class MapCamera(
     val lat: Double,
@@ -46,8 +36,6 @@ data class SettingsSnapshot(
     val snapToPaths: Boolean = false,
     val panelCollapsed: Boolean = false,
     val floatingWindow: Boolean = false,
-    val plannedDistanceMeters: Int = DEFAULT_PLANNED_DISTANCE_M,
-    val plannedRoute: String? = null,
     val offlineStyleUrl: String? = null,
     val offlinePixelRatio: Float = 1f,
     val camera: MapCamera? = null,
@@ -142,37 +130,6 @@ class UserSettings(context: Context) {
     var floatingWindow: Boolean
         get() = prefs.getBoolean(KEY_FLOATING_WINDOW, false)
         set(value) = prefs.edit { putBoolean(KEY_FLOATING_WINDOW, value) }
-
-    /**
-     * How far the walker last asked a suggested route to be, in metres.
-     *
-     * Remembered because it is a standing preference and not a per-walk one:
-     * people have a distance they walk. Re-typing "5 km" every time is exactly
-     * the friction that stops a planner being used at all.
-     */
-    var plannedDistanceMeters: Int
-        get() = prefs.getInt(KEY_PLANNED_DISTANCE, DEFAULT_PLANNED_DISTANCE_M)
-        set(value) = prefs.edit { putInt(KEY_PLANNED_DISTANCE, value) }
-
-    /**
-     * The suggested route the walker accepted, as an encoded polyline, or null
-     * when there isn't one.
-     *
-     * Persisted for one reason: the route is drawn under a walk in progress, and
-     * a walk in progress already survives a low-memory kill
-     * ([WalkProgressRepository]). A ghost route that vanished on restore would
-     * leave someone half way round a loop they can no longer see, which is worse
-     * than never having drawn it.
-     *
-     * A polyline rather than a blob of JSON because the app already has a codec
-     * for exactly this ([io.app.enclose.geo.Polyline]), and at five decimal
-     * places — about a metre — a line to follow loses nothing that matters.
-     */
-    var plannedRoute: String?
-        get() = prefs.getString(KEY_PLANNED_ROUTE, null)
-        set(value) = prefs.edit {
-            if (value == null) remove(KEY_PLANNED_ROUTE) else putString(KEY_PLANNED_ROUTE, value)
-        }
 
     /**
      * The basemap style and screen density the offline downloader should use.
@@ -273,8 +230,6 @@ class UserSettings(context: Context) {
         snapToPaths = snapToPaths,
         panelCollapsed = panelCollapsed,
         floatingWindow = floatingWindow,
-        plannedDistanceMeters = plannedDistanceMeters,
-        plannedRoute = plannedRoute,
         offlineStyleUrl = offlineStyleUrl,
         offlinePixelRatio = offlinePixelRatio,
         camera = camera,
@@ -305,8 +260,6 @@ class UserSettings(context: Context) {
         snapToPaths = snapshot.snapToPaths
         panelCollapsed = snapshot.panelCollapsed
         floatingWindow = snapshot.floatingWindow
-        plannedDistanceMeters = snapshot.plannedDistanceMeters
-        plannedRoute = snapshot.plannedRoute
         offlineStyleUrl = snapshot.offlineStyleUrl
         offlinePixelRatio = snapshot.offlinePixelRatio
         camera = snapshot.camera
@@ -326,8 +279,6 @@ class UserSettings(context: Context) {
         const val KEY_SNAP_TO_PATHS = "snap_to_paths"
         const val KEY_PANEL_COLLAPSED = "panel_collapsed"
         const val KEY_FLOATING_WINDOW = "floating_window"
-        const val KEY_PLANNED_DISTANCE = "planned_distance_m"
-        const val KEY_PLANNED_ROUTE = "planned_route"
         const val KEY_OFFLINE_STYLE = "offline_style_url"
         const val KEY_OFFLINE_RATIO = "offline_pixel_ratio"
         const val KEY_CAM_LAT = "camera_lat"

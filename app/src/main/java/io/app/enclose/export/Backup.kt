@@ -5,6 +5,7 @@ import io.app.enclose.data.ProfileEntity
 import io.app.enclose.data.SettingsSnapshot
 import io.app.enclose.data.SyncStatus
 import io.app.enclose.data.TerritoryEntity
+import io.app.enclose.data.VoidedWalkEntity
 import io.app.enclose.data.WalkEntity
 import io.app.enclose.data.WalkProgressEntity
 import io.app.enclose.data.MapCamera
@@ -44,10 +45,12 @@ data class BackupData(
      */
     val walkProgressPoints: List<LatLng> = emptyList(),
     val offlineRegions: List<OfflineRegionEntity> = emptyList(),
+    /** Walks the anti-cheat ended, kept as records. */
+    val voidedWalks: List<VoidedWalkEntity> = emptyList(),
     val settings: SettingsSnapshot = SettingsSnapshot(),
 ) {
     /** Rows that represent walking — what the headline count is about. */
-    val walkedRowCount: Int get() = territories.size + walks.size
+    val walkedRowCount: Int get() = territories.size + walks.size + voidedWalks.size
 }
 
 /**
@@ -86,6 +89,7 @@ object Backup {
     private const val KEY_PROGRESS = "walkInProgress"
     private const val KEY_PROGRESS_POINTS = "points"
     private const val KEY_OFFLINE = "offlineRegions"
+    private const val KEY_VOIDED = "voidedWalks"
     private const val KEY_SETTINGS = "settings"
 
     /** What [decode] made of a file the user picked. */
@@ -123,6 +127,7 @@ object Backup {
             KEY_PROFILE to data.profile?.let(::profileToMap),
             KEY_PROGRESS to data.walkProgress?.let { progressToMap(it, data.walkProgressPoints) },
             KEY_OFFLINE to data.offlineRegions.map(::offlineRegionToMap),
+            KEY_VOIDED to data.voidedWalks.map(::voidedWalkToMap),
             KEY_SETTINGS to settingsToMap(data.settings),
         ),
     )
@@ -169,6 +174,8 @@ object Backup {
             walkProgress = progress?.let(::progressFromMap),
             walkProgressPoints = progress?.let(::progressPointsFromMap).orEmpty(),
             offlineRegions = root.objects(KEY_OFFLINE).map(::offlineRegionFromMap),
+            // Absent from files written before the table existed: reads as none.
+            voidedWalks = root.objects(KEY_VOIDED).map(::voidedWalkFromMap),
             settings = root[KEY_SETTINGS].asObject()?.let(::settingsFromMap) ?: SettingsSnapshot(),
         )
         val note = if (schema > currentSchemaVersion) {
@@ -257,6 +264,26 @@ object Backup {
         syncStatus = syncStatus(m.strOrNull("syncStatus")),
     )
 
+    // --- voided walks --------------------------------------------------------
+
+    private fun voidedWalkToMap(w: VoidedWalkEntity): Map<String, Any?> = linkedMapOf(
+        "id" to w.id,
+        "pathJson" to w.pathJson,
+        "startedAtEpochMs" to w.startedAtEpochMs,
+        "voidedAtEpochMs" to w.voidedAtEpochMs,
+        "distanceMeters" to w.distanceMeters,
+        "reason" to w.reason,
+    )
+
+    private fun voidedWalkFromMap(m: Map<String, Any?>): VoidedWalkEntity = VoidedWalkEntity(
+        id = m.str("id"),
+        pathJson = m.str("pathJson", "[]"),
+        startedAtEpochMs = m.longOrNull("startedAtEpochMs"),
+        voidedAtEpochMs = m.long("voidedAtEpochMs"),
+        distanceMeters = m.double("distanceMeters"),
+        reason = m.str("reason"),
+    )
+
     // --- profile -------------------------------------------------------------
 
     private fun profileToMap(p: ProfileEntity): Map<String, Any?> = linkedMapOf(
@@ -341,8 +368,6 @@ object Backup {
         "snapToPaths" to s.snapToPaths,
         "panelCollapsed" to s.panelCollapsed,
         "floatingWindow" to s.floatingWindow,
-        "plannedDistanceMeters" to s.plannedDistanceMeters,
-        "plannedRoute" to s.plannedRoute,
         "offlineStyleUrl" to s.offlineStyleUrl,
         "offlinePixelRatio" to s.offlinePixelRatio.toDouble(),
         "home" to s.home?.let { listOf(it.lat, it.lng) },
@@ -370,11 +395,6 @@ object Backup {
             snapToPaths = m.bool("snapToPaths"),
             panelCollapsed = m.bool("panelCollapsed"),
             floatingWindow = m.bool("floatingWindow"),
-            plannedDistanceMeters = m.int(
-                "plannedDistanceMeters",
-                defaults.plannedDistanceMeters,
-            ),
-            plannedRoute = m.strOrNull("plannedRoute"),
             offlineStyleUrl = m.strOrNull("offlineStyleUrl"),
             offlinePixelRatio = m.double(
                 "offlinePixelRatio",

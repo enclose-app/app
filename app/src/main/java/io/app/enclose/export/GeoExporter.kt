@@ -1,6 +1,7 @@
 package io.app.enclose.export
 
 import io.app.enclose.data.Territory
+import io.app.enclose.data.VoidedWalk
 import io.app.enclose.geo.GeoPolygon
 import io.app.enclose.geo.LatLng
 import org.json.JSONArray
@@ -111,6 +112,43 @@ object GeoExporter {
         sb.append("</gpx>\n")
         return sb.toString()
     }
+
+    /**
+     * A GPX 1.1 track of a walk the anti-cheat ended. Left open — it never
+     * closed a loop, and drawing it closed would invent a stretch nobody walked.
+     */
+    fun toGpx(walk: VoidedWalk): String {
+        val name = "Enclose walk ${fileStamp(walk.startedAtEpochMs ?: walk.voidedAtEpochMs)} (didn't count)"
+        val sb = StringBuilder()
+        sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+        sb.append(
+            "<gpx version=\"1.1\" creator=\"Enclose\" " +
+                "xmlns=\"http://www.topografix.com/GPX/1/1\">\n",
+        )
+        sb.append("  <metadata>\n")
+        sb.append("    <name>").append(xmlEscape(name)).append("</name>\n")
+        sb.append("    <time>")
+            .append(iso8601(walk.startedAtEpochMs ?: walk.voidedAtEpochMs)).append("</time>\n")
+        sb.append("  </metadata>\n")
+        sb.append("  <trk>\n")
+        sb.append("    <name>").append(xmlEscape(name)).append("</name>\n")
+        sb.append("    <trkseg>\n")
+        walk.path.forEach { p ->
+            sb.append("      <trkpt lat=\"").append(p.lat)
+                .append("\" lon=\"").append(p.lng).append("\"/>\n")
+        }
+        sb.append("    </trkseg>\n")
+        sb.append("  </trk>\n")
+        sb.append("</gpx>\n")
+        return sb.toString()
+    }
+
+    /** "enclose-walk-2026-10-03-1412", dated by the walk's own start. */
+    fun safeFileName(walk: VoidedWalk): String =
+        "enclose-walk-${fileStamp(walk.startedAtEpochMs ?: walk.voidedAtEpochMs)}"
+
+    private fun fileStamp(epochMs: Long): String =
+        SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US).format(Date(epochMs))
 
     private fun closedRing(ring: List<LatLng>): List<LatLng> =
         if (ring.size >= 2 && ring.first() != ring.last()) ring + ring.first() else ring

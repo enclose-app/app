@@ -61,7 +61,6 @@ class WindowLayoutPolicyTest {
         MapControl.ZOOM_OUT,
         MapControl.HOME,
         MapControl.RECENTER,
-        MapControl.PLAN,
         MapControl.BASEMAP,
     )
 
@@ -96,7 +95,6 @@ class WindowLayoutPolicyTest {
                 MapControl.SPLIT,
                 MapControl.HOME,
                 MapControl.RECENTER,
-                MapControl.PLAN,
                 MapControl.BASEMAP,
             ),
             layout.right,
@@ -110,16 +108,15 @@ class WindowLayoutPolicyTest {
      */
     @Test
     fun `the left rail fills up before anything goes to the menu`() {
-        // Three slots a side. Eight controls: three right, three left, two out.
+        // Three slots a side. Seven controls: three right, three left, one out.
         val layout = WindowLayoutPolicy.placeControls(allControls, railHeightDp = 170)
 
         assertEquals(3, layout.left.size)
         assertEquals(3, layout.right.size)
-        assertEquals(2, layout.menu.size)
+        assertEquals(1, layout.menu.size)
         assertTrue("zoom always crosses", layout.left.containsAll(ZOOM))
         // What a walker reaches for mid-stride stays on the thumb's side.
         assertTrue(layout.right.contains(MapControl.RECENTER))
-        assertTrue(layout.right.contains(MapControl.PLAN))
     }
 
     /**
@@ -130,7 +127,7 @@ class WindowLayoutPolicyTest {
     fun `what reaches the menu is the lowest priority of all`() {
         val layout = WindowLayoutPolicy.placeControls(allControls, railHeightDp = 170)
 
-        assertEquals(listOf(MapControl.FLOAT, MapControl.BASEMAP), layout.menu)
+        assertEquals(listOf(MapControl.FLOAT), layout.menu)
     }
 
     /**
@@ -139,11 +136,11 @@ class WindowLayoutPolicyTest {
      */
     @Test
     fun `only the overflow crosses, not everything that could`() {
-        // Five slots: eight controls, six left on the right after zoom crosses.
-        val layout = WindowLayoutPolicy.placeControls(allControls, railHeightDp = 290)
+        // Four slots: seven controls, five left on the right after zoom crosses.
+        val layout = WindowLayoutPolicy.placeControls(allControls, railHeightDp = 230)
 
         assertEquals(3, layout.left.size)
-        assertEquals(5, layout.right.size)
+        assertEquals(4, layout.right.size)
         assertTrue("nothing needs the menu yet", layout.menu.isEmpty())
     }
 

@@ -148,6 +148,25 @@ object TrackingManager {
     private val _voidEvents = MutableSharedFlow<VoidReason>(extraBufferCapacity = 4)
     val voidEvents: SharedFlow<VoidReason> = _voidEvents.asSharedFlow()
 
+    /** What a voided walk had recorded, handed over before the walk is reset. */
+    data class VoidedRecording(
+        val id: String,
+        val path: List<LatLng>,
+        val startedAtEpochMs: Long?,
+        val voidedAtEpochMs: Long,
+        val distanceMeters: Double,
+        val reason: VoidReason,
+    )
+
+    /**
+     * Every void that had recorded any ground, with that ground. The void stands
+     * — nothing is claimed — but the path is kept: most voids are honest walks the
+     * classifier got wrong, and the walking happened either way. Whoever owns
+     * persistence saves it (EncloseApp); this object still has no DB of its own.
+     */
+    private val _voidedRecordings = MutableSharedFlow<VoidedRecording>(extraBufferCapacity = 4)
+    val voidedRecordings: SharedFlow<VoidedRecording> = _voidedRecordings.asSharedFlow()
+
     /**
      * Emitted when the recorder could not be started, or stopped being able to
      * run. Separate from [voidEvents]: nothing was walked and nothing was thrown
@@ -579,8 +598,25 @@ object TrackingManager {
         return Geo.distanceMeters(previous, point) / ((atElapsedMs - previousAt) / 1000.0)
     }
 
-    /** Throw the walk away: the recorded path no longer reflects a real trip. */
+    /**
+     * End the walk without a claim: the recorded path no longer reflects a real
+     * trip. The path itself is handed to [voidedRecordings] first, not discarded.
+     */
     private fun voidWalk(reason: VoidReason) {
+        // Taken before the reset below, which is what used to erase it.
+        val walked = _walk.value
+        if (walked.path.size >= 2) {
+            _voidedRecordings.tryEmit(
+                VoidedRecording(
+                    id = UUID.randomUUID().toString(),
+                    path = walked.path,
+                    startedAtEpochMs = walked.startedAtMs,
+                    voidedAtEpochMs = System.currentTimeMillis(),
+                    distanceMeters = walked.distanceMeters,
+                    reason = reason,
+                ),
+            )
+        }
         motionGate.reset()
         elevation.reset()
         pause.reset()
@@ -614,8 +650,11 @@ object TrackingManager {
     const val CLOSURE_RADIUS_METERS = 10.0
     const val LEAVE_START_RADIUS_METERS = 80.0
     const val MIN_PERIMETER_METERS = 200.0
-    // Test mode (map taps): forgiving, so a loop is actually reachable on screen.
-    private const val CLOSURE_RADIUS_TEST_METERS = 40.0
+    // Test mode (map taps) and imported tracks: forgiving, so a loop is actually
+    // reachable on screen, and a recorded track stopped a few dozen metres short
+    // of its start still closes. Neither runs the motion gate, so a wider circle
+    // here gives away no anti-cheat protection.
+    private const val CLOSURE_RADIUS_TEST_METERS = 75.0
     private const val LEAVE_START_TEST_METERS = 40.0
     private const val MIN_PERIMETER_TEST_METERS = 80.0
     /** Fixes closer than this to the previous point are treated as noise. */

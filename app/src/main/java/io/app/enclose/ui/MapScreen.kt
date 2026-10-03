@@ -59,7 +59,6 @@ import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Splitscreen
 import androidx.compose.material.icons.filled.Stop
@@ -203,22 +202,6 @@ fun MapScreen(
     val home by viewModel.home.collectAsStateWithLifecycle()
     val panelCollapsed by viewModel.panelCollapsed.collectAsStateWithLifecycle()
     val territorySort by viewModel.territorySort.collectAsStateWithLifecycle()
-    val routePlan by viewModel.routePlan.collectAsStateWithLifecycle()
-    val routeTarget by viewModel.routeTargetMeters.collectAsStateWithLifecycle()
-    val plannedRoute by viewModel.plannedRoute.collectAsStateWithLifecycle()
-
-    /**
-     * The route the map draws.
-     *
-     * A suggestion on screen is drawn *while it is being considered*, not only
-     * once it has been taken: shuffling between loops that are described to you
-     * as "4.6 km, new ground" and nothing else is choosing blind, and the whole
-     * point of the map being right there is that you can look at where it goes.
-     * It falls back to the accepted route, so dismissing the sheet without
-     * taking one leaves whatever was already being followed.
-     */
-    val previewRoute = (routePlan as? RoutePlan.Suggested)?.suggestion?.route
-    val drawnRoute = previewRoute ?: plannedRoute
     val profile by profileViewModel.state.collectAsStateWithLifecycle()
 
     val snackbarHost = remember { SnackbarHostState() }
@@ -232,18 +215,11 @@ fun MapScreen(
     /**
      * The selected claim, or null — including when it has just been deleted,
      * which is how the card and the highlight go away without being told.
-     * Withheld while a route is drawn, since the claims aren't drawn then and a
-     * card naming something invisible is a card about nothing.
      */
     val selectedTerritory = territories.firstOrNull { it.id == selectedClaimId }
-        ?.takeIf { drawnRoute.isEmpty() }
 
     var showList by rememberSaveable { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
-    // Saved: a rotation with the planner open shouldn't drop the user back on
-    // the map having lost the route they were looking at. The suggestion itself
-    // lives in the ViewModel, so it survives with it.
-    var showPlanner by rememberSaveable { mutableStateOf(false) }
     var confirmDiscardWalk by remember { mutableStateOf(false) }
     // Debug builds only, since that's the only place test mode exists: Start
     // while it's on begins a walk that records no GPS at all, and finding that
@@ -263,10 +239,6 @@ fun MapScreen(
     var floatingRefused by remember { mutableStateOf(false) }
     // Measured height of the bottom panel, so floating UI can clear it.
     var panelHeightPx by remember { mutableIntStateOf(0) }
-    // The planner sheet covers half the screen, and the route it is describing
-    // is drawn on the other half — so the camera has to know how much of the map
-    // it can actually use.
-    var plannerHeightPx by remember { mutableIntStateOf(0) }
     var topBarHeightPx by remember { mutableIntStateOf(0) }
     val panelHeight = with(density) { panelHeightPx.toDp() }
 
@@ -318,17 +290,6 @@ fun MapScreen(
             styleUrl = basemapStyleUrl(basemapDark),
             pixelRatio = density.density,
         )
-    }
-
-    // Frame each new suggestion in the half of the map the sheet isn't covering.
-    // Keyed on the route itself, so shuffling re-frames and a recomposition
-    // doesn't: a camera that flew back every time a figure changed would fight
-    // the user panning around the loop they're being offered.
-    LaunchedEffect(previewRoute, controller.isStyleLoaded, plannerHeightPx) {
-        val route = previewRoute ?: return@LaunchedEffect
-        if (controller.isStyleLoaded && route.isNotEmpty()) {
-            controller.fitTo(route, bottomInsetPx = plannerHeightPx)
-        }
     }
 
     // Consume a one-shot focus request (e.g. "Show on map" from the detail screen).
@@ -516,41 +477,6 @@ fun MapScreen(
                 },
             ),
         )
-        // Plan a route: "give me a 5 km walk from here". Tinted while a route
-        // is being followed, so the button both opens the planner and reports
-        // that the faint line on the map is a live suggestion rather than
-        // something left over.
-        add(
-            MapControlSpec(
-                control = MapControl.PLAN,
-                icon = Icons.Filled.Route,
-                label = when {
-                    drawnRoute.isEmpty() -> "Suggest a walk of a set distance"
-                    previewRoute != null -> "The suggested route"
-                    else -> "The route you're following"
-                },
-                enabled = controller.isStyleLoaded,
-                tint = if (drawnRoute.isEmpty()) {
-                    MaterialTheme.colorScheme.onSurface
-                } else {
-                    LocalEncloseAccents.current.route
-                },
-                // Tap reopens the planner, hold clears the line off the map —
-                // the same idiom as Home and the floating window, and the way
-                // out of a route you looked at and didn't want.
-                onLongPress = if (drawnRoute.isEmpty()) {
-                    null
-                } else {
-                    {
-                        viewModel.dismissRoutePlan()
-                        viewModel.clearPlannedRoute()
-                        scope.launch { snackbarHost.showSnackbar("Route cleared") }
-                    }
-                },
-                longPressLabel = "Clear the route from the map",
-                onClick = { showPlanner = true },
-            ),
-        )
         // Basemap toggle: the dark map is hard to read in bright sun. Shows
         // the map you'd get by tapping, not the one you're looking at.
         add(
@@ -593,7 +519,6 @@ fun MapScreen(
             hasLocationPermission = location.hasPermission,
             controller = controller,
             home = home,
-            plannedRoute = drawnRoute,
             // Tapped points place themselves; a camera that chases them moves the
             // map out from under the finger placing the next one.
             followWalker = !testMode,
@@ -603,15 +528,9 @@ fun MapScreen(
                     viewModel.addTestPoint(point)
                     true
                 } else {
-                    // Only what the map is drawing can be picked: with a route
-                    // up the claims are hidden, and selecting one the user
-                    // cannot see would be the map answering for a shape that
-                    // isn't there. A tap on open ground clears the selection,
-                    // which is the same gesture read the other way round.
-                    val hit = TerritoryHit.at(
-                        point = point,
-                        territories = if (drawnRoute.isEmpty()) territories else emptyList(),
-                    )
+                    // A tap on open ground clears the selection, which is the
+                    // same gesture read the other way round.
+                    val hit = TerritoryHit.at(point = point, territories = territories)
                     onSelectClaim(hit?.id)
                     // Not while the map is keeping up with a walk in progress:
                     // the next fix would pull the camera straight back, so the
@@ -1061,54 +980,6 @@ fun MapScreen(
                 if (location.canRecord) viewModel.startWalk() else onRequestPermission()
             },
             onDismiss = { confirmTestWalk = false },
-        )
-    }
-
-    if (showPlanner) {
-        RoutePlannerSheet(
-            plan = routePlan,
-            targetMeters = routeTarget,
-            following = plannedRoute,
-            onTargetChange = viewModel::setRouteTarget,
-            // Every suggestion starts from where the walker is standing, so the
-            // map's own fix is the input — not the camera centre, which is
-            // wherever they last dragged to, and not a *stale* fix either: see
-            // MapController.recentLocation for what planning from one produces.
-            onSuggest = { viewModel.suggestRoute(controller.recentLocation(FRESH_FIX_MS)) },
-            onShuffle = { viewModel.shuffleRoute(controller.recentLocation(FRESH_FIX_MS)) },
-            onAccept = {
-                val route = (routePlan as? RoutePlan.Suggested)?.suggestion?.route
-                viewModel.acceptRoute()
-                showPlanner = false
-                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                // Straight into the walk, through the same guard the Start
-                // button uses — accepting a route is no reason to begin a walk
-                // that can't record where it went. Test mode keeps its warning
-                // for the same reason it has one at all.
-                val starting = when {
-                    walk.isTracking -> false
-                    testMode -> { confirmTestWalk = true; true }
-                    location.canRecord -> { viewModel.startWalk(); true }
-                    else -> { onRequestPermission(); false }
-                }
-                // Frame the whole loop — but only when nothing else is about to
-                // move the camera. Starting a walk flies to the walker at street
-                // zoom, and a fit-then-fly reads as the map lurching twice.
-                if (!starting && !route.isNullOrEmpty()) controller.fitTo(route)
-            },
-            // Clears both, because both are the same thing to the person looking
-            // at the map: the line on it.
-            onClearRoute = {
-                viewModel.dismissRoutePlan()
-                viewModel.clearPlannedRoute()
-            },
-            // Closing the sheet **keeps** the suggestion. Reviewing a route
-            // means looking at the map, and the sheet covers half of it — a
-            // dismissal that threw the route away would make "let me see where
-            // that actually goes" the one gesture that loses it. It stays drawn,
-            // the control stays lit, and holding the control is what clears it.
-            onDismiss = { showPlanner = false },
-            onHeightChanged = { plannerHeightPx = it },
         )
     }
 
@@ -2749,16 +2620,6 @@ private val ORNAMENT_CLEARANCE = 52.dp
  * still reads as a response to the tap.
  */
 private const val SPLIT_SETTLE_MS = 900L
-
-/**
- * How old the fix a route is planned from may be.
- *
- * Two minutes. Fixes arrive every three seconds while the map is up, so this is
- * satisfied the moment somebody has their position on screen — and anything
- * older is not where they are standing, which is the one thing every suggestion
- * is built on. See [MapController.recentLocation].
- */
-private const val FRESH_FIX_MS = 120_000L
 
 // --- Cues --------------------------------------------------------------------
 

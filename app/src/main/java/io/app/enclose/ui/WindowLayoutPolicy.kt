@@ -123,10 +123,6 @@ internal object WindowLayoutPolicy {
         MapControl.RECENTER,
         MapControl.ZOOM_IN,
         MapControl.ZOOM_OUT,
-        // Above home and the basemap: planning a route is the thing somebody
-        // opens this app to do before setting off, and it reads as a button
-        // rather than as a menu item.
-        MapControl.PLAN,
         MapControl.HOME,
         MapControl.BASEMAP,
         MapControl.FLOAT,
@@ -159,7 +155,4 @@ internal enum class MapControl {
     HOME,
     RECENTER,
     BASEMAP,
-
-    /** Opens the route planner — "suggest me a walk of this many kilometres". */
-    PLAN,
 }

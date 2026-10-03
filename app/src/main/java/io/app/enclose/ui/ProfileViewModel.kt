@@ -10,6 +10,7 @@ import io.app.enclose.data.Coverage
 import io.app.enclose.data.Passport
 import io.app.enclose.data.Profile
 import io.app.enclose.data.Territory
+import io.app.enclose.data.VoidedWalk
 import io.app.enclose.data.Walk
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -27,6 +28,7 @@ class ProfileViewModel(app: Application) : AndroidViewModel(app) {
     private val profileRepository = (app as EncloseApp).profileRepository
     private val repository = (app as EncloseApp).repository
     private val walkRepository = (app as EncloseApp).walkRepository
+    private val voidedWalkRepository = (app as EncloseApp).voidedWalkRepository
     private val cityTagger = (app as EncloseApp).cityTagger
 
     init {
@@ -42,11 +44,13 @@ class ProfileViewModel(app: Application) : AndroidViewModel(app) {
             repository.territories,
             walkRepository.walks,
             repository.conquered,
-        ) { profile, territories, walks, conquered ->
+            voidedWalkRepository.voidedWalks,
+        ) { profile, territories, walks, conquered, voided ->
             ProfileUiState(
                 profile = profile,
                 stats = computeStats(territories, walks),
                 fallen = fallenClaims(conquered, territories),
+                voided = voided,
                 loading = false,
             )
         }.stateIn(
@@ -54,6 +58,11 @@ class ProfileViewModel(app: Application) : AndroidViewModel(app) {
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = ProfileUiState(),
         )
+
+    /** Only from the list that shows it, behind a confirmation. */
+    fun deleteVoided(id: String) {
+        viewModelScope.launch { voidedWalkRepository.delete(id) }
+    }
 
     fun updateName(first: String, last: String) {
         if (first.isBlank() && last.isBlank()) return
@@ -116,6 +125,8 @@ data class ProfileUiState(
     val stats: ProfileStats = ProfileStats(),
     /** Claims a later walk swallowed whole, most recently fallen first. */
     val fallen: List<FallenClaim> = emptyList(),
+    /** Walks the anti-cheat ended, most recent first. */
+    val voided: List<VoidedWalk> = emptyList(),
     val loading: Boolean = true,
 )
 

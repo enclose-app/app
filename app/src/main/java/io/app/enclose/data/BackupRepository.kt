@@ -12,6 +12,8 @@ data class BackupReport(
     val territoriesReplaced: Int = 0,
     val walksAdded: Int = 0,
     val walksReplaced: Int = 0,
+    /** Voided walks written; merged by id like everything else. */
+    val voidedWalksRestored: Int = 0,
     val profileRestored: Boolean = false,
     val settingsRestored: Boolean = false,
     /** True when the backup's unfinished walk was adopted — see [BackupRepository]. */
@@ -74,6 +76,7 @@ class BackupRepository(
             walkProgress = progressDao.session(),
             walkProgressPoints = progressDao.points().map { it.toLatLng() },
             offlineRegions = database.offlineRegionDao().all(),
+            voidedWalks = database.voidedWalkDao().all(),
             settings = settings.snapshot(),
         )
     }
@@ -102,6 +105,7 @@ class BackupRepository(
 
             territoryDao.upsertAll(data.territories)
             walkDao.upsertAll(data.walks)
+            database.voidedWalkDao().upsertAll(data.voidedWalks)
             data.profile?.let { database.profileDao().upsert(it) }
 
             val progressDao = database.walkProgressDao()
@@ -121,6 +125,7 @@ class BackupRepository(
                 territoriesReplaced = territoriesReplaced,
                 walksAdded = data.walks.size - walksReplaced,
                 walksReplaced = walksReplaced,
+                voidedWalksRestored = data.voidedWalks.size,
                 profileRestored = data.profile != null,
                 walkInProgressRestored = adoptProgress,
                 walkInProgressSkipped = backedUpProgress != null && !adoptProgress,

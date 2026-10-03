@@ -134,15 +134,6 @@ data class EncloseAccents(
      */
     val home: Color,
     /**
-     * A suggested route, drawn under everything else while it's being followed.
-     *
-     * Deliberately not [trail]: the walked line and the line you were *meant* to
-     * walk sit on top of each other for most of a loop, and two shades of the
-     * same amber would make it impossible to see how much of the route is
-     * actually done.
-     */
-    val route: Color,
-    /**
      * The kilometre ticks along the trail. Kin to [trail] but darker (light) or
      * lighter (dark) than it, because a marker in the trail's own colour is
      * invisible on the line it sits on — which is the only place it is ever
@@ -169,7 +160,6 @@ internal val LightAccents = EncloseAccents(
     trail = Color(0xFFE07B1F),
     anchor = Color(0xFFE07B1F),
     home = BrandPurple,
-    route = Color(0xFF1E88A8),
     milestone = Color(0xFF8A4B10),
     onMilestone = Color.White,
     zoneReady = BrandPurple,
@@ -184,7 +174,6 @@ internal val DarkAccents = EncloseAccents(
     trail = BrandAmber,
     anchor = BrandAmber,
     home = Color(0xFFC286DC),
-    route = Color(0xFF6FC7E4),
     milestone = Color(0xFFFFD9A8),
     onMilestone = Color(0xFF3A2410),
     zoneReady = Color(0xFFC286DC),

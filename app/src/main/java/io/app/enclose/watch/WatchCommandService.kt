@@ -2,7 +2,6 @@ package io.app.enclose.watch
 
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.WearableListenerService
-import io.app.enclose.EncloseApp
 import io.app.enclose.tracking.LocationService
 import io.app.enclose.tracking.TrackingManager
 import io.app.enclose.watchlink.WatchLink
@@ -12,9 +11,9 @@ import io.app.enclose.watchlink.WatchLink
  *
  * Usually runs with no screen open — the phone is in a pocket, which is the
  * point of a watch — so it does what [io.app.enclose.ui.EncloseViewModel.stopWalk]
- * does without the view model: stop the GPS, finish the walk, drop the planned
- * route. Saving the closed loop is not done here; EncloseApp hears every loop
- * close, from here or anywhere else.
+ * does without the view model: stop the GPS and finish the walk. Saving the
+ * closed loop is not done here; EncloseApp hears every loop close, from here or
+ * anywhere else.
  */
 class WatchCommandService : WearableListenerService() {
 
@@ -33,9 +32,5 @@ class WatchCommandService : WearableListenerService() {
         // Either way there is nothing to stop, so a refusal is not a failure.
         runCatching { LocationService.stop(this) }
         TrackingManager.finishWalk()
-        // The route being followed belonged to the walk that just ended. Cleared
-        // in storage here; a map screen that is open clears its own copy when it
-        // sees the walk end.
-        (application as EncloseApp).settings.plannedRoute = null
     }
 }
