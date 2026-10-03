@@ -691,7 +691,14 @@ uploads walks.
   control unreachable for as long as a claim is selected, and the attribution is
   a licence requirement. The selection stands down entirely while a suggested
   route is drawn, for the same reason the claims themselves do, and test mode
-  keeps the map tap for injecting points.
+  keeps the map tap for injecting points. Selecting **centres the claim**
+  (`MapController.centerOn`) without touching the zoom — the same rule following
+  a walker obeys, since the user has already chosen how much ground they want to
+  see — and it centres it in the map that is *visible*, shifting by the panel and
+  card through the live projection rather than by a guess in degrees, which a
+  pixel is not worth a fixed number of. It is skipped outright while the map is
+  following a walk in progress: the next fix would pull the camera straight back,
+  so it would be a lurch and nothing else.
 - **The map's controls are data, not hard-coded buttons.** `MapControlSpec`
   describes each one once; `WindowLayoutPolicy.placeControls` (pure, tested)
   decides whether it's drawn on the right rail, the left rail or in the ⋮ menu,
