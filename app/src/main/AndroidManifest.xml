@@ -104,6 +104,25 @@
                 <data android:scheme="file" />
                 <data android:mimeType="application/gpx+xml" />
             </intent-filter>
+
+            <!--
+              The Galaxy Watch companion opening Enclose: /start for its Start
+              button, /open to claim a closed loop. The watch can't start a walk
+              itself — Android won't begin location tracking from the background
+              — so /start opens Enclose here and the walk starts behind the same
+              checks as the Start button. BROWSABLE because that is how the
+              watch's RemoteActivityHelper delivers it; the most anything else
+              could do with these links is the same as tapping Start.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="enclose" />
+                <data android:host="walk" />
+                <data android:path="/start" />
+                <data android:path="/open" />
+            </intent-filter>
         </activity>
 
         <service
@@ -111,6 +130,23 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="location" />
+
+        <!--
+          Stop from the watch. Exported because Play Services delivers it, and it
+          only hears messages from apps signed with the same key on paired
+          devices. Honoured only when the phone's own walk is ready to close.
+        -->
+        <service
+            android:name=".watch.WatchCommandService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:path="/enclose/stop" />
+            </intent-filter>
+        </service>
 
         <!-- Receives activity-recognition batches from Play Services. -->
         <receiver

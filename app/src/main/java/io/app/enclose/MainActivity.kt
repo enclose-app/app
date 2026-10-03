@@ -45,6 +45,8 @@ import io.app.enclose.tracking.TrackingManager
 import io.app.enclose.ui.EncloseViewModel
 import io.app.enclose.ui.FloatingWalkCard
 import io.app.enclose.ui.LocationReadiness
+import io.app.enclose.watch.shouldStartFromWatch
+import io.app.enclose.watchlink.WatchLink
 import io.app.enclose.ui.MapScreen
 import io.app.enclose.ui.ProfileScreen
 import io.app.enclose.ui.Screen
@@ -78,6 +80,14 @@ class MainActivity : ComponentActivity() {
      */
     private val sharedTrack = mutableStateOf<Uri?>(null)
 
+    /**
+     * Start pressed on the watch, which opens the app here (see
+     * [io.app.enclose.watchlink.WatchLink.START_URI]). State for the same reason
+     * as [sharedTrack]: `singleTask` delivers it to a running activity through
+     * [onNewIntent]. Cleared by the composition once acted on.
+     */
+    private val watchStart = mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -85,7 +95,10 @@ class MainActivity : ComponentActivity() {
         // Only on a fresh create. After a process kill the system re-delivers the
         // intent that started the task, which would replay a track shared hours
         // ago into a brand new walk.
-        if (savedInstanceState == null) sharedTrack.value = trackUriFrom(intent)
+        if (savedInstanceState == null) {
+            sharedTrack.value = trackUriFrom(intent)
+            watchStart.value = isWatchStart(intent)
+        }
         setContent {
             EncloseTheme {
                 val viewModel: EncloseViewModel = viewModel()
@@ -165,6 +178,23 @@ class MainActivity : ComponentActivity() {
                     sharedTrack.value = null
                     screen = Screen.Map
                     viewModel.importGpx(uri)
+                }
+
+                // Start from the watch: the same checks as the Start button. If
+                // any of them says no, the app has still opened on the map, where
+                // the panel says what's missing — see shouldStartFromWatch.
+                LaunchedEffect(watchStart.value) {
+                    if (!watchStart.value) return@LaunchedEffect
+                    watchStart.value = false
+                    screen = Screen.Map
+                    if (shouldStartFromWatch(
+                            isTracking = walk.isTracking,
+                            testMode = viewModel.testMode.value,
+                            canRecord = location.canRecord,
+                        )
+                    ) {
+                        viewModel.startWalk()
+                    }
                 }
 
                 // One-shot hand-offs from the detail screen back to the map:
@@ -286,7 +316,14 @@ class MainActivity : ComponentActivity() {
         // So anything that later reads getIntent() sees the one that's current.
         setIntent(intent)
         trackUriFrom(intent)?.let { sharedTrack.value = it }
+        if (isWatchStart(intent)) watchStart.value = true
     }
+
+    /** The watch's start link — not its open link, which only brings the app up. */
+    private fun isWatchStart(intent: Intent?): Boolean =
+        intent?.action == Intent.ACTION_VIEW &&
+            intent.data?.scheme == WatchLink.SCHEME &&
+            intent.data?.path == WatchLink.START_PATH
 
     /**
      * The track in an incoming share or "open with", or null when the intent
@@ -299,7 +336,8 @@ class MainActivity : ComponentActivity() {
      */
     private fun trackUriFrom(intent: Intent?): Uri? = when (intent?.action) {
         Intent.ACTION_SEND -> intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-        Intent.ACTION_VIEW -> intent.data
+        // Not the watch's links, which are VIEWs too.
+        Intent.ACTION_VIEW -> intent.data?.takeUnless { it.scheme == WatchLink.SCHEME }
         else -> null
     }
 

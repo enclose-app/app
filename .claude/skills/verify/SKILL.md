@@ -8,7 +8,7 @@ description: Run and interpret this repo's local checks — build, unit tests, a
 ## Run
 
 ```bash
-./gradlew testDebugUnitTest assembleDebug     # the everyday check
+./gradlew testDebugUnitTest :watchlink:test assembleDebug   # the everyday check (all three modules)
 ./gradlew lintDebug                            # only when you touched Android APIs
 ```
 

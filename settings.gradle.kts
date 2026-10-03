@@ -24,4 +24,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "Enclose"
 include(":app")
+// The Galaxy Watch companion, and the protocol it shares with the phone app.
+include(":wear")
+include(":watchlink")
  

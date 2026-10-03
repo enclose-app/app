@@ -1,22 +1,35 @@
 <!--
   Play Store icon: 512x512, full-bleed square. Google applies its own rounded
-  mask and shadow, so no corner radius is baked in here and the mark is kept
-  well inside the safe circle so the mask can never clip it.
+  mask and shadow, so no corner radius or lit edge is baked in here. The mark
+  is play/icon.svg's, drawn in its 48-unit coordinates and scaled so that
+  drawing's 46-unit body fills the square (512/46).
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="brand" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#9C3BC0"/>
-      <stop offset="0.5" stop-color="#7B1FA2"/>
-      <stop offset="1" stop-color="#4A148C"/>
+    <linearGradient id="mark" gradientUnits="userSpaceOnUse" x1="8" y1="41" x2="40" y2="9">
+      <stop offset="0%" stop-color="hsl(258 90% 62%)" />
+      <stop offset="35%" stop-color="hsl(274 92% 64%)" />
+      <stop offset="70%" stop-color="hsl(290 92% 66%)" />
+      <stop offset="100%" stop-color="hsl(306 96% 72%)" />
     </linearGradient>
+    <linearGradient id="body" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="hsl(266 32% 13%)" />
+      <stop offset="50%" stop-color="hsl(276 34% 9%)" />
+      <stop offset="100%" stop-color="hsl(290 38% 8%)" />
+    </linearGradient>
+    <radialGradient id="bloom" cx="56%" cy="36%" r="60%">
+      <stop offset="0%" stop-color="hsl(290 92% 66%)" stop-opacity="0.36" />
+      <stop offset="100%" stop-color="hsl(290 92% 66%)" stop-opacity="0" />
+    </radialGradient>
   </defs>
-  <rect width="512" height="512" fill="url(#brand)"/>
-  <g transform="translate(256,256) scale(5.3) translate(-54,-53)">
-    <path d="M54,31 L80,46 L72,77 L39,79 L28,51 Z" fill="#FFFFFF" fill-opacity="0.22"/>
-    <path d="M54,31 L80,46 L72,77 L39,79 L28,51 Z" fill="none" stroke="#FFFFFF" stroke-width="6"
-          stroke-linecap="round" stroke-linejoin="round"/>
-    <circle cx="54" cy="31" r="7" fill="#FFFFFF"/>
-    <circle cx="54" cy="31" r="3.4" fill="#7B1FA2"/>
+  <rect width="512" height="512" fill="url(#body)" />
+  <rect width="512" height="512" fill="url(#bloom)" />
+  <g transform="scale(11.1304) translate(-1,-1)">
+    <path d="M12.5 30 L17 15.5 L31 11.5 L38.5 24 L33 36.5 L21.5 37.5 Z"
+          fill="url(#mark)" fill-opacity="0.2" />
+    <path d="M12.5 30 L17 15.5 L31 11.5 L38.5 24 L33 36.5 L25.1 37.2"
+          fill="none" stroke="url(#mark)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.9" />
+    <circle cx="12.5" cy="30" r="3.6" fill="url(#mark)" />
+    <circle cx="21.5" cy="37.5" r="3.6" fill="none" stroke="url(#mark)" stroke-width="2.4" />
   </g>
 </svg>

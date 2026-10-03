@@ -19,9 +19,14 @@ import io.app.enclose.offline.OfflineTileCache
 import io.app.enclose.offline.OfflineTileSync
 import io.app.enclose.sync.NoBackendSyncApi
 import io.app.enclose.sync.RemoteSyncApi
+import io.app.enclose.tracking.LocationService
+import io.app.enclose.tracking.TrackingManager
+import io.app.enclose.ui.toWalk
+import io.app.enclose.watch.WatchPublisher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.maplibre.android.MapLibre
 
 /**
@@ -137,5 +142,29 @@ class EncloseApp : Application() {
         super.onCreate()
         // Must run before any MapView is created.
         MapLibre.getInstance(this)
+
+        // These two react to the walk ending, and a walk can end with no screen
+        // open: Stop pressed on the watch, or a void while the phone is in a
+        // pocket. They used to live in EncloseViewModel, where a loop closed with
+        // the map screen gone was never saved and a voided walk left the GPS on.
+        // The process is alive whenever a walk is (LocationService is a
+        // foreground service), so the application is the scope that always hears.
+
+        // Persist EVERY successful closed loop the moment it closes — offline,
+        // in local SQLite — whether or not the user goes on to claim it.
+        applicationScope.launch {
+            TrackingManager.pendingClaim.collect { pending ->
+                if (pending != null) walkRepository.saveClosed(pending.toWalk(claimed = false))
+            }
+        }
+        // A walk voided for vehicle movement: shut the GPS service down (the
+        // manager can't, by design). Explaining why is the UI's job, and the
+        // view model still does it.
+        applicationScope.launch {
+            TrackingManager.voidEvents.collect { LocationService.stop(this@EncloseApp) }
+        }
+
+        // The Galaxy Watch companion's view of the walk.
+        WatchPublisher.start(this, applicationScope, repository.territories)
     }
 }

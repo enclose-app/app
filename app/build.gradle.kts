@@ -84,6 +84,10 @@ dependencies {
 
     implementation(libs.jts.core)
 
+    // Galaxy Watch companion: the shared protocol, and the Data Layer.
+    implementation(project(":watchlink"))
+    implementation(libs.play.services.wearable)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)

@@ -4,10 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this app is
 
-Enclose is a single-module Android app (Kotlin, Compose, MapLibre). You walk a
+Enclose is an Android app (Kotlin, Compose, MapLibre). You walk a
 loop; when the loop closes you claim the enclosed area as a "territory". A new
 claim **conquers** overlapping older claims — their geometry is carved away.
 Everything works fully offline; sync to a backend is an unimplemented seam.
+
+Three modules: `:app` is the phone app and nearly all of the code; `:wear` is the
+Galaxy Watch companion; `:watchlink` is the plain-Kotlin protocol the two share.
+See **Watch companion** below.
 
 ## Skills
 
@@ -23,8 +27,9 @@ get wrong. Prefer them over improvising:
 ## Commands
 
 ```bash
-./gradlew testDebugUnitTest assembleDebug   # the everyday check
-./gradlew installDebug                      # build + install on a connected device
+./gradlew testDebugUnitTest :watchlink:test assembleDebug   # the everyday check
+./gradlew :app:installDebug                 # phone app (installDebug alone hits every device, watch included)
+./gradlew :wear:installDebug                # watch app — target the watch with ANDROID_SERIAL
 ./gradlew testDebugUnitTest --tests "io.app.enclose.data.ConquestTest"
 ./gradlew testDebugUnitTest --tests "*.ConquestTest.a claim never conquers itself"
 ./gradlew lintDebug                         # Android lint (no ktlint/detekt configured)
@@ -34,12 +39,12 @@ get wrong. Prefer them over improvising:
 **Lint fails on this repo by design.** The baseline is 3 errors / 31 warnings,
 all pre-existing `MissingPermission` in `ActivityMonitor.kt` (×2) and
 `EncloseMap.kt`. Those three are not yours and are not to be "fixed" in passing;
-a fourth is. Compare by file and issue id, never line number — see the `verify`
+a fourth is. `:wear` lints clean (0 errors). Compare by file and issue id, never line number — see the `verify`
 skill.
 
 Gradle's configuration cache is on (`gradle.properties`); adding
 configuration-phase side effects to build scripts will break it. `minSdk` is 35,
-so a device/emulator on API 35+ is required.
+so a device/emulator on API 35+ is required (the watch app's is 33).
 
 ## Testing conventions
 
@@ -84,6 +89,12 @@ test that*, leaving the Android shell thin:
 | `DistanceMarkers` | `DistanceMarkersTest` | points in, marker positions out |
 | `Json` | `JsonTest` | hand-rolled, so no `org.json` |
 | `Backup` | `BackupTest` | entities are plain data classes |
+| `watchStatusOf`, `shouldStartFromWatch` | `WatchStatusOfTest` | walk state in, `WatchStatus` out |
+| `WatchStatus` (`:watchlink`) | `WatchStatusTest` | the field codec, as plain maps |
+| `WatchFormat` (`:watchlink`) | `WatchFormatTest` | numbers in, strings out |
+| `watchMapOf`, `watchClaimsNear`, `argbOf` | `WatchMapOfTest` | walk and territories in, protocol out |
+| `WatchMap`, `WatchClaims`, `WatchGeo` (`:watchlink`) | `WatchMapTest` | the coordinate codecs, as plain maps |
+| `ReadyAlert` (`:wear`) | `ReadyAlertTest` | a boolean and a status, no vibrator |
 
 JTS is pure Java and works fine in JVM tests. `TrackingManager` is a singleton
 `object`, so tests touching it must reset state in `@After`.
@@ -112,7 +123,8 @@ backfills can't run.
 
 `applicationScope` is for work that must outlive the component that started it —
 clearing the finished walk while `LocationService` is being torn down, whose own
-scope would cancel it halfway.
+scope would cancel it halfway. `EncloseApp.onCreate` also starts the listeners
+that must hear a walk end with **no screen open** — see step 4 below.
 
 ### The walk → claim pipeline
 
@@ -130,9 +142,14 @@ This is the core flow and it spans four files:
    stopping *now* would produce a valid loop (left the start zone, walked past
    the minimum perimeter, currently within the closing radius); pressing Stop
    calls `finishWalk()`, which either claims or abandons.
-4. `EncloseViewModel` owns everything `TrackingManager` deliberately can't:
-   starting/stopping `LocationService`, persisting, and reacting to
-   `voidEvents` (the manager cannot stop the service itself).
+4. What `TrackingManager` deliberately can't do is split by whether it needs a
+   screen. `EncloseApp` (on `applicationScope`, for the life of the process)
+   **persists every closed loop** and **stops `LocationService` on a void** —
+   a walk can end with the map screen gone (Stop on the watch, a void while the
+   phone is pocketed), and these two used to live in the view model, where such
+   a loop was never saved and the GPS stayed on. `EncloseViewModel` keeps the
+   rest: starting/stopping the service from the UI, the claim itself, and
+   explaining a void.
 
 **Starting a walk is checked, not assumed.** `startWalk()` used to flip
 `isTracking` and hope: if the service then couldn't subscribe to location it
@@ -169,7 +186,8 @@ None of this is reachable from a unit test end to end — the permission reads, 
 Two consequences to preserve when editing:
 
 - **Every closed loop is persisted immediately** as a `Walk` row, before the user
-  decides whether to claim it (`init` block collecting `pendingClaim`).
+  decides whether to claim it (`EncloseApp.onCreate` collecting `pendingClaim`).
+  Not the view model: it must run with no screen open.
   `confirmClaim` then re-saves it with `claimed = true` using the *same id*,
   which is also the `Territory` id — walks and territories are linked by id.
 - **`confirmClaim` carves overlaps** via `Conquest.carve` (pure, tested): a
@@ -178,6 +196,61 @@ Two consequences to preserve when editing:
   is written with `repository.applyClaim`, which is one Room `@Transaction` —
   carving is justified by the new claim, so the two must never land apart. The
   JTS work runs on `Dispatchers.Default`; it is far too slow for the frame clock.
+
+### Watch companion
+
+The phone owns the walk; the watch (`:wear`, same `applicationId` and signing
+key — the Data Layer connects nothing else) is a window onto it with Start and
+Stop. The protocol lives in `:watchlink` (`WatchLink`, `WatchStatus`) so both
+apps compile against one definition.
+
+- **Phone → watch:** `WatchPublisher` (on `applicationScope`) keeps three Data
+  Layer items, each throttled to what it's worth, because every write wakes both
+  radios:
+  - `/enclose/status` — the coarse `WatchStatus`, only when it changes. Figures
+    are rounded (10 m distance, 5 m to-start) and elapsed time is never sent; the
+    watch counts it up. An IDLE is written on every process start, clearing a
+    walk that died with the process.
+  - `/enclose/map` — `WatchMap`: the path (simplified by `RouteSimplify`, with
+    the tolerance doubled until it fits `WatchMap.MAX_POINTS` — coarsened, never
+    truncated), start, position and closing radius, at most every 5 s.
+  - `/enclose/claims` — `WatchClaims`: the nearest `MAX_CLAIMS` within 6 km of
+    the walk's start, as `SnapDisplay` draws them. Only queried while a walk has
+    a start, so an idle process holds no Room observer open.
+  Coordinates travel as `Long` 1e-7° (about 1 cm, exact both ways), not floats.
+- **Stop:** the watch sends `/enclose/stop`; `WatchCommandService` honours it
+  **only if the phone's live walk is `readyToClose`** (`canStopFromWatch`). Stop
+  on a walk that isn't ready discards it, and that stays a phone decision behind
+  its confirmation dialog. The watch only shows Stop when ready, but the phone
+  re-checks, since the watch's status can be seconds old.
+- **Start:** not a message. Android refuses to start location tracking from the
+  background, so the watch opens the phone app at `enclose://walk/start` and
+  `MainActivity` starts the walk behind the same checks as the Start button
+  (`shouldStartFromWatch`). `enclose://walk/open` opens the app without
+  starting — used for a closed loop, which is named and claimed on the phone.
+  `trackUriFrom` ignores the `enclose` scheme so neither is mistaken for a GPX.
+- **Ready-to-close buzz:** `StatusListenerService` on the watch buzzes once on
+  the step into the closing radius (`ReadyAlert`), app open or not, with a
+  tap-to-stop notification that clears when Stop would no longer work.
+- **The watch map** (`WalkMap`) is MapLibre on the watch with the phone's dark
+  OpenFreeMap style. It uses **`android-sdk-opengl`**, not the phone's default
+  artifact: that one renders with Vulkan, which the Wear emulator lacks
+  (`vk::createInstanceUnique` crash) and watch GPUs can't be relied on for.
+  Touch gestures are off (a swipe is Wear's "back"); the crown zooms and the
+  camera follows the walker, offset above the figures strip. A map is drawn only
+  if its `startedAtEpochMs` matches the status's, so the last walk's path never
+  shows under a new one. OSM attribution is drawn by `WalkScreen`, since
+  MapLibre's sits in a corner a round screen doesn't have.
+- **Demo walk:** debug builds of the watch app show `DemoWalk` with
+  `adb shell am start -n io.app.enclose/io.app.enclose.wear.MainActivity --ez demo true`
+  — for looking at the walking screen with no phone paired.
+- **Versions:** phone and watch apps update separately. `WatchStatus.VERSION`
+  is in the encoded fields; bump it when a field changes meaning, and a
+  mismatched watch shows "Update Enclose" instead of misreading the walk.
+
+What tests can't reach: the Data Layer itself, `RemoteActivityHelper`, and the
+listener services. Testing those needs a phone and watch paired through the
+Wear OS app (for emulators: Android Studio's Wear OS pairing assistant).
 
 ### Nothing the user walked for is ever destroyed
 
@@ -428,9 +501,11 @@ Seven constraints, none of them incidental:
   streets and the claims are filled polygons over exactly the ground it crosses,
   so together they are unreadable and the one you need is the one you haven't
   walked. They come back the instant the route goes — cleared by hand, or by the
-  walk ending, which is why **all three** endings clear it (`stopWalk`,
-  `cancelWalk`, and the `voidEvents` collector; the last was the one that used to
-  leave a route drawn over a map with nothing on it). Decided inside `EncloseMap`
+  walk ending, which is why **every** ending clears it (`stopWalk`,
+  `cancelWalk`, the `voidEvents` collector — the one that used to leave a route
+  drawn over a map with nothing on it — and, for Stop on the watch,
+  `WatchCommandService` clears the stored route while a view-model collector on
+  `isTracking` going false clears the on-screen copy). Decided inside `EncloseMap`
   rather than by its callers so the full screen and the floating window can't
   disagree.
 - **A suggestion is drawn while it is being considered, not only once taken.**

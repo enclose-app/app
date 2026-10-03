@@ -36,6 +36,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.Dispatchers
@@ -60,18 +63,27 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     private val settings = (app as EncloseApp).settings
 
     init {
-        // Persist EVERY successful closed loop the moment it closes — offline,
-        // in local SQLite — whether or not the user goes on to claim it.
+        // Saving each closed loop and stopping the GPS on a void are done in
+        // EncloseApp, not here: both have to happen with no screen open (a walk
+        // stopped from the watch, a void while the phone is pocketed). What stays
+        // here is what only matters to a screen.
+        //
+        // A walk can also end without this view model's say-so — Stop on the
+        // watch goes straight to TrackingManager. The suggested route ends with
+        // the walk however it ended (see stopWalk), so drop it here as well.
+        // TrackingManager directly, not [walk]: that property isn't initialised
+        // yet while init runs.
         viewModelScope.launch {
-            TrackingManager.pendingClaim.collect { pending ->
-                if (pending != null) walkRepository.saveClosed(pending.toWalk(claimed = false))
-            }
+            TrackingManager.walk
+                .map { it.isTracking }
+                .distinctUntilChanged()
+                .drop(1)
+                .filter { tracking -> !tracking }
+                .collect { clearPlannedRoute() }
         }
-        // A walk voided for vehicle movement: shut the GPS service down (the
-        // manager can't, by design) and hand the reason to the UI to explain.
+        // A walk voided for vehicle movement: hand the reason to the UI to explain.
         viewModelScope.launch {
             TrackingManager.voidEvents.collect { reason ->
-                LocationService.stop(getApplication())
                 // A voided walk is a walk that ended, so the suggested route
                 // ends with it — and with it gone the claims come back to the
                 // map. Stop and Discard do this in [stopWalk]/[cancelWalk]; this
@@ -1059,20 +1071,6 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     private fun InputStream.readCapped(maxBytes: Int): String =
         readNBytes(maxBytes).toString(Charsets.UTF_8)
 
-    private fun TrackingManager.PendingClaim.toWalk(claimed: Boolean) = Walk(
-        id = id,
-        ring = ring,
-        areaSqMeters = areaSqMeters,
-        perimeterMeters = perimeterMeters,
-        distanceToStartMeters = distanceToStartMeters,
-        closedAtEpochMs = closedAtEpochMs,
-        startedAtEpochMs = startedAtEpochMs,
-        elevationGainMeters = elevationGainMeters,
-        movingMs = movingMs,
-        claimed = claimed,
-        syncStatus = SyncStatus.PENDING,
-    )
-
     private companion object {
         /**
          * ~8 MB of GPX — a couple of hundred thousand track points, well past
@@ -1183,3 +1181,22 @@ sealed interface GpxImport {
      */
     val isRunning: Boolean get() = this is Reading || this is Replaying
 }
+
+/**
+ * The [Walk] row for a closed loop. Shared by the two writers of that row:
+ * [io.app.enclose.EncloseApp] saves it unclaimed the moment the loop closes,
+ * and [EncloseViewModel.confirmClaim] re-saves it claimed under the same id.
+ */
+internal fun TrackingManager.PendingClaim.toWalk(claimed: Boolean) = Walk(
+    id = id,
+    ring = ring,
+    areaSqMeters = areaSqMeters,
+    perimeterMeters = perimeterMeters,
+    distanceToStartMeters = distanceToStartMeters,
+    closedAtEpochMs = closedAtEpochMs,
+    startedAtEpochMs = startedAtEpochMs,
+    elevationGainMeters = elevationGainMeters,
+    movingMs = movingMs,
+    claimed = claimed,
+    syncStatus = SyncStatus.PENDING,
+)

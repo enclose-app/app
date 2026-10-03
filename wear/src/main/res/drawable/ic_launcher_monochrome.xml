@@ -1,0 +1,36 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Copy of :app's launcher layer; change both together.
+         Single-tint version of the Enclose mark for themed (monochrome) icons.
+         The system recolors it, so everything here is one color + alpha. Same
+         geometry and placement as ic_launcher_foreground. -->
+    <group
+        android:scaleX="1.5652"
+        android:scaleY="1.5652"
+        android:translateX="16.435"
+        android:translateY="16.435">
+
+        <path
+            android:fillColor="#000000"
+            android:fillAlpha="0.25"
+            android:pathData="M12.5,30 L17,15.5 L31,11.5 L38.5,24 L33,36.5 L21.5,37.5 Z" />
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#000000"
+            android:strokeWidth="2.6"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:pathData="M12.5,30 L17,15.5 L31,11.5 L38.5,24 L33,36.5 L25.1,37.2" />
+        <path
+            android:fillColor="#000000"
+            android:pathData="M12.5,30 m-3.6,0 a3.6,3.6 0 1,0 7.2,0 a3.6,3.6 0 1,0 -7.2,0 Z" />
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#000000"
+            android:strokeWidth="2.4"
+            android:pathData="M21.5,37.5 m-3.6,0 a3.6,3.6 0 1,0 7.2,0 a3.6,3.6 0 1,0 -7.2,0 Z" />
+    </group>
+</vector>

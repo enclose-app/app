@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <!-- The Enclose mark: a walked loop around claimed ground. The start (solid,
+       lower left) is where the walk began; the walker (open ring) has come
+       round to within closing distance of it, so the loop is ready to close.
+       Same treatment as the phirepass and ergo marks (neon sweep on a
+       near-black body, bloom, lit edge), rotated into Enclose's purple.
+       The launcher layers in app/src/main/res/drawable/ic_launcher_*.xml are
+       this drawing; change both together. -->
+  <defs>
+    <linearGradient id="mark" gradientUnits="userSpaceOnUse" x1="8" y1="41" x2="40" y2="9">
+      <stop offset="0%" stop-color="hsl(258 90% 62%)" />
+      <stop offset="35%" stop-color="hsl(274 92% 64%)" />
+      <stop offset="70%" stop-color="hsl(290 92% 66%)" />
+      <stop offset="100%" stop-color="hsl(306 96% 72%)" />
+    </linearGradient>
+    <linearGradient id="body" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="hsl(266 32% 13%)" />
+      <stop offset="50%" stop-color="hsl(276 34% 9%)" />
+      <stop offset="100%" stop-color="hsl(290 38% 8%)" />
+    </linearGradient>
+    <radialGradient id="bloom" cx="56%" cy="36%" r="60%">
+      <stop offset="0%" stop-color="hsl(290 92% 66%)" stop-opacity="0.36" />
+      <stop offset="100%" stop-color="hsl(290 92% 66%)" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="edge" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="hsl(258 90% 62%)" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="hsl(306 96% 72%)" stop-opacity="0.55" />
+    </linearGradient>
+  </defs>
+
+  <rect x="1" y="1" width="46" height="46" rx="12" fill="url(#body)" />
+  <rect x="1" y="1" width="46" height="46" rx="12" fill="url(#bloom)" />
+  <rect x="1" y="1" width="46" height="46" rx="12" fill="none" stroke="url(#edge)" stroke-width="1.8" />
+
+  <!-- Claimed ground. -->
+  <path d="M12.5 30 L17 15.5 L31 11.5 L38.5 24 L33 36.5 L21.5 37.5 Z"
+        fill="url(#mark)" fill-opacity="0.2" />
+  <!-- The walked loop, from the start round to the walker. -->
+  <path d="M12.5 30 L17 15.5 L31 11.5 L38.5 24 L33 36.5 L25.1 37.2"
+        fill="none" stroke="url(#mark)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.9" />
+  <!-- Start: solid. -->
+  <circle cx="12.5" cy="30" r="3.6" fill="url(#mark)" />
+  <!-- Walker: open. -->
+  <circle cx="21.5" cy="37.5" r="3.6" fill="none" stroke="url(#mark)" stroke-width="2.4" />
+</svg>

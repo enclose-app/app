@@ -5,7 +5,12 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Brand purple diagonal gradient. -->
+    <!-- Body and bloom of play/icon.svg: a near-black purple with a soft glow
+         behind the mark. The master's lit edge is left out on purpose: the
+         launcher picks the mask shape, so an edge drawn here would be clipped
+         unevenly. -->
+
+    <!-- Near-black purple body. -->
     <path android:pathData="M0,0h108v108h-108z">
         <aapt:attr name="android:fillColor">
             <gradient
@@ -14,9 +19,23 @@
                 android:startY="0"
                 android:endX="108"
                 android:endY="108">
-                <item android:color="#FF9C3BC0" android:offset="0.0" />
-                <item android:color="#FF7B1FA2" android:offset="0.5" />
-                <item android:color="#FF4A148C" android:offset="1.0" />
+                <item android:color="#FF20172C" android:offset="0.0" />
+                <item android:color="#FF190F1F" android:offset="0.5" />
+                <item android:color="#FF1A0D1C" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Bloom, a little above and right of the middle of the visible area. -->
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="58.3"
+                android:centerY="43.9"
+                android:gradientRadius="43.2">
+                <item android:color="#5CDD59F8" android:offset="0.0" />
+                <item android:color="#00DD59F8" android:offset="1.0" />
             </gradient>
         </aapt:attr>
     </path>
