@@ -75,6 +75,8 @@ test that*, leaving the Android shell thin:
 | `Geo.ringContains` | `GeoContainsTest` | plain rings, no map library |
 | `SnapTagger` | `SnapTaggerTest` | the `SnapStore` + `RouteMatcher` seams |
 | `FixWatch` | `FixWatchTest` | counts and an accuracy, no clock of its own |
+| `FixPlausibility` | `FixPlausibilityTest` | two fixes, their times and accuracies |
+| `PathSpikes` | `PathSpikesTest` | points in, points out |
 | `TrackingManager.reportRecordingUnavailable` | `TrackingManagerRecordingFailureTest` | manager has no Android/DB deps |
 | `WindowLayoutPolicy` | `WindowLayoutPolicyTest` | window size in as plain Ints, controls as an enum |
 | `SplitScreenSupport` | `SplitScreenSupportTest` | `Build` fields passed in, not read |
@@ -345,10 +347,20 @@ and they are load-bearing:
   segment faster than `REACQUISITION_SPEED_MPS` (55 m/s ≈ 200 km/h), which no
   road vehicle reaches, so ordinary driving is still judged as driving. Both
   shapes reset the speed window and the grace countdown, drop the speed baseline
-  so the jump never becomes a sample, and flag `WalkState.hadSignalGap`.
+  so the jump never becomes a sample. Silence always flags
+  `WalkState.hadSignalGap`; a snap flags it only if the fix it snapped to is
+  kept (see the hold below).
 - Neither clears `blockedReason` — a walk already being rejected as a vehicle
   when the signal went still has to answer for the ground in between, which is
   what keeps the anti-cheat honest across a gap.
+- **A jump is held, not appended.** A fix no one could have reached from the
+  path's last trusted point (`FixPlausibility`: `ABSOLUTE_MAX_SPEED_MPS` × time
+  plus both accuracies) waits for the next fix. Back near the path → it was a
+  spike (a Wi-Fi/cell fix claiming ±25 m from 400 m out) and is dropped with no
+  gap flagged; agreeing with the held fix → it was a real snap and is appended
+  with `hadSignalGap`. The motion gate still sees every fix — the hold only
+  decides what reaches the path. `closeLoop` then runs `PathSpikes` over the
+  path for what got through (two agreeing bad fixes, or a restored walk).
 - The gap is **reported, not punished**: the live panel and the claim dialog say
   part of the route is a straight line across unobserved ground. Discarding an
   hour on foot because the device went to sleep is the worse error by a wide

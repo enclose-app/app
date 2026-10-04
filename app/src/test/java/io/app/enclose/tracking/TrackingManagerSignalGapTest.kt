@@ -154,6 +154,67 @@ class TrackingManagerSignalGapTest {
         )
     }
 
+    // --- a single wild fix: Wi-Fi or cell positioning standing in for GPS ------
+
+    @Test
+    fun `a lone wild fix never reaches the path`() {
+        startWalking()
+        fix(at(0.0), atElapsedMs = 0L)
+        fix(at(5.0), atElapsedMs = 3_000L)
+        // Claims ±25 m, lands 400 m out: the accuracy is the thing that's wrong.
+        fix(east(at(5.0), 400.0), atElapsedMs = 6_000L, accuracyMeters = 25f)
+        fix(at(10.0), atElapsedMs = 9_000L)
+        fix(at(15.0), atElapsedMs = 12_000L)
+
+        val state = TrackingManager.walk.value
+        assertTrue(state.isTracking)
+        assertEquals(listOf(at(0.0), at(5.0), at(10.0), at(15.0)), state.path)
+        assertFalse("A dropped spike left no hole in the recording", state.hadSignalGap)
+    }
+
+    @Test
+    fun `a jump the next fix agrees with is kept`() {
+        startWalking()
+        fix(at(0.0), atElapsedMs = 0L)
+        fix(at(5.0), atElapsedMs = 3_000L)
+        fix(at(300.0), atElapsedMs = 6_000L)
+        assertEquals("Held until the next fix says what it was", 2, TrackingManager.walk.value.path.size)
+
+        fix(at(305.0), atElapsedMs = 9_000L)
+
+        val state = TrackingManager.walk.value
+        assertEquals(listOf(at(0.0), at(5.0), at(300.0), at(305.0)), state.path)
+        assertTrue("The jump crossed ground nobody observed; say so", state.hadSignalGap)
+    }
+
+    @Test
+    fun `a spike that got through is cut from the claim`() {
+        startWalking()
+        // Two bad fixes in a row agree with each other, so the live hold keeps
+        // them; the cleanup at Stop is what takes them off the claim.
+        var t = 0L
+        val square = listOf(at(0.0), at(100.0), east(at(100.0), 100.0), east(at(0.0), 100.0))
+        for (corner in square) {
+            fix(corner, atElapsedMs = t)
+            t += 100_000L
+        }
+        // Back up the east side; then two bad fixes that agree with each other.
+        t -= 50_000L
+        fix(east(at(50.0), 100.0), atElapsedMs = t)
+        fix(east(at(50.0), 400.0), atElapsedMs = t + 3_000L) // spike...
+        fix(east(at(52.0), 400.0), atElapsedMs = t + 6_000L) // ...and its twin
+        fix(east(at(54.0), 100.0), atElapsedMs = t + 9_000L) // back on the path
+        fix(east(at(58.0), 100.0), atElapsedMs = t + 12_000L)
+        fix(east(at(0.0), 100.0), atElapsedMs = t + 60_000L)
+        fix(at(0.0), atElapsedMs = t + 140_000L)
+
+        TrackingManager.finishWalk()
+
+        val ring = TrackingManager.pendingClaim.value!!.ring
+        assertFalse(ring.contains(east(at(50.0), 400.0)))
+        assertFalse(ring.contains(east(at(52.0), 400.0)))
+    }
+
     // --- the anti-cheat side, which must not have been loosened ---------------
 
     @Test

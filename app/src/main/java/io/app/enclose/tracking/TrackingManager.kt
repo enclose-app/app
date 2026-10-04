@@ -2,6 +2,7 @@ package io.app.enclose.tracking
 
 import io.app.enclose.geo.Geo
 import io.app.enclose.geo.LatLng
+import io.app.enclose.geo.PathSpikes
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -196,6 +197,18 @@ object TrackingManager {
     private var lastFix: LatLng? = null
     private var lastFixAtElapsedMs: Long? = null
 
+    /** A fix too far from the path to append yet; see [FixPlausibility]. */
+    private data class HeldFix(val point: LatLng, val atElapsedMs: Long, val accuracyMeters: Float?)
+    private var heldFix: HeldFix? = null
+
+    /**
+     * When the path's last point was last confirmed by a fix, and how accurate
+     * that fix was — the baseline a held fix is judged against. Null when there is
+     * no observed baseline (a new or restored walk), and then nothing is held.
+     */
+    private var trustedAtElapsedMs: Long? = null
+    private var trustedAccuracyMeters: Float? = null
+
     /** Called from the UI when the user taps "Start walk" (or the first test tap). */
     fun startWalk(
         relaxedThresholds: Boolean = false,
@@ -207,6 +220,7 @@ object TrackingManager {
         pause.reset()
         lastFix = null
         lastFixAtElapsedMs = null
+        clearHeld()
         _walk.value = WalkState(isTracking = true, activityType = activityType)
     }
 
@@ -247,6 +261,7 @@ object TrackingManager {
         pause.reset(movingMs)
         lastFix = null
         lastFixAtElapsedMs = null
+        clearHeld()
 
         val start = path.first()
         val last = path.last()
@@ -356,6 +371,9 @@ object TrackingManager {
             return
         }
 
+        // Set when this fix arrived impossibly fast from the previous one.
+        var snapped = false
+
         // Only human-powered movement counts. Test mode is exempt: tapped points
         // jump across the map by design and would always look like a vehicle.
         if (atElapsedMs != null && !relaxed) {
@@ -390,7 +408,14 @@ object TrackingManager {
                 motionGate.clearSpeedWindow()
                 lastFix = null
                 lastFixAtElapsedMs = null
-                state = state.copy(hadSignalGap = true)
+                // Silence is a gap whatever comes next. A snap is only one if the
+                // fix it snapped to is kept — a spike that is dropped below
+                // leaves no hole in the recording.
+                if (silenceMs != null && silenceMs > SIGNAL_GAP_MS) {
+                    state = state.copy(hadSignalGap = true)
+                } else {
+                    snapped = true
+                }
             }
 
             val speed = fusedSpeedMps(point, speedMps, atElapsedMs)
@@ -486,23 +511,74 @@ object TrackingManager {
                 accuracyMeters = accuracyMeters,
                 elevationGainMeters = climb,
             )
+            trustFix(atElapsedMs, accuracyMeters)
             return
         }
 
+        // A fix nobody could have reached from the path is held back until the
+        // next one says what it was — see [FixPlausibility]. Only timed fixes are
+        // judged: taps and imports have no clock to judge them by.
+        if (atElapsedMs != null && !relaxed) {
+            val held = heldFix
+            heldFix = null
+            val anchor = state.path.last()
+            val anchorAt = trustedAtElapsedMs
+            val jumped = anchorAt != null && FixPlausibility.isJump(
+                anchor, anchorAt, trustedAccuracyMeters, point, atElapsedMs, accuracyMeters,
+            )
+            when {
+                // Back where the path was: the held fix was a spike. Drop it, and
+                // this fix's jump *from* the spike is no gap in the recording.
+                !jumped -> if (held != null) snapped = false
+
+                // The position really did move — a frozen fix snapping to the
+                // truth. The held fix goes on the path first, and the straight
+                // line to it crosses ground nobody observed.
+                held != null && !FixPlausibility.isJump(
+                    held.point, held.atElapsedMs, held.accuracyMeters,
+                    point, atElapsedMs, accuracyMeters,
+                ) -> {
+                    state = extend(
+                        state.copy(hadSignalGap = true),
+                        held.point,
+                        held.accuracyMeters,
+                        state.elevationGainMeters,
+                    )
+                    trustFix(held.atElapsedMs, held.accuracyMeters)
+                }
+
+                // A jump from everything trusted so far: hold it.
+                else -> {
+                    heldFix = HeldFix(point, atElapsedMs, accuracyMeters)
+                    _walk.value = state.copy(accuracyMeters = accuracyMeters, elevationGainMeters = climb)
+                    return
+                }
+            }
+        }
+
+        if (snapped) state = state.copy(hadSignalGap = true)
+        _walk.value = extend(state, point, accuracyMeters, climb)
+        trustFix(atElapsedMs, accuracyMeters)
+    }
+
+    /**
+     * [state] with [point] added to the path, or — inside [MIN_MOVE_METERS] of the
+     * last point — with only the live figures moved on.
+     */
+    private fun extend(state: WalkState, point: LatLng, accuracyMeters: Float?, climb: Double): WalkState {
         val last = state.path.last()
         val start = state.start!!
         val toStart = Geo.distanceMeters(start, point)
 
         // Ignore GPS jitter so the path stays clean.
         if (Geo.distanceMeters(last, point) < MIN_MOVE_METERS) {
-            _walk.value = state.copy(
+            return state.copy(
                 current = point,
                 distanceToStartMeters = toStart,
                 accuracyMeters = accuracyMeters,
                 readyToClose = state.canCloseLoop && toStart <= closureRadiusMeters,
                 elevationGainMeters = climb,
             )
-            return
         }
 
         val newPath = state.path + point
@@ -510,7 +586,7 @@ object TrackingManager {
         val leftStart = state.hasLeftStart || toStart > leaveStartRadiusMeters
         val canClose = leftStart && distance >= minPerimeterMeters
 
-        _walk.value = state.copy(
+        return state.copy(
             path = newPath,
             current = point,
             distanceMeters = distance,
@@ -521,6 +597,19 @@ object TrackingManager {
             readyToClose = canClose && toStart <= closureRadiusMeters,
             elevationGainMeters = climb,
         )
+    }
+
+    /** Record that the path's last point was still where the walker was at [atElapsedMs]. */
+    private fun trustFix(atElapsedMs: Long?, accuracyMeters: Float?) {
+        trustedAtElapsedMs = atElapsedMs
+        trustedAccuracyMeters = accuracyMeters
+    }
+
+    /** Forget the held fix and what the path was last trusted at: a new walk, or none. */
+    private fun clearHeld() {
+        heldFix = null
+        trustedAtElapsedMs = null
+        trustedAccuracyMeters = null
     }
 
     /**
@@ -537,7 +626,9 @@ object TrackingManager {
     }
 
     private fun closeLoop(state: WalkState) {
-        val path = state.path
+        // A spike the live hold let through — two bad fixes in a row, or one
+        // already on disk in a restored walk — would otherwise be claimed.
+        val path = PathSpikes.remove(state.path)
         val start = path.first()
         // The closing gap: how far the triggering GPS fix was from the start.
         val closingGap = Geo.distanceMeters(path.last(), start)
@@ -622,6 +713,7 @@ object TrackingManager {
         pause.reset()
         lastFix = null
         lastFixAtElapsedMs = null
+        clearHeld()
         _walk.value = WalkState(isTracking = false)
         _voidEvents.tryEmit(reason)
     }
