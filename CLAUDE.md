@@ -355,12 +355,15 @@ and they are load-bearing:
   what keeps the anti-cheat honest across a gap.
 - **A jump is held, not appended.** A fix no one could have reached from the
   path's last trusted point (`FixPlausibility`: `ABSOLUTE_MAX_SPEED_MPS` × time
-  plus both accuracies) waits for the next fix. Back near the path → it was a
-  spike (a Wi-Fi/cell fix claiming ±25 m from 400 m out) and is dropped with no
-  gap flagged; agreeing with the held fix → it was a real snap and is appended
-  with `hadSignalGap`. The motion gate still sees every fix — the hold only
+  plus both accuracies) is held. A fix back near the path → it was a spike (a
+  Wi-Fi/cell fix claiming ±25 m from 400 m out) and is dropped with no gap
+  flagged. Fixes agreeing with it for `HOLD_CONFIRM_MS` (10 s, ≥3 fixes) → a
+  real snap, appended with `hadSignalGap`. **One agreeing fix is not enough**:
+  providers deliver the same bad fix repeatedly, and on a device that let every
+  spike confirm itself. The motion gate still sees every fix — the hold only
   decides what reaches the path. `closeLoop` then runs `PathSpikes` over the
-  path for what got through (two agreeing bad fixes, or a restored walk).
+  path for what got through (a bad fix repeated past the hold, or a restored
+  walk).
 - The gap is **reported, not punished**: the live panel and the claim dialog say
   part of the route is a straight line across unobserved ground. Discarding an
   hour on foot because the device went to sleep is the worse error by a wide

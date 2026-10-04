@@ -172,47 +172,72 @@ class TrackingManagerSignalGapTest {
         assertFalse("A dropped spike left no hole in the recording", state.hadSignalGap)
     }
 
+    /**
+     * What the emulator showed: the provider hands the same bad fix over more
+     * than once, and a hold that trusted one repeat let the spike confirm itself.
+     */
     @Test
-    fun `a jump the next fix agrees with is kept`() {
+    fun `a spike delivered twice still never reaches the path`() {
+        startWalking()
+        fix(at(0.0), atElapsedMs = 0L)
+        fix(at(5.0), atElapsedMs = 3_000L)
+        fix(east(at(5.0), 400.0), atElapsedMs = 6_000L)
+        fix(east(at(5.0), 400.0), atElapsedMs = 7_000L)
+        fix(east(at(5.0), 400.0), atElapsedMs = 8_000L)
+        fix(at(10.0), atElapsedMs = 9_000L)
+
+        val state = TrackingManager.walk.value
+        assertEquals(listOf(at(0.0), at(5.0), at(10.0)), state.path)
+        assertFalse(state.hadSignalGap)
+    }
+
+    @Test
+    fun `a jump that keeps agreeing with itself is kept`() {
         startWalking()
         fix(at(0.0), atElapsedMs = 0L)
         fix(at(5.0), atElapsedMs = 3_000L)
         fix(at(300.0), atElapsedMs = 6_000L)
-        assertEquals("Held until the next fix says what it was", 2, TrackingManager.walk.value.path.size)
-
         fix(at(305.0), atElapsedMs = 9_000L)
+        assertEquals("Held while it proves itself", 2, TrackingManager.walk.value.path.size)
+
+        fix(at(310.0), atElapsedMs = 12_000L)
+        fix(at(315.0), atElapsedMs = 15_000L)
+        fix(at(320.0), atElapsedMs = 18_000L)
 
         val state = TrackingManager.walk.value
-        assertEquals(listOf(at(0.0), at(5.0), at(300.0), at(305.0)), state.path)
+        assertEquals(
+            listOf(at(0.0), at(5.0), at(300.0), at(305.0), at(310.0), at(315.0), at(320.0)),
+            state.path,
+        )
         assertTrue("The jump crossed ground nobody observed; say so", state.hadSignalGap)
     }
 
     @Test
-    fun `a spike that got through is cut from the claim`() {
+    fun `a spike that outlasts the hold is cut from the claim`() {
         startWalking()
-        // Two bad fixes in a row agree with each other, so the live hold keeps
-        // them; the cleanup at Stop is what takes them off the claim.
+        // A bad fix repeated for long enough that the live hold accepts it; the
+        // cleanup at Stop is what takes it off the claim.
         var t = 0L
         val square = listOf(at(0.0), at(100.0), east(at(100.0), 100.0), east(at(0.0), 100.0))
         for (corner in square) {
             fix(corner, atElapsedMs = t)
             t += 100_000L
         }
-        // Back up the east side; then two bad fixes that agree with each other.
         t -= 50_000L
         fix(east(at(50.0), 100.0), atElapsedMs = t)
-        fix(east(at(50.0), 400.0), atElapsedMs = t + 3_000L) // spike...
-        fix(east(at(52.0), 400.0), atElapsedMs = t + 6_000L) // ...and its twin
-        fix(east(at(54.0), 100.0), atElapsedMs = t + 9_000L) // back on the path
-        fix(east(at(58.0), 100.0), atElapsedMs = t + 12_000L)
+        val spike = east(at(50.0), 400.0)
+        repeat(5) { fix(spike, atElapsedMs = t + 3_000L * (it + 1)) }
+        t += 15_000L
+        // Back on the path, walking on long enough for that to be accepted too.
+        repeat(5) { fix(east(at(46.0 - it * 4.0), 100.0), atElapsedMs = t + 3_000L * (it + 1)) }
         fix(east(at(0.0), 100.0), atElapsedMs = t + 60_000L)
         fix(at(0.0), atElapsedMs = t + 140_000L)
 
         TrackingManager.finishWalk()
 
-        val ring = TrackingManager.pendingClaim.value!!.ring
-        assertFalse(ring.contains(east(at(50.0), 400.0)))
-        assertFalse(ring.contains(east(at(52.0), 400.0)))
+        val pending = TrackingManager.pendingClaim.value
+        assertTrue("The loop should have closed", pending != null)
+        assertFalse(pending!!.ring.contains(spike))
     }
 
     // --- the anti-cheat side, which must not have been loosened ---------------

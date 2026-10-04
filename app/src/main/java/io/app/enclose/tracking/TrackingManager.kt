@@ -197,9 +197,9 @@ object TrackingManager {
     private var lastFix: LatLng? = null
     private var lastFixAtElapsedMs: Long? = null
 
-    /** A fix too far from the path to append yet; see [FixPlausibility]. */
+    /** Fixes too far from the path to append yet, oldest first; see [FixPlausibility]. */
     private data class HeldFix(val point: LatLng, val atElapsedMs: Long, val accuracyMeters: Float?)
-    private var heldFix: HeldFix? = null
+    private val heldFixes = mutableListOf<HeldFix>()
 
     /**
      * When the path's last point was last confirmed by a fix, and how accurate
@@ -516,40 +516,56 @@ object TrackingManager {
         }
 
         // A fix nobody could have reached from the path is held back until the
-        // next one says what it was — see [FixPlausibility]. Only timed fixes are
-        // judged: taps and imports have no clock to judge them by.
+        // fixes after it say what it was — see [FixPlausibility]. Only timed
+        // fixes are judged: taps and imports have no clock to judge them by.
         if (atElapsedMs != null && !relaxed) {
-            val held = heldFix
-            heldFix = null
-            val anchor = state.path.last()
+            val fix = HeldFix(point, atElapsedMs, accuracyMeters)
             val anchorAt = trustedAtElapsedMs
-            val jumped = anchorAt != null && FixPlausibility.isJump(
-                anchor, anchorAt, trustedAccuracyMeters, point, atElapsedMs, accuracyMeters,
+            val nearPath = anchorAt == null || !FixPlausibility.isJump(
+                state.path.last(), anchorAt, trustedAccuracyMeters, point, atElapsedMs, accuracyMeters,
+            )
+            val lastHeld = heldFixes.lastOrNull()
+            val nearHeld = lastHeld != null && !FixPlausibility.isJump(
+                lastHeld.point, lastHeld.atElapsedMs, lastHeld.accuracyMeters,
+                point, atElapsedMs, accuracyMeters,
             )
             when {
-                // Back where the path was: the held fix was a spike. Drop it, and
-                // this fix's jump *from* the spike is no gap in the recording.
-                !jumped -> if (held != null) snapped = false
+                // Nothing held, nothing odd: the ordinary case.
+                lastHeld == null && nearPath -> Unit
 
-                // The position really did move — a frozen fix snapping to the
-                // truth. The held fix goes on the path first, and the straight
-                // line to it crosses ground nobody observed.
-                held != null && !FixPlausibility.isJump(
-                    held.point, held.atElapsedMs, held.accuracyMeters,
-                    point, atElapsedMs, accuracyMeters,
-                ) -> {
-                    state = extend(
-                        state.copy(hadSignalGap = true),
-                        held.point,
-                        held.accuracyMeters,
-                        state.elevationGainMeters,
-                    )
-                    trustFix(held.atElapsedMs, held.accuracyMeters)
+                // Back where the path was: what was held was a spike. Drop it,
+                // and this fix's jump *from* the spike is no gap in the recording.
+                nearPath && !nearHeld -> {
+                    heldFixes.clear()
+                    snapped = false
                 }
 
-                // A jump from everything trusted so far: hold it.
+                // Agreeing with what is held. Agreement alone proves nothing —
+                // providers repeat a bad fix, and a spike would confirm itself —
+                // so it takes a while of it. A frozen fix snapping to the truth
+                // agrees for the rest of the walk; that costs it only the wait.
+                nearHeld -> {
+                    heldFixes += fix
+                    val held = heldFixes.toList()
+                    val heldForMs = atElapsedMs - held.first().atElapsedMs
+                    if (held.size < HOLD_MIN_FIXES || heldForMs < HOLD_CONFIRM_MS) {
+                        _walk.value = state.copy(accuracyMeters = accuracyMeters, elevationGainMeters = climb)
+                        return
+                    }
+                    // The position really did move. The held fixes go on the
+                    // path first, and the straight line to them crosses ground
+                    // nobody observed.
+                    heldFixes.clear()
+                    state = state.copy(hadSignalGap = true)
+                    for (h in held.dropLast(1)) {
+                        state = extend(state, h.point, h.accuracyMeters, state.elevationGainMeters)
+                    }
+                }
+
+                // A jump from everything so far: start holding afresh.
                 else -> {
-                    heldFix = HeldFix(point, atElapsedMs, accuracyMeters)
+                    heldFixes.clear()
+                    heldFixes += fix
                     _walk.value = state.copy(accuracyMeters = accuracyMeters, elevationGainMeters = climb)
                     return
                 }
@@ -607,7 +623,7 @@ object TrackingManager {
 
     /** Forget the held fix and what the path was last trusted at: a new walk, or none. */
     private fun clearHeld() {
-        heldFix = null
+        heldFixes.clear()
         trustedAtElapsedMs = null
         trustedAccuracyMeters = null
     }
@@ -749,6 +765,14 @@ object TrackingManager {
     private const val CLOSURE_RADIUS_TEST_METERS = 75.0
     private const val LEAVE_START_TEST_METERS = 40.0
     private const val MIN_PERIMETER_TEST_METERS = 80.0
+    /**
+     * How long, and over how many fixes, a jump must keep agreeing with itself
+     * before it goes on the path. One repeat is not enough: the provider hands
+     * the same bad fix over several times, which on a device confirmed every
+     * spike by itself.
+     */
+    private const val HOLD_CONFIRM_MS = 10_000L
+    private const val HOLD_MIN_FIXES = 3
     /** Fixes closer than this to the previous point are treated as noise. */
     private const val MIN_MOVE_METERS = 4.0
 
