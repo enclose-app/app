@@ -27,8 +27,11 @@ class MainActivity : ComponentActivity() {
             val state by link.state.collectAsStateWithLifecycle()
             val map by link.map.collectAsStateWithLifecycle()
             val claims by link.claims.collectAsStateWithLifecycle()
+            val ready by link.ready.collectAsStateWithLifecycle()
             EncloseWearTheme {
-                WalkScreen(state = state, map = map, claims = claims, link = link)
+                LaunchLogo(ready = ready) {
+                    WalkScreen(state = state, map = map, claims = claims, link = link)
+                }
             }
         }
     }

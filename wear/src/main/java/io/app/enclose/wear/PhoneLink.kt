@@ -48,6 +48,14 @@ class PhoneLink(context: Context) : DataClient.OnDataChangedListener {
     private val _state = MutableStateFlow<LinkState>(LinkState.Waiting)
     val state: StateFlow<LinkState> = _state.asStateFlow()
 
+    /**
+     * False until the first read of the phone's status has come back. Until
+     * then [state] is [LinkState.Waiting] for want of an answer, not because
+     * there is no phone — the screen shows the launch logo rather than saying so.
+     */
+    private val _ready = MutableStateFlow(false)
+    val ready: StateFlow<Boolean> = _ready.asStateFlow()
+
     /** The walk's path and position; null until the phone has sent one. */
     private val _map = MutableStateFlow<WatchMap?>(null)
     val map: StateFlow<WatchMap?> = _map.asStateFlow()
@@ -66,6 +74,10 @@ class PhoneLink(context: Context) : DataClient.OnDataChangedListener {
             ).addOnSuccessListener { items ->
                 items.lastOrNull()?.let(::accept)
                 items.release()
+            }.addOnCompleteListener {
+                // Failed reads count too: "no answer" is an answer, and the
+                // logo must never be what stands between the user and the app.
+                if (path == WatchLink.STATUS_PATH) _ready.value = true
             }
         }
     }
@@ -79,6 +91,7 @@ class PhoneLink(context: Context) : DataClient.OnDataChangedListener {
         _state.value = LinkState.Known(status)
         _map.value = DemoWalk.map(status.startedAtEpochMs)
         _claims.value = DemoWalk.claims
+        _ready.value = true
     }
 
     fun detach() {
