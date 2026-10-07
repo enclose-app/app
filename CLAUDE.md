@@ -43,8 +43,11 @@ a fourth is. `:wear` lints clean (0 errors). Compare by file and issue id, never
 skill.
 
 Gradle's configuration cache is on (`gradle.properties`); adding
-configuration-phase side effects to build scripts will break it. `minSdk` is 35,
-so a device/emulator on API 35+ is required (the watch app's is 33).
+configuration-phase side effects to build scripts will break it. `minSdk` is 33,
+so a device/emulator on API 33+ (Android 13) is required, for the watch app as
+well. 33 is the floor the code supports as written: below it, `CityResolver`'s
+async `Geocoder`, `readNBytes`, `getParcelableExtra` and `POST_NOTIFICATIONS`
+need fallbacks (lint `NewApi`/`InlinedApi` lists them at a lower `minSdk`).
 
 ## Testing conventions
 

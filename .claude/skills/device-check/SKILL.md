@@ -6,7 +6,8 @@ description: Exercise the app on a connected device or emulator — install, gra
 # Checking on a device
 
 Everything below is verified working against an API 36 emulator with
-`adb` on `PATH`. `minSdk` is 35, so anything older won't install.
+`adb` on `PATH`. `minSdk` is 33 (Android 13), so anything older won't install. Test the lowest
+version on an API 33 emulator — the AVDs here are all API 36+.
 
 ```bash
 adb devices                          # expect a device, e.g. emulator-5554

@@ -12,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId = "io.app.enclose"
-        minSdk = 35
+        minSdk = 33
         //noinspection OldTargetApi
         targetSdk = 36
         // Both from gradle.properties, bumped by CI on every push to master.
