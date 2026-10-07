@@ -28,8 +28,11 @@ android {
 
     buildTypes {
         release {
+            // R8: shrinks, obfuscates and optimises code, and strips unused
+            // resources. The mapping file is embedded in the bundle, which is
+            // what Play reads to deobfuscate crash and ANR stack traces.
             optimization {
-                enable = false
+                enable = true
             }
         }
     }
