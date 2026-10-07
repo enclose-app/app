@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The dialog shown when a loop closes, and the confirmation after claiming it. -->
+<resources>
+    <string name="claim_title">Loop closed!</string>
+    <string name="claim_subtitle">Name it and claim it as your own.</string>
+    <string name="claim_area">Area</string>
+    <string name="claim_perimeter">Perimeter</string>
+    <!-- %1$s is a distance with its unit ("4 m"), %2$s an elevation gain with its unit ("12 m"). -->
+    <string name="claim_closed_caption">Closed %1$s from your start · %2$s climbed</string>
+    <string name="claim_signal_gap_note">Note: GPS dropped out along the way, so part of this outline is a straight line between the last fix before the gap and the first one after it.</string>
+    <string name="claim_name_label">Territory name</string>
+    <!-- Accessibility label for the dice button that suggests a random name. -->
+    <string name="claim_suggest_name">Suggest another name</string>
+    <string name="claim_color_label">Color</string>
+    <string name="claim_discard">Discard</string>
+    <string name="claim_confirm">Claim</string>
+    <!-- Snackbar after claiming. %1$s is the territory's name, %2$s its area with unit. -->
+    <string name="claim_done_snackbar">Claimed %1$s · %2$s</string>
+
+    <!-- Accessibility labels on the colour swatches (also used when recolouring a claim). -->
+    <string name="color_swatch_selected">Selected color</string>
+    <string name="color_swatch_choose">Choose color</string>
+</resources>

@@ -3,20 +3,11 @@ package io.app.enclose.watchlink
 import java.util.Locale
 
 /**
- * The watch's figures, worded exactly as the phone words them (see the phone's
- * `ui/Format.kt`) so the same walk doesn't read two ways on two screens.
+ * The watch's figures that carry no words. Anything with a unit in it is the
+ * watch app's to word, from its string resources (`wear/.../Units.kt`), since
+ * this module has no resources and a unit is text a translator needs to reach.
  */
 object WatchFormat {
-
-    /** "1.24 km" past a km, otherwise whole "840 m". */
-    fun distance(meters: Int): String =
-        if (meters >= 1000) String.format(Locale.US, "%.2f km", meters / 1000.0)
-        else "$meters m"
-
-    /** "0.05 km²" from a square kilometre up, otherwise whole "51235 m²". */
-    fun area(sqMeters: Int): String =
-        if (sqMeters >= 1_000_000) String.format(Locale.US, "%.2f km²", sqMeters / 1_000_000.0)
-        else "$sqMeters m²"
 
     /** mm:ss, or h:mm:ss once past an hour. Negative (clock skew) reads as 0:00. */
     fun elapsed(ms: Long): String {

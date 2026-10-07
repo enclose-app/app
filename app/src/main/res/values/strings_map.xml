@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The map screen around the panel: its controls, the top chips, the claim card,
+  the dialogs it raises, and the How Enclose works sheet. Control labels double
+  as accessibility labels and as ⋮ menu items when a window is short.
+-->
+<resources>
+    <!-- Map controls. -->
+    <string name="map_float">Float the walk over other apps</string>
+    <string name="map_float_stop">Stop floating automatically</string>
+    <string name="map_float_off_snackbar">Floating window off</string>
+    <string name="map_split_rebuild">Rebuild the split screen</string>
+    <string name="map_split_share">Share the screen with another app</string>
+    <string name="map_zoom_in">Zoom in</string>
+    <string name="map_zoom_out">Zoom out</string>
+    <string name="map_home_set">Set your home position</string>
+    <string name="map_home_go">Go home</string>
+    <string name="map_home_reset">Reset your home position</string>
+    <string name="map_following">Following your location</string>
+    <string name="map_recenter">Recenter and follow your location</string>
+    <string name="map_basemap_light">Switch to light map</string>
+    <string name="map_basemap_dark">Switch to dark map</string>
+    <string name="map_more_controls">More map controls</string>
+    <string name="map_loading">Loading map…</string>
+
+    <!-- Top row. -->
+    <string name="map_no_claims">No claims yet</string>
+    <!-- %1$d claims covering %2$s (an area with its unit), e.g. "3 · 1.24 km²". -->
+    <string name="map_claims_summary">%1$d · %2$s</string>
+    <string name="map_open_territories">Open your claimed territories</string>
+    <string name="map_open_profile">Open your profile</string>
+
+    <!-- The card for a selected claim. %1$s is the claim's name. -->
+    <string name="map_open_claim">Open %1$s</string>
+    <string name="map_clear_selection">Clear selected claim</string>
+
+    <!-- Snackbars. %1$s is a territory name. -->
+    <string name="map_deleted_snackbar">Deleted %1$s</string>
+    <string name="map_undo">Undo</string>
+    <string name="map_home_set_snackbar">Home set</string>
+    <string name="map_home_cleared_snackbar">Home cleared</string>
+
+    <!-- A walk voided by the anti-cheat. %1$d is how many warnings were allowed. -->
+    <string name="void_title">Walk discarded</string>
+    <plurals name="void_vehicle">
+        <item quantity="one">That looked like a vehicle trip, through %1$d warning. Enclose only counts ground you cover walking, running or cycling, so this walk wasn\'t kept.</item>
+        <item quantity="other">That looked like a vehicle trip, through all %1$d warnings. Enclose only counts ground you cover walking, running or cycling, so this walk wasn\'t kept.</item>
+    </plurals>
+    <plurals name="void_too_fast">
+        <item quantity="one">You were moving faster than a walk, run or ride through %1$d warning, so this walk wasn\'t kept.</item>
+        <item quantity="other">You were moving faster than a walk, run or ride through all %1$d warnings, so this walk wasn\'t kept.</item>
+    </plurals>
+    <string name="void_gap">Recording picked up a long way from where it stopped, so there\'s no record of how you covered the ground in between. This walk wasn\'t kept.</string>
+
+    <!-- The location service couldn\'t run. The body is the cause, then what happened to the walk. -->
+    <string name="recording_stopped_title">Recording stopped</string>
+    <string name="recording_failed_title">Couldn\'t start recording</string>
+    <string name="recording_no_permission">Enclose no longer has precise location access, so there\'s nothing to record your route with.</string>
+    <string name="recording_unavailable">This device wouldn\'t hand over location updates. Check that location is switched on, then try again.</string>
+    <string name="recording_kept">Everything walked so far is still here — press Stop to claim or discard it.</string>
+    <string name="recording_nothing">Nothing was recorded, so the walk has been stopped.</string>
+
+    <!-- Home. -->
+    <string name="home_set_title">Set home here?</string>
+    <string name="home_set_body">Where you\'re standing now becomes your home. The home button brings the map straight back to it; holding the button for three seconds clears it again.</string>
+    <string name="home_set_confirm">Set home</string>
+    <string name="home_reset_title">Reset home position?</string>
+    <string name="home_reset_body">Your home is cleared. The button then asks you to set it again from wherever you are.</string>
+    <string name="home_reset_confirm">Reset home</string>
+    <string name="home_no_fix_title">No position yet</string>
+    <string name="home_no_fix_body">There\'s no GPS fix yet, so there\'s nothing to save as home. Wait for your position to show on the map and try again.</string>
+
+    <!-- Split screen and floating window help. Each body ends with split_keeps_recording. -->
+    <string name="split_title">Split screen</string>
+    <string name="split_rebuild_help">This device won\'t let an app rebuild the split from inside it. Drag the divider to the top or bottom edge to end this split, then pair Enclose with the app you want.</string>
+    <string name="split_enter_help">This device doesn\'t let an app put itself into split screen. Open Recents, press and hold the Enclose card, choose Split screen, then pick the app for the other half.</string>
+    <string name="split_keeps_recording">Enclose keeps recording either way.</string>
+    <string name="float_refused_title">Couldn\'t float the window</string>
+    <string name="float_refused_body">The system turned the request down. Picture-in-picture can be switched off per app — check Settings › Apps › Enclose › Picture-in-picture and try again.</string>
+
+    <!-- Discarding a walk that hasn\'t closed a loop. The confirm button reuses panel_discard_*. -->
+    <string name="discard_walk_title">Discard this walk?</string>
+    <string name="discard_run_title">Discard this run?</string>
+    <string name="discard_ride_title">Discard this ride?</string>
+    <string name="discard_body">You haven\'t closed a loop yet, so nothing will be claimed. Your route so far will be lost.</string>
+
+    <!-- Starting a walk with test mode on (debug builds only). -->
+    <string name="test_walk_title">Test mode is on</string>
+    <string name="test_walk_body_walk">This walk won\'t use GPS. Tap the map to drop points instead — nothing you actually walk is recorded, and the route can\'t be recovered afterwards.</string>
+    <string name="test_walk_body_run">This run won\'t use GPS. Tap the map to drop points instead — nothing you actually walk is recorded, and the route can\'t be recovered afterwards.</string>
+    <string name="test_walk_body_ride">This ride won\'t use GPS. Tap the map to drop points instead — nothing you actually walk is recorded, and the route can\'t be recovered afterwards.</string>
+    <string name="test_walk_leave">Turn it off &amp; start</string>
+    <string name="test_walk_start_walk">Start test walk</string>
+    <string name="test_walk_start_run">Start test run</string>
+    <string name="test_walk_start_ride">Start test ride</string>
+
+    <!-- How Enclose works sheet. -->
+    <string name="how_title">How Enclose works</string>
+    <string name="how_subtitle">Claim real ground by walking around it.</string>
+    <!-- A numbered step heading: %1$d is the step number, %2$s its title. -->
+    <string name="how_step_heading">%1$d · %2$s</string>
+    <string name="how_start_title">Start a walk</string>
+    <string name="how_start_body">Your route is traced live on the map, and keeps recording while your screen is off.</string>
+    <string name="how_loop_title">Walk a loop</string>
+    <!-- %1$d metres to leave the start, %2$d metres to cover. -->
+    <string name="how_loop_body">Head at least %1$d m away and cover %2$d m or more, then curve back around.</string>
+    <string name="how_claim_title">Close it and claim</string>
+    <string name="how_claim_body">Step back into the dashed circle around your start and close the loop. Everything inside becomes yours — overlapping older claims get carved back.</string>
+    <string name="how_own_power">Under your own power only. Enclose watches how you\'re moving — vehicle trips aren\'t recorded, and driving a loop won\'t claim it.</string>
+    <string name="how_got_it">Got it</string>
+</resources>

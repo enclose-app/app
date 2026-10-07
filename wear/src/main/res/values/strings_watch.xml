@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The watch app. Units are worded as the phone words them (the phone's
+  strings_units.xml), so one walk doesn't read two ways on two screens.
+-->
+<resources>
+    <!-- Units. %1$.2f is kilometres or square kilometres; %1$d whole metres or square metres. -->
+    <string name="unit_distance_km">%1$.2f km</string>
+    <string name="unit_distance_m">%1$d m</string>
+    <string name="unit_area_km2">%1$.2f km²</string>
+    <string name="unit_area_m2">%1$d m²</string>
+
+    <string name="watch_update_title">Update Enclose</string>
+    <string name="watch_update_body">The phone and watch apps are different versions.</string>
+    <string name="watch_no_phone_body">Open Enclose on your phone once to connect.</string>
+    <string name="watch_open_on_phone">Open on phone</string>
+    <string name="watch_start_walk">Start walk</string>
+    <string name="watch_starts_on_phone">Starts on your phone</string>
+    <!-- The live strip: %1$s elapsed time, %2$s distance with its unit. -->
+    <string name="watch_walk_figures">%1$s · %2$s</string>
+    <!-- Map data attribution, required by the licence. Not translated. -->
+    <string name="watch_osm_attribution" translatable="false">© OpenStreetMap</string>
+
+    <!-- One line on what the walk needs next. -->
+    <string name="watch_hint_not_recording">Phone isn\'t recording — check it</string>
+    <string name="watch_hint_vehicle">Vehicle detected — not recording</string>
+    <string name="watch_hint_finding_gps">Finding GPS on your phone…</string>
+    <string name="watch_hint_ready">Ready to close!</string>
+    <!-- %1$s is a distance with its unit. -->
+    <string name="watch_hint_head_back_distance">Head back — %1$s to start</string>
+    <string name="watch_hint_head_back">Head back to the start</string>
+    <string name="watch_hint_keep_walking">Keep walking</string>
+
+    <string name="watch_stopping">Stopping…</string>
+    <string name="watch_stop_claim">Stop &amp; claim</string>
+    <string name="watch_phone_unreachable">Phone not reachable</string>
+    <string name="watch_check_phone">Check your phone</string>
+    <string name="watch_loop_closed">Loop closed</string>
+    <string name="watch_claim_on_phone">Name and claim it on your phone</string>
+
+    <!-- Notification when the walker steps into the closing radius. -->
+    <string name="watch_ready_channel">Ready to close</string>
+    <string name="watch_ready_title">Loop ready to close</string>
+    <string name="watch_ready_body">Stop now to claim it</string>
+</resources>

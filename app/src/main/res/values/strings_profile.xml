@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The profile screen: stats, coverage, passport, history, and the App section. -->
+<resources>
+    <string name="profile_title">Profile</string>
+    <!-- Accessibility label for the toolbar's back arrow. -->
+    <string name="profile_back">Back</string>
+    <string name="profile_sign_in_soon">Sign in (coming soon)</string>
+
+    <!-- Header. Shown when the profile has no name at all. -->
+    <string name="profile_default_name">Walker</string>
+    <string name="profile_guest_offline">Guest · offline</string>
+    <string name="profile_signed_in">Signed in</string>
+    <string name="profile_roll_name">Roll a random name</string>
+    <string name="profile_edit_name">Edit name</string>
+
+    <string name="profile_section_conquest">Your conquest</string>
+    <string name="profile_stat_territories">Territories</string>
+    <string name="profile_stat_area">Area conquered</string>
+    <string name="profile_stat_distance">Distance walked</string>
+    <string name="profile_stat_loops">Loops closed</string>
+    <string name="profile_stat_climb">Elevation climbed</string>
+
+    <!-- Coverage card. -->
+    <string name="coverage_open_cities">See every city you\'ve walked</string>
+    <!-- Card title before any claim has a city. -->
+    <string name="coverage_region_title">Region filled in</string>
+    <string name="coverage_filled_in">Filled in</string>
+    <!-- A coverage percentage, 0–100. -->
+    <string name="coverage_percent">%1$d%%</string>
+    <string name="coverage_explain_empty">Once you claim your first loop, this shows how completely you\'ve filled in the city you walk.</string>
+    <string name="coverage_explain">Your claimed area there as a share of the box that contains your claims in that city — how completely you\'ve taken the ground you roam.</string>
+    <plurals name="coverage_see_all_cities">
+        <item quantity="one">See all %1$d cities</item>
+        <item quantity="other">See all %1$d cities</item>
+    </plurals>
+    <string name="coverage_see_breakdown">See the breakdown</string>
+    <!-- Groups claims whose city hasn't been looked up yet. -->
+    <string name="coverage_unplaced">Unplaced claims</string>
+    <string name="coverage_sheet_title">Where you\'ve walked</string>
+    <string name="coverage_sheet_subtitle">How much of each city you\'ve filled in.</string>
+    <string name="coverage_sheet_unplaced_note">Claims are placed when there\'s a connection. Anything walked offline is named the next time you open this screen.</string>
+    <!-- Under each city. %2$s is an area with its unit. -->
+    <plurals name="coverage_city_detail">
+        <item quantity="one">%1$d claim · %2$s</item>
+        <item quantity="other">%1$d claims · %2$s</item>
+    </plurals>
+
+    <!-- Passport. -->
+    <string name="passport_title">Passport</string>
+    <plurals name="passport_countries">
+        <item quantity="one">One country walked.</item>
+        <item quantity="other">%1$d countries walked.</item>
+    </plurals>
+    <!-- A country with no city resolved. %2$s is a date. -->
+    <plurals name="passport_country_detail">
+        <item quantity="one">%1$d claim · since %2$s</item>
+        <item quantity="other">%1$d claims · since %2$s</item>
+    </plurals>
+
+    <!-- Fallen claims. -->
+    <string name="fallen_title">Fallen claims</string>
+    <string name="fallen_body">Ground you took back with a later walk. These left the map but the walks that earned them are kept.</string>
+    <!-- %1$s is the claim that took it, %2$s when (e.g. "Today 14:32", "3 days ago"). -->
+    <string name="fallen_absorbed_by">Absorbed by %1$s · %2$s</string>
+    <!-- %1$s is when (e.g. "Today 14:32", "3 days ago"). -->
+    <string name="fallen_absorbed">Absorbed %1$s</string>
+
+    <!-- Voided walks. -->
+    <string name="voided_title">Walks that didn\'t count</string>
+    <string name="voided_body">Ended by the anti-cheat — the movement read as a vehicle, or picked up too far from where it stopped. They can\'t be claimed, but what you walked is kept here.</string>
+    <!-- %1$s is a distance with its unit, %2$s when. -->
+    <string name="voided_row">%1$s · %2$s</string>
+    <string name="voided_reason_vehicle">Read as a vehicle</string>
+    <string name="voided_reason_too_fast">Too fast for walking</string>
+    <string name="voided_reason_gap">Picked up again too far from where it stopped</string>
+    <string name="voided_share">Share as GPX</string>
+    <string name="voided_delete">Delete walk</string>
+    <!-- Title of the system share sheet. -->
+    <string name="voided_share_chooser">Share GPX</string>
+    <string name="voided_share_failed">Couldn\'t share that walk</string>
+    <string name="voided_delete_title">Delete this walk?</string>
+    <!-- %1$s is a distance with its unit, %2$s when (e.g. "Today 14:32", "3 days ago"). -->
+    <string name="voided_delete_body">%1$s walked %2$s. It\'s the only copy — share it as GPX first if you want to keep it.</string>
+    <string name="voided_delete_confirm">Delete</string>
+    <string name="voided_delete_keep">Keep</string>
+
+    <!-- Highlights. -->
+    <string name="highlights_title">Highlights</string>
+    <string name="highlights_empty_title">Nothing to show yet</string>
+    <string name="highlights_empty_body">Claim your first territory and your records will start filling in here.</string>
+    <string name="highlights_biggest_territory">Biggest territory</string>
+    <!-- %1$s is the territory's name, %2$s its area with unit. -->
+    <string name="highlights_biggest_territory_value">%1$s · %2$s</string>
+    <string name="highlights_longest_walk">Longest walk</string>
+    <string name="highlights_biggest_climb">Biggest climb</string>
+    <string name="highlights_first_claim">First claim</string>
+
+    <!-- App section. -->
+    <string name="app_section_title">App</string>
+    <string name="app_how_it_works_title">How Enclose works</string>
+    <string name="app_how_it_works_subtitle">Walk a loop, come back, claim what\'s inside.</string>
+    <string name="app_test_mode_title">Test mode</string>
+    <string name="app_test_mode_body">Tap the map to drop points instead of walking. Nothing is recorded from GPS while it\'s on.</string>
+    <string name="app_snap_title">Snap routes to paths</string>
+    <string name="app_snap_body">Draws claims along real roads instead of your raw GPS trace. Sends the route of each new claim to a map service to do it. Areas never change.</string>
+    <string name="app_snap_existing_running">Snapping existing claims…</string>
+    <string name="app_snap_existing">Snap existing claims</string>
+    <string name="app_snap_existing_running_body">Working through them now.</string>
+    <plurals name="app_snap_existing_body">
+        <item quantity="one">Sends %1$d earlier walk to the map service. New claims are already covered.</item>
+        <item quantity="other">Sends %1$d earlier walks to the map service. New claims are already covered.</item>
+    </plurals>
+    <string name="app_import_gpx_title">Import GPX…</string>
+    <string name="app_import_gpx_body">Replay a track recorded elsewhere, then close the loop to claim it. You can also share a GPX straight to Enclose.</string>
+    <string name="app_backup_title">Back up everything…</string>
+    <string name="app_backup_body">Writes one file holding every claim, every walk, your profile and your settings. Keep it somewhere safe — anyone who opens it can read where you walk.</string>
+    <string name="app_restore_title">Restore from a backup…</string>
+    <string name="app_restore_body">Brings back everything in a backup file. Nothing already on this phone is deleted.</string>
+    <!-- Footer. %1$s is the version name ("1.0.3"), %2$d the build number. -->
+    <string name="app_version">Enclose %1$s (build %2$d)</string>
+    <!-- Same, for a debug build. -->
+    <string name="app_version_debug">Enclose %1$s (build %2$d) · debug</string>
+
+    <!-- Edit name dialog. -->
+    <string name="edit_name_title">Edit name</string>
+    <string name="edit_name_first">First name</string>
+    <string name="edit_name_last">Last name</string>
+    <string name="edit_name_save">Save</string>
+    <string name="edit_name_cancel">Cancel</string>
+</resources>

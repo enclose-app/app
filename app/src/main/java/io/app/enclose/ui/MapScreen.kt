@@ -109,6 +109,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -124,6 +125,7 @@ import io.app.enclose.data.TerritoryHit
 import io.app.enclose.geo.Geo
 import io.app.enclose.geo.LatLng
 import io.app.enclose.tracking.BlockReason
+import io.app.enclose.R
 import io.app.enclose.tracking.ActivityType
 import io.app.enclose.tracking.MotionGate
 import io.app.enclose.tracking.NameGenerator
@@ -135,6 +137,9 @@ import io.app.enclose.ui.theme.PillShape
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import androidx.annotation.StringRes
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 
 /**
  * The home screen: a full-bleed map with floating controls.
@@ -186,6 +191,7 @@ fun MapScreen(
     onDeleteConsumed: () -> Unit = {},
     profileViewModel: ProfileViewModel = viewModel(),
 ) {
+    val res = LocalResources.current
     val walk by viewModel.walk.collectAsStateWithLifecycle()
     val territories by viewModel.territories.collectAsStateWithLifecycle()
     val walksById by viewModel.walksById.collectAsStateWithLifecycle()
@@ -279,7 +285,9 @@ fun MapScreen(
     LaunchedEffect(Unit) {
         viewModel.claimEvents.collect { t ->
             controller.fitTo(t.ring)
-            snackbarHost.showSnackbar("Claimed ${t.name} · ${formatArea(t.areaSqMeters)}")
+            snackbarHost.showSnackbar(
+                res.getString(R.string.claim_done_snackbar, t.name, res.formatArea(t.areaSqMeters)),
+            )
         }
     }
 
@@ -306,8 +314,8 @@ fun MapScreen(
         viewModel.deleteTerritory(territory.id)
         scope.launch {
             val result = snackbarHost.showSnackbar(
-                message = "Deleted ${territory.name}",
-                actionLabel = "Undo",
+                message = res.getString(R.string.map_deleted_snackbar, territory.name),
+                actionLabel = res.getString(R.string.map_undo),
                 duration = SnackbarDuration.Long,
             )
             if (result == SnackbarResult.ActionPerformed) {
@@ -340,7 +348,7 @@ fun MapScreen(
                 MapControlSpec(
                     control = MapControl.FLOAT,
                     icon = Icons.Filled.PictureInPictureAlt,
-                    label = "Float the walk over other apps",
+                    label = stringResource(R.string.map_float),
                     tint = if (floatingWindowEnabled) {
                         MaterialTheme.colorScheme.primary
                     } else {
@@ -349,12 +357,14 @@ fun MapScreen(
                     onLongPress = if (floatingWindowEnabled) {
                         {
                             onSetFloatingWindow(false)
-                            scope.launch { snackbarHost.showSnackbar("Floating window off") }
+                            scope.launch {
+                                snackbarHost.showSnackbar(res.getString(R.string.map_float_off_snackbar))
+                            }
                         }
                     } else {
                         null
                     },
-                    longPressLabel = "Stop floating automatically",
+                    longPressLabel = stringResource(R.string.map_float_stop),
                     onClick = {
                         onSetFloatingWindow(true)
                         if (!onEnterFloatingWindow()) floatingRefused = true
@@ -373,9 +383,9 @@ fun MapScreen(
                     // request re-pairs this task and takes the previous split
                     // down with it, which is the only handle an app has on one.
                     label = if (inMultiWindow) {
-                        "Rebuild the split screen"
+                        stringResource(R.string.map_split_rebuild)
                     } else {
-                        "Share the screen with another app"
+                        stringResource(R.string.map_split_share)
                     },
                     tint = if (inMultiWindow) {
                         MaterialTheme.colorScheme.primary
@@ -400,7 +410,7 @@ fun MapScreen(
             MapControlSpec(
                 control = MapControl.ZOOM_IN,
                 icon = Icons.Filled.Add,
-                label = "Zoom in",
+                label = stringResource(R.string.map_zoom_in),
                 enabled = controller.isStyleLoaded,
                 tint = MaterialTheme.colorScheme.onSurface,
                 onClick = { controller.zoomBy(ZOOM_BUTTON_STEP) },
@@ -410,7 +420,7 @@ fun MapScreen(
             MapControlSpec(
                 control = MapControl.ZOOM_OUT,
                 icon = Icons.Filled.Remove,
-                label = "Zoom out",
+                label = stringResource(R.string.map_zoom_out),
                 enabled = controller.isStyleLoaded,
                 tint = MaterialTheme.colorScheme.onSurface,
                 onClick = { controller.zoomBy(-ZOOM_BUTTON_STEP) },
@@ -424,7 +434,7 @@ fun MapScreen(
             MapControlSpec(
                 control = MapControl.HOME,
                 icon = if (home == null) Icons.Outlined.Home else Icons.Filled.Home,
-                label = if (home == null) "Set your home position" else "Go home",
+                label = stringResource(if (home == null) R.string.map_home_set else R.string.map_home_go),
                 // Flying home needs only a map; setting it needs a fix.
                 enabled = if (home == null) controller.canLocate else controller.isStyleLoaded,
                 tint = if (home == null) {
@@ -433,7 +443,7 @@ fun MapScreen(
                     MaterialTheme.colorScheme.primary
                 },
                 onLongPress = if (home == null) null else ({ confirmResetHome = true }),
-                longPressLabel = "Reset your home position",
+                longPressLabel = stringResource(R.string.map_home_reset),
                 onClick = {
                     val saved = home
                     if (saved != null) {
@@ -460,11 +470,9 @@ fun MapScreen(
                 } else {
                     Icons.Filled.LocationSearching
                 },
-                label = if (controller.followUser) {
-                    "Following your location"
-                } else {
-                    "Recenter and follow your location"
-                },
+                label = stringResource(
+                    if (controller.followUser) R.string.map_following else R.string.map_recenter,
+                ),
                 enabled = controller.canLocate,
                 tint = if (controller.followUser) {
                     MaterialTheme.colorScheme.primary
@@ -483,7 +491,9 @@ fun MapScreen(
             MapControlSpec(
                 control = MapControl.BASEMAP,
                 icon = if (basemapDark) Icons.Filled.LightMode else Icons.Filled.DarkMode,
-                label = if (basemapDark) "Switch to light map" else "Switch to dark map",
+                label = stringResource(
+                    if (basemapDark) R.string.map_basemap_light else R.string.map_basemap_dark,
+                ),
                 enabled = controller.isStyleLoaded,
                 tint = MaterialTheme.colorScheme.onSurface,
                 onClick = {
@@ -596,11 +606,15 @@ fun MapScreen(
             MapChip(
                 icon = Icons.Filled.Flag,
                 text = if (territories.isEmpty()) {
-                    "No claims yet"
+                    stringResource(R.string.map_no_claims)
                 } else {
-                    "${territories.size} · ${formatArea(territories.sumOf { it.areaSqMeters })}"
+                    stringResource(
+                        R.string.map_claims_summary,
+                        territories.size,
+                        res.formatArea(territories.sumOf { it.areaSqMeters }),
+                    )
                 },
-                contentDescription = "Open your claimed territories",
+                contentDescription = stringResource(R.string.map_open_territories),
                 onClick = { showList = true },
             )
 
@@ -617,7 +631,7 @@ fun MapScreen(
                     Box {
                         MapControlButton(
                             icon = Icons.Filled.MoreVert,
-                            contentDescription = "More map controls",
+                            contentDescription = stringResource(R.string.map_more_controls),
                             onClick = { showMenu = true },
                         )
                         DropdownMenu(
@@ -807,19 +821,19 @@ fun MapScreen(
 
     voidedWalk?.let { reason ->
         NoticeDialog(
-            title = "Walk discarded",
+            title = stringResource(R.string.void_title),
             message = when (reason) {
-                VoidReason.VEHICLE ->
-                    "That looked like a vehicle trip, through all " +
-                        "${MotionGate.MAX_STRIKES} warnings. Enclose only counts ground " +
-                        "you cover walking, running or cycling, so this walk wasn't kept."
-                VoidReason.TOO_FAST ->
-                    "You were moving faster than a walk, run or ride through all " +
-                        "${MotionGate.MAX_STRIKES} warnings, so this walk wasn't kept."
-                VoidReason.UNVERIFIED_GAP ->
-                    "Recording picked up a long way from where it stopped, so there's no " +
-                        "record of how you covered the ground in between. This walk " +
-                        "wasn't kept."
+                VoidReason.VEHICLE -> pluralStringResource(
+                    R.plurals.void_vehicle,
+                    MotionGate.MAX_STRIKES,
+                    MotionGate.MAX_STRIKES,
+                )
+                VoidReason.TOO_FAST -> pluralStringResource(
+                    R.plurals.void_too_fast,
+                    MotionGate.MAX_STRIKES,
+                    MotionGate.MAX_STRIKES,
+                )
+                VoidReason.UNVERIFIED_GAP -> stringResource(R.string.void_gap)
             },
             onDismiss = viewModel::dismissVoidedWalk,
         )
@@ -831,29 +845,20 @@ fun MapScreen(
     recordingFailure?.let { failure ->
         val recorded = walk.path.isNotEmpty()
         NoticeDialog(
-            title = if (recorded) "Recording stopped" else "Couldn't start recording",
-            message = buildString {
-                append(
+            title = stringResource(
+                if (recorded) R.string.recording_stopped_title else R.string.recording_failed_title,
+            ),
+            message = listOf(
+                stringResource(
                     when (failure) {
-                        RecordingFailure.PERMISSION ->
-                            "Enclose no longer has precise location access, so there's " +
-                                "nothing to record your route with."
-                        RecordingFailure.UNAVAILABLE ->
-                            "This device wouldn't hand over location updates. Check that " +
-                                "location is switched on, then try again."
+                        RecordingFailure.PERMISSION -> R.string.recording_no_permission
+                        RecordingFailure.UNAVAILABLE -> R.string.recording_unavailable
                     },
-                )
-                append(
-                    if (recorded) {
-                        // Never quietly dropped: the ground already walked is real,
-                        // and Stop can still claim it.
-                        " Everything walked so far is still here — press Stop to " +
-                            "claim or discard it."
-                    } else {
-                        " Nothing was recorded, so the walk has been stopped."
-                    },
-                )
-            },
+                ),
+                // Never quietly dropped: the ground already walked is real, and
+                // Stop can still claim it.
+                stringResource(if (recorded) R.string.recording_kept else R.string.recording_nothing),
+            ).joinToString(" "),
             onDismiss = viewModel::dismissRecordingFailure,
         )
     }
@@ -871,16 +876,14 @@ fun MapScreen(
 
     confirmSetHome?.let { here ->
         ConfirmDialog(
-            title = "Set home here?",
-            message = "Where you're standing now becomes your home. The home button " +
-                "brings the map straight back to it; holding the button for three " +
-                "seconds clears it again.",
-            confirmLabel = "Set home",
+            title = stringResource(R.string.home_set_title),
+            message = stringResource(R.string.home_set_body),
+            confirmLabel = stringResource(R.string.home_set_confirm),
             onConfirm = {
                 confirmSetHome = null
                 viewModel.setHome(here)
                 controller.flyTo(here)
-                scope.launch { snackbarHost.showSnackbar("Home set") }
+                scope.launch { snackbarHost.showSnackbar(res.getString(R.string.map_home_set_snackbar)) }
             },
             onDismiss = { confirmSetHome = null },
         )
@@ -888,15 +891,16 @@ fun MapScreen(
 
     if (confirmResetHome) {
         ConfirmDialog(
-            title = "Reset home position?",
-            message = "Your home is cleared. The button then asks you to set it again " +
-                "from wherever you are.",
-            confirmLabel = "Reset home",
+            title = stringResource(R.string.home_reset_title),
+            message = stringResource(R.string.home_reset_body),
+            confirmLabel = stringResource(R.string.home_reset_confirm),
             destructive = true,
             onConfirm = {
                 confirmResetHome = false
                 viewModel.clearHome()
-                scope.launch { snackbarHost.showSnackbar("Home cleared") }
+                scope.launch {
+                    snackbarHost.showSnackbar(res.getString(R.string.map_home_cleared_snackbar))
+                }
             },
             onDismiss = { confirmResetHome = false },
         )
@@ -915,45 +919,50 @@ fun MapScreen(
 
     if (showSplitHelp) {
         NoticeDialog(
-            title = "Split screen",
-            message = if (splitRequestedFrom) {
-                "This device won't let an app rebuild the split from inside it. " +
-                    "Drag the divider to the top or bottom edge to end this split, " +
-                    "then pair Enclose with the app you want."
-            } else {
-                "This device doesn't let an app put itself into split screen. " +
-                    "Open Recents, press and hold the Enclose card, choose Split screen, " +
-                    "then pick the app for the other half."
-            } + " Enclose keeps recording either way.",
+            title = stringResource(R.string.split_title),
+            message = listOf(
+                stringResource(
+                    if (splitRequestedFrom) R.string.split_rebuild_help else R.string.split_enter_help,
+                ),
+                stringResource(R.string.split_keeps_recording),
+            ).joinToString(" "),
             onDismiss = { showSplitHelp = false },
         )
     }
 
     if (floatingRefused) {
         NoticeDialog(
-            title = "Couldn't float the window",
-            message = "The system turned the request down. Picture-in-picture can be " +
-                "switched off per app — check Settings › Apps › Enclose › " +
-                "Picture-in-picture and try again.",
+            title = stringResource(R.string.float_refused_title),
+            message = stringResource(R.string.float_refused_body),
             onDismiss = { floatingRefused = false },
         )
     }
 
     if (noFixForHome) {
         NoticeDialog(
-            title = "No position yet",
-            message = "There's no GPS fix yet, so there's nothing to save as home. " +
-                "Wait for your position to show on the map and try again.",
+            title = stringResource(R.string.home_no_fix_title),
+            message = stringResource(R.string.home_no_fix_body),
             onDismiss = { noFixForHome = false },
         )
     }
 
     if (confirmDiscardWalk) {
         ConfirmDialog(
-            title = "Discard this ${walk.activityType.noun}?",
-            message = "You haven't closed a loop yet, so nothing will be claimed. " +
-                "Your route so far will be lost.",
-            confirmLabel = "Discard ${walk.activityType.noun}",
+            title = stringResource(
+                walk.activityType.pick(
+                    R.string.discard_walk_title,
+                    R.string.discard_run_title,
+                    R.string.discard_ride_title,
+                ),
+            ),
+            message = stringResource(R.string.discard_body),
+            confirmLabel = stringResource(
+                walk.activityType.pick(
+                    R.string.panel_discard_walk,
+                    R.string.panel_discard_run,
+                    R.string.panel_discard_ride,
+                ),
+            ),
             destructive = true,
             onConfirm = {
                 confirmDiscardWalk = false
@@ -965,7 +974,7 @@ fun MapScreen(
 
     if (confirmTestWalk) {
         TestWalkWarningDialog(
-            noun = walk.activityType.noun,
+            activityType = walk.activityType,
             onStartTestWalk = {
                 confirmTestWalk = false
                 viewModel.startWalk()
@@ -1020,7 +1029,7 @@ private fun ProfileAvatarButton(initials: String, onClick: () -> Unit) {
         modifier = Modifier
             .size(TOUCH_TARGET)
             .clip(CircleShape)
-            .clickable(onClickLabel = "Open your profile", role = Role.Button, onClick = onClick),
+            .clickable(onClickLabel = stringResource(R.string.map_open_profile), role = Role.Button, onClick = onClick),
         shape = CircleShape,
     ) {
         Box(contentAlignment = Alignment.Center) {
@@ -1038,7 +1047,7 @@ private fun MapLoadingIndicator() {
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-            Text("Loading map…", style = MaterialTheme.typography.labelLarge)
+            Text(stringResource(R.string.map_loading), style = MaterialTheme.typography.labelLarge)
         }
     }
 }
@@ -1059,13 +1068,14 @@ private fun SelectedClaimCard(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val res = LocalResources.current
     val now = rememberNow()
     // Area first, then where and when — the same order the list rows use, so a
     // claim reads the same wherever it is met.
     val summary = listOfNotNull(
-        formatArea(territory.areaSqMeters),
+        res.formatArea(territory.areaSqMeters),
         territory.city.takeIf { it.isNotBlank() },
-        formatRelativeDay(territory.claimedAtEpochMs, now),
+        res.formatRelativeDay(territory.claimedAtEpochMs, now),
     ).joinToString(" · ")
 
     MapSurface(
@@ -1076,7 +1086,7 @@ private fun SelectedClaimCard(
             Modifier
                 .fillMaxWidth()
                 .clickable(
-                    onClickLabel = "Open ${territory.name}",
+                    onClickLabel = stringResource(R.string.map_open_claim, territory.name),
                     role = Role.Button,
                     onClick = onOpen,
                 )
@@ -1116,7 +1126,7 @@ private fun SelectedClaimCard(
             IconButton(onClick = onDismiss) {
                 Icon(
                     Icons.Filled.Close,
-                    contentDescription = "Clear selected claim",
+                    contentDescription = stringResource(R.string.map_clear_selection),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -1125,6 +1135,7 @@ private fun SelectedClaimCard(
 }
 
 // --- Bottom control panel ----------------------------------------------------
+
 
 @Composable
 private fun ControlPanel(
@@ -1211,7 +1222,7 @@ private fun ControlPanel(
                     .height(24.dp)
                     .clip(MaterialTheme.shapes.small)
                     .clickable(
-                        onClickLabel = "Minimise the panel",
+                        onClickLabel = stringResource(R.string.panel_minimise),
                         role = Role.Button,
                         onClick = { onCollapsedChange(true) },
                     ),
@@ -1219,7 +1230,7 @@ private fun ControlPanel(
             ) {
                 Icon(
                     Icons.Filled.KeyboardArrowDown,
-                    contentDescription = "Minimise the panel",
+                    contentDescription = stringResource(R.string.panel_minimise),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(22.dp),
                 )
@@ -1253,7 +1264,16 @@ private fun ControlPanel(
                         modifier = Modifier.fillMaxWidth().height(54.dp),
                         shape = PillShape,
                     ) {
-                        ButtonContent(Icons.Filled.PlayArrow, "Start ${activityType.noun}")
+                        ButtonContent(
+                            Icons.Filled.PlayArrow,
+                            stringResource(
+                                activityType.pick(
+                                    R.string.panel_start_walk,
+                                    R.string.panel_start_run,
+                                    R.string.panel_start_ride,
+                                ),
+                            ),
+                        )
                     }
                 }
             }
@@ -1284,6 +1304,7 @@ private fun CollapsedPanel(
     /** Null where the window is too short for the panel to expand into. */
     onExpand: (() -> Unit)?,
 ) {
+    val res = LocalResources.current
     val accents = LocalEncloseAccents.current
     // Ticks so the elapsed time in the collapsed row keeps up with the expanded
     // one; the stats are the reason to look at it at all.
@@ -1303,19 +1324,23 @@ private fun CollapsedPanel(
         PanelStatus.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val title = when (summary.status) {
-        PanelStatus.IDLE -> "Ready to claim ground"
+        PanelStatus.IDLE -> stringResource(R.string.panel_idle_title)
         PanelStatus.NO_LOCATION -> when (summary.action) {
-            PanelAction.OPEN_LOCATION_SETTINGS -> "Location is switched off"
-            else -> "Location access needed"
+            PanelAction.OPEN_LOCATION_SETTINGS -> stringResource(R.string.location_title_off)
+            else -> stringResource(R.string.location_title_needed)
         }
-        PanelStatus.BLOCKED -> "Paused — not recording"
-        PanelStatus.READY -> "Back at the start"
-        PanelStatus.TRACKING -> walk.activityType.activeLabel
+        PanelStatus.BLOCKED -> stringResource(R.string.panel_title_paused)
+        PanelStatus.READY -> stringResource(R.string.panel_title_ready)
+        PanelStatus.TRACKING -> stringResource(walk.activityType.activeLabelRes)
     }
     val detail = when (summary.status) {
-        PanelStatus.IDLE -> activityType.label
+        PanelStatus.IDLE -> stringResource(activityType.labelRes)
         PanelStatus.NO_LOCATION -> null
-        else -> "${formatDistance(walk.distanceMeters)} · ${formatElapsed(elapsedMs)}"
+        else -> stringResource(
+            R.string.panel_detail_stats,
+            res.formatDistance(walk.distanceMeters),
+            formatElapsed(elapsedMs),
+        )
     }
 
     Row(
@@ -1361,7 +1386,7 @@ private fun CollapsedPanel(
             IconButton(onClick = onExpand, modifier = Modifier.size(TOUCH_TARGET)) {
                 Icon(
                     Icons.Filled.KeyboardArrowUp,
-                    contentDescription = "Expand the panel",
+                    contentDescription = stringResource(R.string.panel_expand),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -1382,11 +1407,12 @@ private fun CollapsedAction(
     onOpenLocationSettings: () -> Unit,
 ) {
     val label = when (summary.action) {
-        PanelAction.START -> activityType.label
-        PanelAction.CLAIM -> "Claim"
-        PanelAction.END -> "End"
-        PanelAction.GRANT_PERMISSION -> "Grant"
-        PanelAction.OPEN_SETTINGS, PanelAction.OPEN_LOCATION_SETTINGS -> "Settings"
+        PanelAction.START -> stringResource(activityType.labelRes)
+        PanelAction.CLAIM -> stringResource(R.string.panel_action_claim)
+        PanelAction.END -> stringResource(R.string.panel_action_end)
+        PanelAction.GRANT_PERMISSION -> stringResource(R.string.panel_action_grant)
+        PanelAction.OPEN_SETTINGS, PanelAction.OPEN_LOCATION_SETTINGS ->
+            stringResource(R.string.panel_action_settings)
     }
     val onClick = when (summary.action) {
         PanelAction.START -> onStart
@@ -1449,7 +1475,7 @@ private fun ActivitySelector(
                 // and greyed chips say "not yet" instead.
                 enabled = type.available,
                 onClick = { onSelect(type) },
-                label = { Text(type.label) },
+                label = { Text(stringResource(type.labelRes)) },
                 leadingIcon = {
                     Icon(
                         when (type) {
@@ -1481,19 +1507,18 @@ private fun IdleBlock(onHowItWorks: () -> Unit) {
     ) {
         Column(Modifier.weight(1f)) {
             Text(
-                "Ready to claim ground",
+                stringResource(R.string.panel_idle_title),
                 style = MaterialTheme.typography.titleMedium,
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                "Walk a loop and finish near where you started to claim " +
-                    "everything inside it.",
+                stringResource(R.string.panel_idle_body),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         IconButton(onClick = onHowItWorks, modifier = Modifier.size(TOUCH_TARGET)) {
-            Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = "How Enclose works")
+            Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = stringResource(R.string.panel_how_it_works))
         }
     }
 }
@@ -1516,26 +1541,28 @@ private fun LocationBlock(
     onOpenAppSettings: () -> Unit,
     onOpenLocationSettings: () -> Unit,
 ) {
-    val title = when (location) {
-        LocationReadiness.SERVICES_OFF -> "Location is switched off"
-        LocationReadiness.APPROXIMATE_ONLY -> "Precise location needed"
-        else -> "Location access needed"
+    val title = stringResource(
+        when (location) {
+            LocationReadiness.SERVICES_OFF -> R.string.location_title_off
+            LocationReadiness.APPROXIMATE_ONLY -> R.string.location_title_precise
+            else -> R.string.location_title_needed
+        },
+    )
+    val body = stringResource(
+        when (location) {
+            LocationReadiness.SERVICES_OFF -> R.string.location_body_off
+            LocationReadiness.APPROXIMATE_ONLY -> R.string.location_body_precise
+            LocationReadiness.BLOCKED -> R.string.location_body_blocked
+            else -> R.string.location_body_needed
+        },
+    )
+    val (onClick, labelRes) = when (action) {
+        PanelAction.OPEN_LOCATION_SETTINGS ->
+            onOpenLocationSettings to R.string.location_open_location_settings
+        PanelAction.OPEN_SETTINGS -> onOpenAppSettings to R.string.location_open_settings
+        else -> onRequestPermission to R.string.location_grant
     }
-    val body = when (location) {
-        LocationReadiness.SERVICES_OFF ->
-            "Enclose has permission, but the device's location switch is off, so " +
-                "no fixes arrive at all."
-        LocationReadiness.APPROXIMATE_ONLY ->
-            "Approximate location is off by hundreds of metres — too vague to trace " +
-                "a route. Switch this app's location to Precise."
-        LocationReadiness.BLOCKED -> "Enable it in system settings to record walks."
-        else -> "Enclose traces your route to work out what you enclosed."
-    }
-    val (onClick, label) = when (action) {
-        PanelAction.OPEN_LOCATION_SETTINGS -> onOpenLocationSettings to "Open location settings"
-        PanelAction.OPEN_SETTINGS -> onOpenAppSettings to "Open settings"
-        else -> onRequestPermission to "Grant location access"
-    }
+    val label = stringResource(labelRes)
 
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
@@ -1584,10 +1611,18 @@ private fun WalkActions(
             modifier = Modifier.fillMaxWidth().height(54.dp),
             shape = PillShape,
         ) {
-            ButtonContent(Icons.Filled.Flag, "Close loop & claim")
+            ButtonContent(Icons.Filled.Flag, stringResource(R.string.panel_close_and_claim))
         }
         TextButton(onClick = onFinishWithoutClaim, modifier = Modifier.fillMaxWidth()) {
-            Text("Discard ${walk.activityType.noun}")
+            Text(
+                stringResource(
+                    walk.activityType.pick(
+                        R.string.panel_discard_walk,
+                        R.string.panel_discard_run,
+                        R.string.panel_discard_ride,
+                    ),
+                ),
+            )
         }
     } else {
         // Not ready: stopping throws the walk away, so it must not look like
@@ -1601,7 +1636,16 @@ private fun WalkActions(
                 contentColor = MaterialTheme.colorScheme.onErrorContainer,
             ),
         ) {
-            ButtonContent(Icons.Filled.Stop, "End ${walk.activityType.noun}")
+            ButtonContent(
+                Icons.Filled.Stop,
+                stringResource(
+                    walk.activityType.pick(
+                        R.string.panel_end_walk,
+                        R.string.panel_end_run,
+                        R.string.panel_end_ride,
+                    ),
+                ),
+            )
         }
     }
 }
@@ -1613,6 +1657,7 @@ private fun WalkActions(
  */
 @Composable
 private fun LiveStats(walk: TrackingManager.WalkState, injected: Boolean) {
+    val res = LocalResources.current
     // Tick once a second so elapsed time and pace advance live.
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(walk.isTracking) {
@@ -1648,7 +1693,9 @@ private fun LiveStats(walk: TrackingManager.WalkState, injected: Boolean) {
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                if (blocked) "Paused" else walk.activityType.activeLabel,
+                stringResource(
+                    if (blocked) R.string.stats_paused else walk.activityType.activeLabelRes,
+                ),
                 style = MaterialTheme.typography.titleMedium,
             )
         }
@@ -1665,18 +1712,18 @@ private fun LiveStats(walk: TrackingManager.WalkState, injected: Boolean) {
     ) {
         // Equal weights: the figures keep their columns as digits change.
         Metric(
-            label = "Distance",
-            value = formatDistance(walk.distanceMeters),
+            label = stringResource(R.string.stats_distance),
+            value = res.formatDistance(walk.distanceMeters),
             modifier = Modifier.weight(1f),
         )
         Metric(
-            label = "Time",
+            label = stringResource(R.string.stats_time),
             value = formatElapsed(elapsedMs),
             modifier = Modifier.weight(1f),
         )
         Metric(
-            label = "Pace",
-            value = formatPace(walk.distanceMeters, elapsedMs),
+            label = stringResource(R.string.stats_pace),
+            value = res.formatPace(walk.distanceMeters, elapsedMs),
             modifier = Modifier.weight(1f),
         )
     }
@@ -1686,13 +1733,13 @@ private fun LiveStats(walk: TrackingManager.WalkState, injected: Boolean) {
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Metric(
-            label = "Climb",
-            value = formatClimb(walk.elevationGainMeters),
+            label = stringResource(R.string.stats_climb),
+            value = res.formatClimb(walk.elevationGainMeters),
             modifier = Modifier.weight(1f),
         )
         Metric(
-            label = "From start",
-            value = walk.distanceToStartMeters?.let { formatDistance(it) } ?: EM_DASH,
+            label = stringResource(R.string.stats_from_start),
+            value = walk.distanceToStartMeters?.let { res.formatDistance(it) } ?: EM_DASH,
             modifier = Modifier.weight(1f),
         )
         // Holds the third column so the two rows line up as a grid instead of
@@ -1748,8 +1795,7 @@ private fun SignalGapNotice() {
             )
             Spacer(Modifier.width(10.dp))
             Text(
-                "GPS dropped out for a while — still recording, but part of your " +
-                    "route is estimated.",
+                stringResource(R.string.notice_signal_gap),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1768,7 +1814,7 @@ private fun SignalGapNotice() {
  */
 @Composable
 private fun TestWalkWarningDialog(
-    noun: String,
+    activityType: ActivityType,
     onStartTestWalk: () -> Unit,
     onLeaveTestMode: () -> Unit,
     onDismiss: () -> Unit,
@@ -1776,19 +1822,33 @@ private fun TestWalkWarningDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = MaterialTheme.shapes.extraLarge,
-        title = { Text("Test mode is on") },
+        title = { Text(stringResource(R.string.test_walk_title)) },
         text = {
             Text(
-                "This $noun won't use GPS. Tap the map to drop points instead — " +
-                    "nothing you actually walk is recorded, and the route can't be " +
-                    "recovered afterwards.",
+                stringResource(
+                    activityType.pick(
+                        R.string.test_walk_body_walk,
+                        R.string.test_walk_body_run,
+                        R.string.test_walk_body_ride,
+                    ),
+                ),
             )
         },
         confirmButton = {
-            Button(onClick = onLeaveTestMode) { Text("Turn it off & start") }
+            Button(onClick = onLeaveTestMode) { Text(stringResource(R.string.test_walk_leave)) }
         },
         dismissButton = {
-            TextButton(onClick = onStartTestWalk) { Text("Start test $noun") }
+            TextButton(onClick = onStartTestWalk) {
+                Text(
+                    stringResource(
+                        activityType.pick(
+                            R.string.test_walk_start_walk,
+                            R.string.test_walk_start_run,
+                            R.string.test_walk_start_ride,
+                        ),
+                    ),
+                )
+            }
         },
     )
 }
@@ -1805,20 +1865,23 @@ private fun TestWalkWarningDialog(
 internal fun GpxImportDialogs(state: GpxImport?, onDismiss: () -> Unit) {
     when (state) {
         null -> Unit
-        is GpxImport.Reading -> GpxProgressDialog(label = "Reading the file…", progress = null)
+        is GpxImport.Reading -> GpxProgressDialog(
+            label = stringResource(R.string.import_reading),
+            progress = null,
+        )
         is GpxImport.Replaying -> GpxProgressDialog(
-            label = "Replaying the track — ${state.done} of ${state.total} points",
+            label = pluralStringResource(R.plurals.import_replaying, state.total, state.done, state.total),
             progress = if (state.total == 0) null else state.done.toFloat() / state.total,
         )
 
         is GpxImport.Done -> NoticeDialog(
-            title = "Track imported",
+            title = stringResource(R.string.import_done_title),
             message = "${state.headline}\n\n${state.detail}",
             onDismiss = onDismiss,
         )
 
         is GpxImport.Failed -> NoticeDialog(
-            title = "Couldn't import that",
+            title = stringResource(R.string.import_failed_title),
             message = state.reason,
             onDismiss = onDismiss,
         )
@@ -1841,25 +1904,25 @@ internal fun BackupDialogs(state: BackupJob?, onDismiss: () -> Unit) {
     when (state) {
         null -> Unit
         is BackupJob.Exporting -> GpxProgressDialog(
-            title = "Backing up",
-            label = "Collecting everything on this device…",
+            title = stringResource(R.string.backup_exporting_title),
+            label = stringResource(R.string.backup_exporting),
             progress = null,
         )
 
         is BackupJob.Importing -> GpxProgressDialog(
-            title = "Restoring",
-            label = "Reading the backup and putting it back…",
+            title = stringResource(R.string.backup_importing_title),
+            label = stringResource(R.string.backup_importing),
             progress = null,
         )
 
         is BackupJob.Done -> NoticeDialog(
-            title = "Done",
+            title = stringResource(R.string.backup_done_title),
             message = "${state.headline}\n\n${state.detail}",
             onDismiss = onDismiss,
         )
 
         is BackupJob.Failed -> NoticeDialog(
-            title = "That didn't work",
+            title = stringResource(R.string.backup_failed_title),
             message = state.reason,
             onDismiss = onDismiss,
         )
@@ -1876,7 +1939,11 @@ internal fun BackupDialogs(state: BackupJob?, onDismiss: () -> Unit) {
  * file is still being read, when there is genuinely nothing to count.
  */
 @Composable
-internal fun GpxProgressDialog(label: String, progress: Float?, title: String = "Importing GPX") {
+internal fun GpxProgressDialog(
+    label: String,
+    progress: Float?,
+    title: String = stringResource(R.string.import_title),
+) {
     androidx.compose.ui.window.Dialog(
         onDismissRequest = {},
         properties = androidx.compose.ui.window.DialogProperties(
@@ -1949,10 +2016,12 @@ private fun FixWarningNotice(warning: FixWarning, accuracyMeters: Float?) {
                 )
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    when (warning) {
-                        FixWarning.NO_FIX -> "No GPS fix yet"
-                        FixWarning.TOO_VAGUE -> "GPS too vague to record"
-                    },
+                    stringResource(
+                        when (warning) {
+                            FixWarning.NO_FIX -> R.string.fix_no_fix_title
+                            FixWarning.TOO_VAGUE -> R.string.fix_too_vague_title
+                        },
+                    ),
                     style = MaterialTheme.typography.titleSmall,
                     color = error,
                 )
@@ -1960,16 +2029,19 @@ private fun FixWarningNotice(warning: FixWarning, accuracyMeters: Float?) {
             Spacer(Modifier.height(6.dp))
             Text(
                 when (warning) {
-                    FixWarning.NO_FIX ->
-                        "Nothing has been recorded yet. Check that location is switched " +
-                            "on, and that you have a view of the sky — indoors and " +
-                            "underground, no fix arrives at all."
-                    FixWarning.TOO_VAGUE ->
-                        "Fixes are arriving but every one is off by more than " +
-                            "${TrackingManager.MAX_ACCURACY_METERS.roundToInt()} m" +
-                            (accuracyMeters?.let { " (currently ±${it.roundToInt()} m)" } ?: "") +
-                            ", so none can be kept. This is what Approximate location " +
-                            "looks like — switch Enclose to Precise in system settings."
+                    FixWarning.NO_FIX -> stringResource(R.string.fix_no_fix_body)
+                    FixWarning.TOO_VAGUE -> {
+                        val limit = TrackingManager.MAX_ACCURACY_METERS.roundToInt()
+                        if (accuracyMeters != null) {
+                            stringResource(
+                                R.string.fix_too_vague_body_current,
+                                limit,
+                                accuracyMeters.roundToInt(),
+                            )
+                        } else {
+                            stringResource(R.string.fix_too_vague_body, limit)
+                        }
+                    }
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2020,19 +2092,30 @@ private fun MotionBlockedNotice(walk: TrackingManager.WalkState) {
                 )
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    if (vehicle) {
-                        "Vehicle movement detected"
-                    } else {
-                        "Too fast for a ${walk.activityType.noun}"
-                    },
+                    stringResource(
+                        if (vehicle) {
+                            R.string.motion_vehicle_title
+                        } else {
+                            walk.activityType.pick(
+                                R.string.motion_too_fast_walk,
+                                R.string.motion_too_fast_run,
+                                R.string.motion_too_fast_ride,
+                            )
+                        },
+                    ),
                     style = MaterialTheme.typography.titleSmall,
                     color = error,
                 )
             }
             Spacer(Modifier.height(6.dp))
             Text(
-                "Not recording — Enclose only counts walking, running and cycling. " +
-                    "Slow down to carry on with this ${walk.activityType.noun}.",
+                stringResource(
+                    walk.activityType.pick(
+                        R.string.motion_body_walk,
+                        R.string.motion_body_run,
+                        R.string.motion_body_ride,
+                    ),
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -2047,11 +2130,21 @@ private fun MotionBlockedNotice(walk: TrackingManager.WalkState) {
             Text(
                 if (fatal) {
                     // Last one: say what actually happens, not "warning 3 of 3".
-                    "Last warning — discarding this ${walk.activityType.noun} in " +
-                        "${remainingMs / 1000}s"
+                    stringResource(
+                        walk.activityType.pick(
+                            R.string.motion_last_warning_walk,
+                            R.string.motion_last_warning_run,
+                            R.string.motion_last_warning_ride,
+                        ),
+                        (remainingMs / 1000).toInt(),
+                    )
                 } else {
-                    "Warning $pendingStrike of ${MotionGate.MAX_STRIKES} in " +
-                        "${remainingMs / 1000}s"
+                    stringResource(
+                        R.string.motion_warning_countdown,
+                        pendingStrike,
+                        MotionGate.MAX_STRIKES,
+                        (remainingMs / 1000).toInt(),
+                    )
                 },
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2089,13 +2182,29 @@ private fun StrikeNotice(walk: TrackingManager.WalkState) {
             )
             Spacer(Modifier.width(10.dp))
             Text(
-                "${walk.strikes} of ${MotionGate.MAX_STRIKES} warnings used — " +
-                    if (walk.strikesRemaining == 1) {
-                        "one more ends this ${walk.activityType.noun}."
-                    } else {
-                        "${walk.strikesRemaining} left before this " +
-                            "${walk.activityType.noun} is discarded."
-                    },
+                if (walk.strikesRemaining == 1) {
+                    stringResource(
+                        walk.activityType.pick(
+                            R.string.strike_last_walk,
+                            R.string.strike_last_run,
+                            R.string.strike_last_ride,
+                        ),
+                        walk.strikes,
+                        MotionGate.MAX_STRIKES,
+                    )
+                } else {
+                    pluralStringResource(
+                        walk.activityType.pick(
+                            R.plurals.strike_left_walk,
+                            R.plurals.strike_left_run,
+                            R.plurals.strike_left_ride,
+                        ),
+                        walk.strikesRemaining,
+                        walk.strikes,
+                        MotionGate.MAX_STRIKES,
+                        walk.strikesRemaining,
+                    )
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -2121,17 +2230,17 @@ private fun LoopProgress(walk: TrackingManager.WalkState) {
 
     val steps = listOf(
         LoopStep(
-            label = "Leave start",
+            label = stringResource(R.string.loop_step_leave),
             done = walk.hasLeftStart,
             progress = (toStart / leaveRadius).toFloat(),
         ),
         LoopStep(
-            label = "Cover ${minPerimeter.roundToInt()} m",
+            label = stringResource(R.string.loop_step_cover, minPerimeter.roundToInt()),
             done = walk.distanceMeters >= minPerimeter,
             progress = (walk.distanceMeters / minPerimeter).toFloat(),
         ),
         LoopStep(
-            label = "Return",
+            label = stringResource(R.string.loop_step_return),
             done = walk.readyToClose,
             // Approaches 1 as the walker closes on the closing radius.
             progress = if (walk.canCloseLoop && toStart > 0) {
@@ -2207,18 +2316,20 @@ private fun StepChip(step: LoopStep, isActive: Boolean, modifier: Modifier = Mod
 }
 
 /** Explains exactly what still blocks closing, so it's never a mystery. */
+@Composable
 private fun loopHint(walk: TrackingManager.WalkState): String {
     val remaining = (TrackingManager.minPerimeterMeters - walk.distanceMeters).roundToInt()
     return when {
-        walk.readyToClose ->
-            "You're back at the start — close the loop to claim it!"
-        walk.canCloseLoop ->
-            "Head back to the start zone — ${walk.distanceToStartMeters?.roundToInt() ?: 0} m away"
-        !walk.hasLeftStart ->
-            "Move at least ${TrackingManager.leaveStartRadiusMeters.roundToInt()} m from your " +
-                "start to begin the loop"
-        else ->
-            "Keep going — about $remaining m more before you can close"
+        walk.readyToClose -> stringResource(R.string.loop_hint_ready)
+        walk.canCloseLoop -> stringResource(
+            R.string.loop_hint_head_back,
+            walk.distanceToStartMeters?.roundToInt() ?: 0,
+        )
+        !walk.hasLeftStart -> stringResource(
+            R.string.loop_hint_leave,
+            TrackingManager.leaveStartRadiusMeters.roundToInt(),
+        )
+        else -> stringResource(R.string.loop_hint_keep_going, remaining)
     }
 }
 
@@ -2233,13 +2344,17 @@ private fun loopHint(walk: TrackingManager.WalkState): String {
 @Composable
 private fun GpsAccuracyIndicator(accuracyMeters: Float?) {
     val accents = LocalEncloseAccents.current
-    val (dot, label) = when {
-        accuracyMeters == null -> MaterialTheme.colorScheme.onSurfaceVariant to "acquiring…"
-        accuracyMeters <= 10f -> accents.gpsGood to "±${accuracyMeters.roundToInt()} m"
-        accuracyMeters <= 25f -> accents.gpsFair to "±${accuracyMeters.roundToInt()} m"
+    val dot = when {
+        accuracyMeters == null -> MaterialTheme.colorScheme.onSurfaceVariant
+        accuracyMeters <= 10f -> accents.gpsGood
+        accuracyMeters <= 25f -> accents.gpsFair
+        else -> accents.gpsPoor
+    }
+    val label = when {
+        accuracyMeters == null -> stringResource(R.string.gps_acquiring)
         accuracyMeters <= TrackingManager.MAX_ACCURACY_METERS ->
-            accents.gpsPoor to "±${accuracyMeters.roundToInt()} m"
-        else -> accents.gpsPoor to "±${accuracyMeters.roundToInt()} m — not recorded"
+            stringResource(R.string.gps_accuracy, accuracyMeters.roundToInt())
+        else -> stringResource(R.string.gps_not_recorded, accuracyMeters.roundToInt())
     }
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -2252,7 +2367,7 @@ private fun GpsAccuracyIndicator(accuracyMeters: Float?) {
                 .background(dot),
         )
         Text(
-            "GPS $label",
+            label,
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -2267,6 +2382,7 @@ private fun ClaimDialog(
     onClaim: (String, String) -> Unit,
     onDiscard: () -> Unit,
 ) {
+    val res = LocalResources.current
     // rememberSaveable: the dialog survives rotation with the typed name intact.
     // Keyed on the claim so a second loop starts from its own suggestion.
     var name by rememberSaveable(pending.id) { mutableStateOf(pending.suggestedName) }
@@ -2324,10 +2440,10 @@ private fun ClaimDialog(
                 }
 
                 Spacer(Modifier.height(16.dp))
-                Text("Loop closed!", style = MaterialTheme.typography.headlineSmall)
+                Text(stringResource(R.string.claim_title), style = MaterialTheme.typography.headlineSmall)
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Name it and claim it as your own.",
+                    stringResource(R.string.claim_subtitle),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -2341,14 +2457,14 @@ private fun ClaimDialog(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     StatTile(
-                        label = "Area",
-                        value = formatArea(pending.areaSqMeters),
+                        label = stringResource(R.string.claim_area),
+                        value = res.formatArea(pending.areaSqMeters),
                         modifier = Modifier.weight(1f),
                         accent = accent,
                     )
                     StatTile(
-                        label = "Perimeter",
-                        value = formatDistance(pending.perimeterMeters),
+                        label = stringResource(R.string.claim_perimeter),
+                        value = res.formatDistance(pending.perimeterMeters),
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -2356,8 +2472,11 @@ private fun ClaimDialog(
                 // Climb rides on the caption rather than becoming a third tile,
                 // for the width reason above.
                 Text(
-                    "Closed ${formatDistance(pending.distanceToStartMeters)} from your " +
-                        "start · ${formatClimb(pending.elevationGainMeters)} climbed",
+                    stringResource(
+                        R.string.claim_closed_caption,
+                        res.formatDistance(pending.distanceToStartMeters),
+                        res.formatClimb(pending.elevationGainMeters),
+                    ),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -2369,9 +2488,7 @@ private fun ClaimDialog(
                 if (pending.hadSignalGap) {
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        "Note: GPS dropped out along the way, so part of this outline is " +
-                            "a straight line between the last fix before the gap and the " +
-                            "first one after it.",
+                        stringResource(R.string.claim_signal_gap_note),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -2382,13 +2499,16 @@ private fun ClaimDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Territory name") },
+                    label = { Text(stringResource(R.string.claim_name_label)) },
                     singleLine = true,
                     shape = MaterialTheme.shapes.small,
                     modifier = Modifier.fillMaxWidth(),
                     trailingIcon = {
                         IconButton(onClick = { name = NameGenerator.random() }) {
-                            Icon(Icons.Filled.Casino, contentDescription = "Suggest another name")
+                            Icon(
+                                Icons.Filled.Casino,
+                                contentDescription = stringResource(R.string.claim_suggest_name),
+                            )
                         }
                     },
                     colors = OutlinedTextFieldDefaults.colors(
@@ -2400,7 +2520,7 @@ private fun ClaimDialog(
 
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    "Color",
+                    stringResource(R.string.claim_color_label),
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.fillMaxWidth(),
@@ -2414,7 +2534,7 @@ private fun ClaimDialog(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     TextButton(onClick = onDiscard, modifier = Modifier.weight(1f)) {
-                        Text("Discard")
+                        Text(stringResource(R.string.claim_discard))
                     }
                     Button(
                         onClick = { onClaim(name.trim(), colorHex) },
@@ -2425,7 +2545,7 @@ private fun ClaimDialog(
                             contentColor = Color.White,
                         ),
                     ) {
-                        ButtonContent(Icons.Filled.Flag, "Claim")
+                        ButtonContent(Icons.Filled.Flag, stringResource(R.string.claim_confirm))
                     }
                 }
             }
@@ -2452,37 +2572,36 @@ internal fun HowItWorksSheet(onDismiss: () -> Unit) {
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 28.dp),
         ) {
-            Text("How Enclose works", style = MaterialTheme.typography.headlineSmall)
+            Text(stringResource(R.string.how_title), style = MaterialTheme.typography.headlineSmall)
             Spacer(Modifier.height(6.dp))
             Text(
-                "Claim real ground by walking around it.",
+                stringResource(R.string.how_subtitle),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(22.dp))
 
             HowStep(
-                number = "1",
+                number = 1,
                 icon = Icons.Filled.PlayArrow,
-                title = "Start a walk",
-                body = "Your route is traced live on the map, and keeps recording " +
-                    "while your screen is off.",
+                title = stringResource(R.string.how_start_title),
+                body = stringResource(R.string.how_start_body),
             )
             HowStep(
-                number = "2",
+                number = 2,
                 icon = Icons.AutoMirrored.Filled.DirectionsWalk,
-                title = "Walk a loop",
-                body = "Head at least ${TrackingManager.leaveStartRadiusMeters.roundToInt()} m " +
-                    "away and cover ${TrackingManager.minPerimeterMeters.roundToInt()} m or more, " +
-                    "then curve back around.",
+                title = stringResource(R.string.how_loop_title),
+                body = stringResource(
+                    R.string.how_loop_body,
+                    TrackingManager.leaveStartRadiusMeters.roundToInt(),
+                    TrackingManager.minPerimeterMeters.roundToInt(),
+                ),
             )
             HowStep(
-                number = "3",
+                number = 3,
                 icon = Icons.Filled.Flag,
-                title = "Close it and claim",
-                body = "Step back into the dashed circle around your start and close the " +
-                    "loop. Everything inside becomes yours — overlapping older claims " +
-                    "get carved back.",
+                title = stringResource(R.string.how_claim_title),
+                body = stringResource(R.string.how_claim_body),
             )
 
             Spacer(Modifier.height(4.dp))
@@ -2494,8 +2613,7 @@ internal fun HowItWorksSheet(onDismiss: () -> Unit) {
                     Icon(Icons.Filled.DirectionsCar, contentDescription = null, Modifier.size(20.dp))
                     Spacer(Modifier.width(12.dp))
                     Text(
-                        "Under your own power only. Enclose watches how you're moving — " +
-                            "vehicle trips aren't recorded, and driving a loop won't claim it.",
+                        stringResource(R.string.how_own_power),
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -2507,7 +2625,7 @@ internal fun HowItWorksSheet(onDismiss: () -> Unit) {
                 modifier = Modifier.fillMaxWidth().height(52.dp),
                 shape = PillShape,
             ) {
-                Text("Got it")
+                Text(stringResource(R.string.how_got_it))
             }
         }
     }
@@ -2515,7 +2633,7 @@ internal fun HowItWorksSheet(onDismiss: () -> Unit) {
 
 @Composable
 private fun HowStep(
-    number: String,
+    number: Int,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     body: String,
@@ -2538,7 +2656,7 @@ private fun HowStep(
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                "$number · $title",
+                stringResource(R.string.how_step_heading, number, title),
                 style = MaterialTheme.typography.titleSmall,
             )
             Spacer(Modifier.height(3.dp))

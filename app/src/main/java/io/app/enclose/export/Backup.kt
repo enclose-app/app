@@ -96,14 +96,32 @@ object Backup {
     sealed interface Decoded {
 
         /**
-         * A readable backup. [note] is non-null when something about the file is
-         * worth saying out loud even though it restored — currently only that it
-         * came from a newer database than this build knows.
+         * A readable backup. [newerSchema] is non-null when the file came from a
+         * newer database than this build knows — it restored, but anything this
+         * build has no column for was dropped, and that has to be said out loud.
          */
-        data class Ok(val data: BackupData, val note: String? = null) : Decoded
+        data class Ok(val data: BackupData, val newerSchema: NewerSchema? = null) : Decoded
 
-        /** Nothing usable, phrased for the user rather than for a log. */
-        data class Failed(val reason: String) : Decoded
+        /** Nothing usable, and why. The UI words it — this file carries no text. */
+        data class Failed(val problem: Problem) : Decoded
+    }
+
+    /** The file's database version, and this build's. */
+    data class NewerSchema(val fileSchema: Int, val currentSchema: Int)
+
+    /** Why a file was refused. */
+    sealed interface Problem {
+        /** Not JSON at all. */
+        data object NotJson : Problem
+
+        /** JSON, but not an object — some other file entirely. */
+        data object NotABackup : Problem
+
+        /** A JSON object with no format version: another app's JSON. */
+        data object NoFormatVersion : Problem
+
+        /** Written by a newer Enclose in a shape this build can't read. */
+        data class NewerFormat(val fileFormat: Int, val supportedFormat: Int) : Problem
     }
 
     /**
@@ -146,20 +164,15 @@ object Backup {
      */
     fun decode(text: String, currentSchemaVersion: Int): Decoded {
         val root = runCatching { Json.parse(text) }.getOrElse {
-            return Decoded.Failed("That file isn't an Enclose backup — it isn't even JSON.")
-        }.asObject() ?: return Decoded.Failed("That file isn't an Enclose backup.")
+            return Decoded.Failed(Problem.NotJson)
+        }.asObject() ?: return Decoded.Failed(Problem.NotABackup)
 
         val format = root.int(KEY_FORMAT, fallback = -1)
         if (format < 0) {
-            return Decoded.Failed(
-                "That file isn't an Enclose backup — it has no format version in it.",
-            )
+            return Decoded.Failed(Problem.NoFormatVersion)
         }
         if (format > FORMAT_VERSION) {
-            return Decoded.Failed(
-                "That backup was written by a newer version of Enclose (format $format; " +
-                    "this build reads $FORMAT_VERSION). Update the app and try again.",
-            )
+            return Decoded.Failed(Problem.NewerFormat(format, FORMAT_VERSION))
         }
 
         val schema = root.int(KEY_SCHEMA, fallback = currentSchemaVersion)
@@ -178,13 +191,12 @@ object Backup {
             voidedWalks = root.objects(KEY_VOIDED).map(::voidedWalkFromMap),
             settings = root[KEY_SETTINGS].asObject()?.let(::settingsFromMap) ?: SettingsSnapshot(),
         )
-        val note = if (schema > currentSchemaVersion) {
-            "It was made with a newer version of the app's database (v$schema, this build " +
-                "uses v$currentSchemaVersion). Anything this build has no place for was left out."
+        val newerSchema = if (schema > currentSchemaVersion) {
+            NewerSchema(fileSchema = schema, currentSchema = currentSchemaVersion)
         } else {
             null
         }
-        return Decoded.Ok(data, note)
+        return Decoded.Ok(data, newerSchema)
     }
 
     // --- territories ---------------------------------------------------------

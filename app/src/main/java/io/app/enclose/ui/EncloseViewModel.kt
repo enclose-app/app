@@ -1,9 +1,11 @@
 package io.app.enclose.ui
 
 import android.app.Application
+import android.content.res.Resources
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import io.app.enclose.R
 import io.app.enclose.BuildConfig
 import io.app.enclose.EncloseApp
 import io.app.enclose.export.Backup
@@ -42,6 +44,12 @@ import kotlinx.coroutines.yield
 import java.io.InputStream
 
 class EncloseViewModel(app: Application) : AndroidViewModel(app) {
+
+    /**
+     * Read per use rather than captured, so a language change is picked up by
+     * the next message instead of the next process.
+     */
+    private val res: Resources get() = getApplication<Application>().resources
 
     private val repository = (app as EncloseApp).repository
     private val walkRepository = (app as EncloseApp).walkRepository
@@ -541,10 +549,7 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         // routes into a single walk.
         if (_gpxImport.value?.isRunning == true) return
         if (walk.value.isTracking && !_injectedWalk.value) {
-            _gpxImport.value = GpxImport.Failed(
-                "There's a walk in progress. Stop it first — importing a track would " +
-                    "throw away the route you're recording.",
-            )
+            _gpxImport.value = GpxImport.Failed(res.getString(R.string.import_refused_walking))
             return
         }
         viewModelScope.launch {
@@ -558,13 +563,11 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             if (points == null) {
-                _gpxImport.value = GpxImport.Failed("Couldn't read that file.")
+                _gpxImport.value = GpxImport.Failed(res.getString(R.string.import_unreadable))
                 return@launch
             }
             if (points.size < 2) {
-                _gpxImport.value = GpxImport.Failed(
-                    "No track points in that file — looked for <trkpt>, <rtept> and <wpt>.",
-                )
+                _gpxImport.value = GpxImport.Failed(res.getString(R.string.import_no_points))
                 return@launch
             }
 
@@ -609,42 +612,46 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
 
             val walked = walk.value
             _gpxImport.value = GpxImport.Done(
-                headline = "${points.size} points · ${formatDistance(walked.distanceMeters)}" +
-                    " · ${formatClimb(walked.elevationGainMeters)} climb",
+                headline = res.getQuantityString(
+                    R.plurals.import_headline,
+                    points.size,
+                    points.size,
+                    res.formatDistance(walked.distanceMeters),
+                    res.formatClimb(walked.elevationGainMeters),
+                ),
                 // The recorded path is shorter than the file whenever points sit
                 // closer together than the jitter filter allows, which is most
                 // real tracks. Say so, or the counts look like a bug.
-                detail = buildString {
+                detail = listOfNotNull(
                     if (walked.path.size < replayed.size) {
-                        append(
-                            "${walked.path.size} kept — the rest sat closer together " +
-                                "than the jitter filter allows. ",
+                        res.getQuantityString(
+                            R.plurals.import_kept,
+                            walked.path.size,
+                            walked.path.size,
                         )
-                    }
+                    } else {
+                        null
+                    },
                     // Said, because the claim is now shorter than the file: the
                     // part after the return to the start is left out of it.
                     if (overshootMeters >= MIN_REPORTED_OVERSHOOT_M) {
-                        append(
-                            "Ended where the track came back to its start — the " +
-                                "${formatDistance(overshootMeters)} recorded after that " +
-                                "isn't part of the loop. ",
-                        )
-                    }
-                    append(
-                        if (walked.readyToClose) {
-                            "The loop closes here: press Close loop & claim to keep it."
-                        } else {
+                        res.getString(R.string.import_overshoot, res.formatDistance(overshootMeters))
+                    } else {
+                        null
+                    },
+                    if (walked.readyToClose) {
+                        res.getString(R.string.import_closes)
+                    } else {
                             // How far off, and how close it needed to be: "doesn't
                             // end near" alone leaves the user guessing whether a
                             // few metres or a few kilometres were missing.
-                            "The track ends " +
-                                "${formatDistance(ImportClosure.endGapMeters(points.map { it.position }))} " +
-                                "from where it starts and never comes back within " +
-                                "${formatDistance(TrackingManager.closureRadiusMeters)} of it, so it " +
-                                "can't be claimed as a loop."
-                        },
-                    )
-                },
+                        res.getString(
+                            R.string.import_never_closes,
+                            res.formatDistance(ImportClosure.endGapMeters(points.map { it.position })),
+                            res.formatDistance(TrackingManager.closureRadiusMeters),
+                        )
+                    },
+                ).joinToString(" "),
                 route = walked.path,
             )
         }
@@ -699,19 +706,21 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
             _backup.value = result.fold(
                 onSuccess = { (data, bytes) ->
                     BackupJob.Done(
-                        headline = "${data.territories.size} " +
-                            "${if (data.territories.size == 1) "claim" else "claims"} · " +
-                            "${data.walks.size} " +
-                            "${if (data.walks.size == 1) "walk" else "walks"} · " +
-                            formatFileSize(bytes.toLong()),
-                        detail = "Saved. The file holds everything on this device — every " +
-                            "claim standing and fallen, every walk, your profile, and your " +
-                            "settings. Anyone who opens it can read where you walk, so keep " +
-                            "it somewhere you'd keep a diary.",
+                        headline = res.getString(
+                            R.string.backup_export_headline,
+                            res.getQuantityString(
+                                R.plurals.backup_claims,
+                                data.territories.size,
+                                data.territories.size,
+                            ),
+                            res.getQuantityString(R.plurals.backup_walks, data.walks.size, data.walks.size),
+                            res.formatFileSize(bytes.toLong()),
+                        ),
+                        detail = res.getString(R.string.backup_export_detail),
                     )
                 },
                 onFailure = {
-                    BackupJob.Failed("Couldn't write the backup. The file wasn't saved.")
+                    BackupJob.Failed(res.getString(R.string.backup_export_failed))
                 },
             )
         }
@@ -729,10 +738,7 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     fun importBackup(uri: Uri) {
         if (_backup.value?.isRunning == true) return
         if (walk.value.isTracking) {
-            _backup.value = BackupJob.Failed(
-                "There's a walk in progress. Stop it first — restoring would overwrite the " +
-                    "walk being recorded, and those points aren't anywhere else yet.",
-            )
+            _backup.value = BackupJob.Failed(res.getString(R.string.backup_refused_walking))
             return
         }
         viewModelScope.launch {
@@ -750,13 +756,15 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
                 }.getOrNull()
             }
             if (text == null) {
-                _backup.value = BackupJob.Failed("Couldn't read that file.")
+                _backup.value = BackupJob.Failed(res.getString(R.string.backup_unreadable))
                 return@launch
             }
             if (text.size > MAX_BACKUP_BYTES) {
                 _backup.value = BackupJob.Failed(
-                    "That file is larger than ${formatFileSize(MAX_BACKUP_BYTES.toLong())}, " +
-                        "which is past anything Enclose writes. It's probably not a backup.",
+                    res.getString(
+                        R.string.backup_too_large,
+                        res.formatFileSize(MAX_BACKUP_BYTES.toLong()),
+                    ),
                 )
                 return@launch
             }
@@ -768,13 +776,11 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             when (decoded) {
-                is Backup.Decoded.Failed -> _backup.value = BackupJob.Failed(decoded.reason)
+                is Backup.Decoded.Failed -> _backup.value = BackupJob.Failed(describe(decoded.problem))
                 is Backup.Decoded.Ok -> {
                     val report = runCatching { backupRepository.restore(decoded.data) }.getOrNull()
                     _backup.value = if (report == null) {
-                        BackupJob.Failed(
-                            "Couldn't write the backup into the app. Nothing was changed.",
-                        )
+                        BackupJob.Failed(res.getString(R.string.backup_restore_failed))
                     } else {
                         // Re-read the settings that are held in memory: they were
                         // loaded at construction, so without this the restored
@@ -784,7 +790,13 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
                         BackupJob.Done(
                             headline = restoreHeadline(report),
                             detail = listOfNotNull(
-                                decoded.note,
+                                decoded.newerSchema?.let {
+                                    res.getString(
+                                        R.string.restore_newer_schema,
+                                        it.fileSchema,
+                                        it.currentSchema,
+                                    )
+                                },
                                 restoreDetail(report),
                             ).joinToString("\n\n"),
                         )
@@ -821,47 +833,56 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         // restore that had just finished.
     }
 
+    /** Why [Backup.decode] refused a file, in the user's language. */
+    private fun describe(problem: Backup.Problem): String = when (problem) {
+        Backup.Problem.NotJson -> res.getString(R.string.backup_not_json)
+        Backup.Problem.NotABackup -> res.getString(R.string.backup_not_backup)
+        Backup.Problem.NoFormatVersion -> res.getString(R.string.backup_no_format)
+        is Backup.Problem.NewerFormat -> res.getString(
+            R.string.backup_newer_format,
+            problem.fileFormat,
+            problem.supportedFormat,
+        )
+    }
+
     private fun restoreHeadline(report: BackupReport): String {
         val claims = report.territoriesAdded + report.territoriesReplaced
         val walks = report.walksAdded + report.walksReplaced
-        return "${report.territoriesAdded} new " +
-            "${if (report.territoriesAdded == 1) "claim" else "claims"} of $claims · " +
-            "${report.walksAdded} new ${if (report.walksAdded == 1) "walk" else "walks"} of $walks"
+        return res.getString(
+            R.string.restore_headline,
+            res.getQuantityString(
+                R.plurals.restore_new_claims,
+                report.territoriesAdded,
+                report.territoriesAdded,
+                claims,
+            ),
+            res.getQuantityString(R.plurals.restore_new_walks, report.walksAdded, report.walksAdded, walks),
+        )
     }
 
     /**
      * The parts of a restore the counts don't cover — each line is there because
      * its absence would have to be discovered by the user instead.
      */
-    private fun restoreDetail(report: BackupReport): String = buildString {
-        append("Nothing already on this device was deleted. ")
+    private fun restoreDetail(report: BackupReport): String {
         val replaced = report.territoriesReplaced + report.walksReplaced
-        if (replaced > 0) {
-            append(
-                "$replaced ${if (replaced == 1) "record" else "records"} the backup also had " +
-                    "were replaced with its version. ",
-            )
-        }
-        if (report.profileRestored) append("Your profile and settings came back too. ")
-        if (report.walkInProgressRestored) {
-            append(
-                "It also held a walk that was still being recorded — it's back, and will " +
-                    "carry on from where it stopped the next time you start recording. ",
-            )
-        }
-        if (report.walkInProgressSkipped) {
-            append(
-                "It also held an unfinished walk, which was left alone: this device already " +
-                    "has one, and overwriting it would lose those points. ",
-            )
-        }
-        if (report.offlineRegionsSkipped > 0) {
-            append(
-                "Downloaded map areas aren't restored — the tiles themselves aren't in the " +
-                    "file — so they'll download again on Wi-Fi.",
-            )
-        }
-    }.trim()
+        return listOfNotNull(
+            res.getString(R.string.restore_nothing_deleted),
+            if (replaced > 0) {
+                res.getQuantityString(R.plurals.restore_replaced, replaced, replaced)
+            } else {
+                null
+            },
+            if (report.profileRestored) res.getString(R.string.restore_profile) else null,
+            if (report.walkInProgressRestored) res.getString(R.string.restore_walk_resumed) else null,
+            if (report.walkInProgressSkipped) res.getString(R.string.restore_walk_skipped) else null,
+            if (report.offlineRegionsSkipped > 0) {
+                res.getString(R.string.restore_offline_skipped)
+            } else {
+                null
+            },
+        ).joinToString(" ")
+    }
 
     fun renameTerritory(id: String, newName: String) {
         val name = newName.trim()

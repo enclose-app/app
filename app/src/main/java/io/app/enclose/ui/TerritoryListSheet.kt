@@ -1,5 +1,8 @@
 package io.app.enclose.ui
 
+import io.app.enclose.R
+import androidx.compose.ui.res.stringResource
+import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -44,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,10 +55,10 @@ import io.app.enclose.data.Territory
 import io.app.enclose.ui.theme.PillShape
 
 /** Ways to order the claim list. Persisted by name — see [io.app.enclose.data.UserSettings]. */
-enum class TerritorySort(val label: String) {
-    RECENT("Recent"),
-    LARGEST("Largest"),
-    NAME("A–Z"),
+enum class TerritorySort(@StringRes val labelRes: Int) {
+    RECENT(R.string.list_sort_recent),
+    LARGEST(R.string.list_sort_largest),
+    NAME(R.string.list_sort_name),
 }
 
 /** Below this many claims, search would be more friction than help. */
@@ -87,6 +91,7 @@ fun TerritoryListSheet(
     onRename: (String, String) -> Unit,
     onDelete: (Territory) -> Unit,
 ) {
+    val res = LocalResources.current
     var renaming by remember { mutableStateOf<Territory?>(null) }
     var deleting by remember { mutableStateOf<Territory?>(null) }
     // The search box stays local on purpose: a query is about the moment, not a
@@ -118,7 +123,7 @@ fun TerritoryListSheet(
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 16.dp),
         ) {
-            Text("Your territories", style = MaterialTheme.typography.headlineSmall)
+            Text(stringResource(R.string.list_title), style = MaterialTheme.typography.headlineSmall)
             Spacer(Modifier.height(14.dp))
 
             Row(
@@ -126,19 +131,19 @@ fun TerritoryListSheet(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 StatTile(
-                    label = "Claimed",
+                    label = stringResource(R.string.list_stat_claimed),
                     value = territories.size.toString(),
                     modifier = Modifier.weight(1f),
                     accent = MaterialTheme.colorScheme.primary,
                 )
                 StatTile(
-                    label = "Total area",
-                    value = formatArea(territories.sumOf { it.areaSqMeters }),
+                    label = stringResource(R.string.list_stat_area),
+                    value = res.formatArea(territories.sumOf { it.areaSqMeters }),
                     modifier = Modifier.weight(1f),
                 )
                 StatTile(
-                    label = "Total edge",
-                    value = formatDistance(territories.sumOf { it.perimeterMeters }),
+                    label = stringResource(R.string.list_stat_edge),
+                    value = res.formatDistance(territories.sumOf { it.perimeterMeters }),
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -146,9 +151,8 @@ fun TerritoryListSheet(
             if (territories.isEmpty()) {
                 EmptyState(
                     icon = Icons.Filled.Flag,
-                    title = "No claims yet",
-                    message = "Close your first loop and it will show up here with its " +
-                        "shape, size and history.",
+                    title = stringResource(R.string.list_empty_title),
+                    message = stringResource(R.string.list_empty_body),
                 )
                 return@Column
             }
@@ -159,7 +163,7 @@ fun TerritoryListSheet(
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
-                    placeholder = { Text("Search by name") },
+                    placeholder = { Text(stringResource(R.string.list_search)) },
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                     singleLine = true,
                     shape = PillShape,
@@ -173,7 +177,7 @@ fun TerritoryListSheet(
                     FilterChip(
                         selected = sort == option,
                         onClick = { onSortChange(option) },
-                        label = { Text(option.label) },
+                        label = { Text(stringResource(option.labelRes)) },
                         shape = PillShape,
                         // Brand purple for selection; the default amber-ish
                         // secondary container reads as a warning here.
@@ -189,8 +193,8 @@ fun TerritoryListSheet(
             if (visible.isEmpty()) {
                 EmptyState(
                     icon = Icons.Filled.SearchOff,
-                    title = "Nothing matches “${query.trim()}”",
-                    message = "Try a different name, or clear the search.",
+                    title = stringResource(R.string.list_no_match_title, query.trim()),
+                    message = stringResource(R.string.list_no_match_body),
                 )
                 return@Column
             }
@@ -218,8 +222,8 @@ fun TerritoryListSheet(
 
     renaming?.let { target ->
         TextEntryDialog(
-            title = "Rename territory",
-            label = "Name",
+            title = stringResource(R.string.territory_rename_title),
+            label = stringResource(R.string.territory_rename_label),
             initialValue = target.name,
             onConfirm = { newName ->
                 onRename(target.id, newName)
@@ -231,9 +235,9 @@ fun TerritoryListSheet(
 
     deleting?.let { target ->
         ConfirmDialog(
-            title = "Delete territory?",
-            message = "“${target.name}” will be removed. You can undo right after.",
-            confirmLabel = "Delete",
+            title = stringResource(R.string.territory_delete_title),
+            message = stringResource(R.string.territory_delete_body, target.name),
+            confirmLabel = stringResource(R.string.territory_delete_confirm),
             destructive = true,
             onConfirm = {
                 onDelete(target)
@@ -255,12 +259,13 @@ private fun TerritoryRow(
     onRename: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val res = LocalResources.current
     var menuOpen by remember { mutableStateOf(false) }
     Row(
         Modifier
             .fillMaxWidth()
             .clickable(
-                onClickLabel = "Open ${territory.name}",
+                onClickLabel = stringResource(R.string.map_open_claim, territory.name),
                 role = Role.Button,
                 onClick = onClick,
             )
@@ -278,13 +283,21 @@ private fun TerritoryRow(
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                buildString {
-                    append(formatArea(territory.areaSqMeters))
-                    append(" · ")
-                    append("${formatDistance(territory.perimeterMeters)} around")
-                    // Appended only when there is a climb to report — a flat
-                    // "0 m up" on every pre-altitude claim would be a lie.
-                    if (climbMeters != null) append(" · ${formatClimb(climbMeters)} up")
+                // The climb only when there is one to report — a flat "0 m up"
+                // on every pre-altitude claim would be a lie.
+                if (climbMeters != null) {
+                    stringResource(
+                        R.string.list_row_with_climb,
+                        res.formatArea(territory.areaSqMeters),
+                        res.formatDistance(territory.perimeterMeters),
+                        res.formatClimb(climbMeters),
+                    )
+                } else {
+                    stringResource(
+                        R.string.list_row,
+                        res.formatArea(territory.areaSqMeters),
+                        res.formatDistance(territory.perimeterMeters),
+                    )
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -294,7 +307,7 @@ private fun TerritoryRow(
             Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    formatRelativeDay(territory.claimedAtEpochMs, now),
+                    res.formatRelativeDay(territory.claimedAtEpochMs, now),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -304,11 +317,11 @@ private fun TerritoryRow(
         }
         Box {
             IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(TOUCH_TARGET)) {
-                Icon(Icons.Filled.MoreVert, contentDescription = "Actions for ${territory.name}")
+                Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.list_row_actions, territory.name))
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(
-                    text = { Text("Show on map") },
+                    text = { Text(stringResource(R.string.territory_show_on_map)) },
                     leadingIcon = { Icon(Icons.Filled.Map, null) },
                     onClick = {
                         menuOpen = false
@@ -316,7 +329,7 @@ private fun TerritoryRow(
                     },
                 )
                 DropdownMenuItem(
-                    text = { Text("Rename") },
+                    text = { Text(stringResource(R.string.territory_rename)) },
                     leadingIcon = { Icon(Icons.Filled.Edit, null) },
                     onClick = {
                         menuOpen = false
@@ -324,7 +337,7 @@ private fun TerritoryRow(
                     },
                 )
                 DropdownMenuItem(
-                    text = { Text("Delete") },
+                    text = { Text(stringResource(R.string.territory_delete)) },
                     leadingIcon = {
                         Icon(Icons.Filled.Delete, null, tint = MaterialTheme.colorScheme.error)
                     },

@@ -17,15 +17,11 @@ data class CityCoverage(
     /** [claimedAreaSqMeters] as a share of [boundingAreaSqMeters], 0..100. */
     val percent: Double,
 ) {
-    /** True while the city name is still unknown (offline, or no geocoder). */
+    /**
+     * True while the city name is still unknown (offline, or no geocoder). The
+     * UI shows these under one translated label; this class carries no text.
+     */
     val isUnknown: Boolean get() = city.isBlank()
-
-    /** Name to show; unresolved claims are grouped under one honest label. */
-    val displayName: String get() = if (isUnknown) UNKNOWN_CITY else city
-
-    companion object {
-        const val UNKNOWN_CITY = "Unplaced claims"
-    }
 }
 
 /**

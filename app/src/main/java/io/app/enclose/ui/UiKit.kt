@@ -73,7 +73,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.onLongClick
@@ -82,6 +84,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import io.app.enclose.R
 import io.app.enclose.data.SyncStatus
 import io.app.enclose.data.SnapDisplay
 import io.app.enclose.data.Territory
@@ -623,7 +626,9 @@ private fun ColorSwatch(hex: String, selected: Boolean, onClick: () -> Unit) {
             .size(TOUCH_TARGET)
             .clip(CircleShape)
             .clickable(
-                onClickLabel = if (selected) "Selected color" else "Choose color",
+                onClickLabel = stringResource(
+                    if (selected) R.string.color_swatch_selected else R.string.color_swatch_choose,
+                ),
                 role = Role.RadioButton,
                 onClick = onClick,
             ),
@@ -717,6 +722,7 @@ fun PolygonThumbnail(territory: Territory, modifier: Modifier = Modifier) {
 /** Dot + word describing whether a claim has reached the backend. */
 @Composable
 fun SyncBadge(status: SyncStatus, modifier: Modifier = Modifier) {
+    val res = LocalResources.current
     val accents = LocalEncloseAccents.current
     val synced = status == SyncStatus.SYNCED
     Row(
@@ -731,7 +737,7 @@ fun SyncBadge(status: SyncStatus, modifier: Modifier = Modifier) {
                 .background(if (synced) accents.success else MaterialTheme.colorScheme.outline),
         )
         Text(
-            syncLabel(status),
+            res.syncLabel(status),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -794,7 +800,7 @@ fun TextEntryDialog(
     title: String,
     label: String,
     initialValue: String,
-    confirmLabel: String = "Save",
+    confirmLabel: String = stringResource(R.string.common_save),
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -819,7 +825,9 @@ fun TextEntryDialog(
                 Text(confirmLabel)
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
+        },
     )
 }
 
@@ -851,7 +859,9 @@ fun ConfirmDialog(
                 },
             ) { Text(confirmLabel) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
+        },
     )
 }
 
@@ -861,7 +871,7 @@ fun NoticeDialog(
     title: String,
     message: String,
     onDismiss: () -> Unit,
-    dismissLabel: String = "Got it",
+    dismissLabel: String = stringResource(R.string.common_got_it),
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,

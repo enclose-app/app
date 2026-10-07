@@ -21,6 +21,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -92,8 +94,8 @@ fun WalkScreen(state: LinkState, map: WatchMap?, claims: WatchClaims?, link: Pho
                 when (state) {
                     LinkState.Waiting -> NoPhone(link)
                     LinkState.Unreadable -> Message(
-                        title = "Update Enclose",
-                        body = "The phone and watch apps are different versions.",
+                        title = stringResource(R.string.watch_update_title),
+                        body = stringResource(R.string.watch_update_body),
                     )
                     is LinkState.Known -> when (state.status.phase) {
                         Phase.IDLE -> Idle(link)
@@ -108,21 +110,21 @@ fun WalkScreen(state: LinkState, map: WatchMap?, claims: WatchClaims?, link: Pho
 
 @Composable
 private fun NoPhone(link: PhoneLink) {
-    Message(title = "Enclose", body = "Open Enclose on your phone once to connect.")
+    Message(title = stringResource(R.string.app_name), body = stringResource(R.string.watch_no_phone_body))
     Spacer(Modifier.height(8.dp))
-    OpenOnPhoneButton(label = "Open on phone", uri = WatchLink.OPEN_URI, link = link)
+    OpenOnPhoneButton(label = stringResource(R.string.watch_open_on_phone), uri = WatchLink.OPEN_URI, link = link)
 }
 
 @Composable
 private fun Idle(link: PhoneLink) {
-    Text("Enclose", style = MaterialTheme.typography.titleMedium, color = Violet)
+    Text(stringResource(R.string.app_name), style = MaterialTheme.typography.titleMedium, color = Violet)
     Spacer(Modifier.height(10.dp))
-    OpenOnPhoneButton(label = "Start walk", uri = WatchLink.START_URI, link = link)
+    OpenOnPhoneButton(label = stringResource(R.string.watch_start_walk), uri = WatchLink.START_URI, link = link)
     Spacer(Modifier.height(6.dp))
     Text(
         // Said up front so the phone lighting up in a pocket isn't a surprise:
         // Android only lets the walk start there.
-        "Starts on your phone",
+        stringResource(R.string.watch_starts_on_phone),
         style = MaterialTheme.typography.bodySmall,
         textAlign = TextAlign.Center,
     )
@@ -162,7 +164,11 @@ private fun WalkingMap(status: WatchStatus, map: WatchMap?, claims: WatchClaims?
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                "$elapsed · ${WatchFormat.distance(status.distanceMeters)}",
+                stringResource(
+                    R.string.watch_walk_figures,
+                    elapsed,
+                    LocalResources.current.formatDistance(status.distanceMeters),
+                ),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -181,7 +187,7 @@ private fun WalkingMap(status: WatchStatus, map: WatchMap?, claims: WatchClaims?
             // OpenStreetMap's data, OpenFreeMap's tiles: the licence asks for
             // this to be visible, and MapLibre's own button needs a corner.
             Text(
-                "© OpenStreetMap",
+                stringResource(R.string.watch_osm_attribution),
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.55f),
             )
@@ -193,15 +199,21 @@ private fun WalkingMap(status: WatchStatus, map: WatchMap?, claims: WatchClaims?
 private val Scrim = Color(0xD9000000)
 
 /** One line on what the walk needs next, most urgent first. */
+@Composable
 private fun walkingHint(status: WatchStatus): String = when {
-    status.notRecording -> "Phone isn't recording — check it"
-    status.blocked -> "Vehicle detected — not recording"
-    status.startedAtEpochMs == null -> "Finding GPS on your phone…"
-    status.readyToClose -> "Ready to close!"
+    status.notRecording -> stringResource(R.string.watch_hint_not_recording)
+    status.blocked -> stringResource(R.string.watch_hint_vehicle)
+    status.startedAtEpochMs == null -> stringResource(R.string.watch_hint_finding_gps)
+    status.readyToClose -> stringResource(R.string.watch_hint_ready)
     status.canCloseLoop -> status.toStartMeters
-        ?.let { "Head back — ${WatchFormat.distance(it)} to start" }
-        ?: "Head back to the start"
-    else -> "Keep walking"
+        ?.let {
+            stringResource(
+                R.string.watch_hint_head_back_distance,
+                LocalResources.current.formatDistance(it),
+            )
+        }
+        ?: stringResource(R.string.watch_hint_head_back)
+    else -> stringResource(R.string.watch_hint_keep_walking)
 }
 
 @Composable
@@ -221,11 +233,13 @@ private fun StopButton(link: PhoneLink) {
         enabled = !sending,
         modifier = Modifier.fillMaxWidth(),
         colors = ButtonDefaults.buttonColors(containerColor = Magenta, contentColor = Body),
-        label = { Text(if (sending) "Stopping…" else "Stop & claim") },
+        label = {
+            Text(stringResource(if (sending) R.string.watch_stopping else R.string.watch_stop_claim))
+        },
     )
     if (failed) {
         Text(
-            "Phone not reachable",
+            stringResource(R.string.watch_phone_unreachable),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
         )
@@ -234,20 +248,20 @@ private fun StopButton(link: PhoneLink) {
 
 @Composable
 private fun Closed(status: WatchStatus, link: PhoneLink) {
-    Text("Loop closed", style = MaterialTheme.typography.titleMedium, color = Magenta)
+    Text(stringResource(R.string.watch_loop_closed), style = MaterialTheme.typography.titleMedium, color = Magenta)
     status.closedAreaSqMeters?.let {
-        Text(WatchFormat.area(it), style = MaterialTheme.typography.displaySmall)
+        Text(LocalResources.current.formatArea(it), style = MaterialTheme.typography.displaySmall)
     }
     Spacer(Modifier.height(4.dp))
     Text(
-        "Name and claim it on your phone",
+        stringResource(R.string.watch_claim_on_phone),
         style = MaterialTheme.typography.bodySmall,
         textAlign = TextAlign.Center,
     )
     Spacer(Modifier.height(8.dp))
     // OPEN, never START: the phone is waiting on this claim, and a start link
     // would begin a new walk on top of it.
-    OpenOnPhoneButton(label = "Open on phone", uri = WatchLink.OPEN_URI, link = link)
+    OpenOnPhoneButton(label = stringResource(R.string.watch_open_on_phone), uri = WatchLink.OPEN_URI, link = link)
 }
 
 @Composable
@@ -262,9 +276,9 @@ private fun OpenOnPhoneButton(label: String, uri: String, link: PhoneLink) {
         label = { Text(label) },
     )
     when (result) {
-        true -> Text("Check your phone", style = MaterialTheme.typography.bodySmall)
+        true -> Text(stringResource(R.string.watch_check_phone), style = MaterialTheme.typography.bodySmall)
         false -> Text(
-            "Phone not reachable",
+            stringResource(R.string.watch_phone_unreachable),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
         )

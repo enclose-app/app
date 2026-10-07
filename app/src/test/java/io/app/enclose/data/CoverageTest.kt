@@ -76,7 +76,6 @@ class CoverageTest {
         assertEquals(1, coverage.size)
         assertTrue(coverage[0].isUnknown)
         assertEquals(2, coverage[0].territoryCount)
-        assertEquals(CityCoverage.UNKNOWN_CITY, coverage[0].displayName)
     }
 
     @Test

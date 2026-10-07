@@ -750,6 +750,68 @@ uploads walks.
 - Shared widgets live in `UiKit.kt`, formatters in `Format.kt`. Check both
   before writing a new card, tile, dialog, or unit formatter.
 
+### Translatable text
+
+**Every string a user can see or hear is a string resource.** Play can only
+translate what is in `res/values*/strings*.xml`; a literal in Kotlin ships in
+English to everyone. This covers `Text`, button labels, dialog titles,
+snackbars, toasts, notifications, `contentDescription`/`onClickLabel` (screen
+readers read them aloud), and the watch app. Read them with `stringResource` /
+`pluralStringResource` in Compose and `getString` / `getQuantityString` outside it.
+
+- **Whole sentences, never spliced fragments.** `"Start ${noun}"` and
+  `"$a of $b" + " used"` can't be translated: word order, articles, gender and
+  case all move with the words around them. One resource per complete sentence,
+  with positional placeholders (`%1$d`, `%2$s`) so a translation can reorder them.
+- **One variant per activity type.** Sentences naming the walk/run/ride come as
+  three resources picked by `ActivityType.pick(...)` (`MapScreen.kt`), not with
+  the noun interpolated.
+- **Counts use `<plurals>`**, even where English only needs one form — other
+  languages need more.
+- **A short comment on any placeholder** saying what it holds and in what unit;
+  a translator sees the string alone.
+- **Pure units stay text-free.** `PanelSummary`, `FixWatch`, `MotionGate` and
+  the rest return enums and numbers; the composable turns them into a resource.
+  That keeps them JVM-testable (no `Context`) and keeps the wording in one place.
+- **Not user-facing, so stays literal:** log messages, file formats (GPX tags,
+  GeoJSON keys, backup field names), Data Layer paths, intent URIs, preference
+  keys, and anything a test asserts on as data.
+
+Resources are grouped per surface, one `strings_<surface>.xml` each:
+`panel` (the map's control panel), `map` (the rest of the map screen, its
+dialogs and the How it works sheet), `claim` (the claim dialog and colour
+swatches), `transfer` (GPX import and backup/restore, including the reports
+`EncloseViewModel` writes), `profile`, `territory` (the detail screen),
+`common` (shared dialog buttons, the territory list, the floating window) and
+`units` (everything `Format.kt` writes). The watch has its own
+`wear/.../strings_watch.xml`. **Every screen is migrated**; a literal a user can
+see is now a bug, not a backlog item.
+
+Deliberately still English, each for a reason:
+
+- **Generated names** (`NameGenerator`, `ProfileNameGenerator`). They become
+  stored data — a claim's name, the profile's name — so translating them is a
+  product decision (pick the language at creation? keep one shared pool?), and
+  "Adjective Noun" doesn't survive gender agreement in most languages anyway.
+- **What goes inside exported files** — the GPX track name, GeoJSON property
+  keys — is file format, read by other software.
+- **"© OpenStreetMap"** on the watch is a licence notice, marked
+  `translatable="false"`.
+
+`ActivityType` carries no text: what each type is called comes from
+`ActivityType.pick(...)` / `labelRes` / `activeLabelRes` in
+`ui/ActivityTypeText.kt`. `Backup.decode` returns `Backup.Problem` and
+`NewerSchema` rather than sentences, and `EncloseViewModel.describe` words them.
+`:watchlink` has no resources, so `WatchFormat` keeps only elapsed time; units
+on the watch come from `wear/.../Units.kt`.
+
+`Format.kt`'s formatters with a unit or a word in them are extensions on
+`Resources` — `res.formatDistance(m)`, with `val res = LocalResources.current`
+in a composable — so numbers and units follow the device's language and the
+same function serves the view model. Don't reintroduce `Locale.US` for
+anything a user reads; it is right only for file names, cache keys and file
+formats.
+
 ### Test mode
 
 **It does not exist in a release build.** `EncloseViewModel.devToolsAvailable`

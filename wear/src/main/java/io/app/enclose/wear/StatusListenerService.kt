@@ -62,7 +62,11 @@ class StatusListenerService : WearableListenerService() {
         ) return
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "Ready to close", NotificationManager.IMPORTANCE_HIGH),
+            NotificationChannel(
+                CHANNEL_ID,
+                getString(R.string.watch_ready_channel),
+                NotificationManager.IMPORTANCE_HIGH,
+            ),
         )
         val open = PendingIntent.getActivity(
             this,
@@ -74,8 +78,8 @@ class StatusListenerService : WearableListenerService() {
             NOTIFICATION_ID,
             NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_launcher_monochrome)
-                .setContentTitle("Loop ready to close")
-                .setContentText("Stop now to claim it")
+                .setContentTitle(getString(R.string.watch_ready_title))
+                .setContentText(getString(R.string.watch_ready_body))
                 .setContentIntent(open)
                 .setAutoCancel(true)
                 .setCategory(NotificationCompat.CATEGORY_STATUS)

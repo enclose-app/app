@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The territory detail screen: one claim, its walk, its place, and what can be done with it. -->
+<resources>
+    <!-- Toolbar accessibility labels and overflow menu. -->
+    <string name="territory_back">Back</string>
+    <string name="territory_rename">Rename</string>
+    <string name="territory_more_actions">More actions</string>
+    <string name="territory_show_on_map">Show on map</string>
+    <string name="territory_delete">Delete</string>
+
+    <string name="territory_details_title">Details</string>
+    <!-- How many points the walked outline has. -->
+    <string name="territory_boundary_points">Boundary points</string>
+    <string name="territory_claimed">Claimed</string>
+    <string name="territory_color_title">Color</string>
+
+    <string name="territory_notes_title">Notes</string>
+    <string name="territory_notes_placeholder">What happened on this walk?</string>
+    <string name="territory_notes_revert">Revert</string>
+    <string name="territory_notes_save">Save notes</string>
+    <string name="territory_notes_saved_snackbar">Notes saved</string>
+    <string name="territory_notes_empty">No notes yet</string>
+    <string name="territory_notes_saved">Saved</string>
+
+    <string name="territory_export_title">Export &amp; share</string>
+    <string name="territory_export_body">Send this claim to another app — GeoJSON for mapping tools, GPX for fitness apps.</string>
+    <!-- Title of the system share sheet. %1$s is a file format name: GeoJSON or GPX. -->
+    <string name="territory_share_chooser">Share %1$s</string>
+    <!-- %1$s is a file format name: GeoJSON or GPX. -->
+    <string name="territory_share_failed">Couldn\'t share as %1$s</string>
+
+    <string name="territory_rename_title">Rename territory</string>
+    <string name="territory_rename_label">Name</string>
+    <string name="territory_delete_title">Delete territory?</string>
+    <!-- %1$s is the territory's name. -->
+    <string name="territory_delete_body">“%1$s” will be removed. You can undo right after.</string>
+    <string name="territory_delete_confirm">Delete</string>
+
+    <!-- Hero stats. -->
+    <string name="territory_area">Area</string>
+    <string name="territory_perimeter">Perimeter</string>
+
+    <!-- The walk that made the claim. -->
+    <string name="territory_walk_title">The walk</string>
+    <string name="territory_walk_duration">Duration</string>
+    <!-- Time spent actually moving, as opposed to total duration. -->
+    <string name="territory_walk_moving">Moving</string>
+    <string name="territory_walk_pace">Pace</string>
+    <string name="territory_walk_climb">Climb</string>
+
+    <!-- Where the claim is. -->
+    <string name="territory_location_title">Location</string>
+    <string name="territory_coordinates">Coordinates</string>
+    <string name="territory_city">City</string>
+    <!-- A named area such as a district or region, not a size. -->
+    <string name="territory_place_area">Area</string>
+    <string name="territory_country">Country</string>
+    <!-- %1$s is the country's name, %2$s its ISO code, e.g. "Greece (GR)". -->
+    <string name="territory_country_with_code">%1$s (%2$s)</string>
+    <string name="territory_place_resolving">Looking up the place names…</string>
+    <string name="territory_place_offline">Place names need a connection — they\'ll fill in next time you open this with one.</string>
+</resources>

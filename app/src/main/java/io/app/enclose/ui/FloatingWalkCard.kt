@@ -1,5 +1,8 @@
 package io.app.enclose.ui
 
+import io.app.enclose.R
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -53,6 +56,7 @@ fun FloatingWalkCard(
     hasLocationPermission: Boolean,
     basemap: BasemapStyle,
 ) {
+    val res = LocalResources.current
     val accents = LocalEncloseAccents.current
     val controller = rememberMapController()
     // Location readiness doesn't change what a read-out says: what matters is
@@ -75,11 +79,11 @@ fun FloatingWalkCard(
     val elapsedMs = walk.startedAtMs?.let { (now - it).coerceAtLeast(0L) } ?: 0L
 
     val (dot, label) = when (summary.status) {
-        PanelStatus.READY -> accents.success to "Ready to claim"
-        PanelStatus.BLOCKED -> MaterialTheme.colorScheme.error to "Paused"
-        PanelStatus.TRACKING -> accents.trail to walk.activityType.activeLabel
+        PanelStatus.READY -> accents.success to stringResource(R.string.floating_ready)
+        PanelStatus.BLOCKED -> MaterialTheme.colorScheme.error to stringResource(R.string.stats_paused)
+        PanelStatus.TRACKING -> accents.trail to stringResource(walk.activityType.activeLabelRes)
         PanelStatus.IDLE, PanelStatus.NO_LOCATION ->
-            MaterialTheme.colorScheme.onSurfaceVariant to "No walk in progress"
+            MaterialTheme.colorScheme.onSurfaceVariant to stringResource(R.string.floating_idle)
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -123,8 +127,11 @@ fun FloatingWalkCard(
                     )
                     Text(
                         if (summary.status.isTracking) {
-                            "${formatDistance(walk.distanceMeters)} · " +
-                                formatElapsed(elapsedMs)
+                            stringResource(
+                                R.string.panel_detail_stats,
+                                res.formatDistance(walk.distanceMeters),
+                                formatElapsed(elapsedMs),
+                            )
                         } else {
                             label
                         },

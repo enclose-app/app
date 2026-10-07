@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shared by many screens: dialog buttons, the territory list, the floating window. -->
+<resources>
+    <!-- Default dialog buttons (UiKit). -->
+    <string name="common_save">Save</string>
+    <string name="common_cancel">Cancel</string>
+    <string name="common_got_it">Got it</string>
+
+    <!-- The floating (picture-in-picture) window\'s status line. -->
+    <string name="floating_ready">Ready to claim</string>
+    <string name="floating_idle">No walk in progress</string>
+
+    <!-- The territory list sheet. -->
+    <string name="list_title">Your territories</string>
+    <string name="list_sort_recent">Recent</string>
+    <string name="list_sort_largest">Largest</string>
+    <!-- Alphabetical order. -->
+    <string name="list_sort_name">A–Z</string>
+    <string name="list_stat_claimed">Claimed</string>
+    <string name="list_stat_area">Total area</string>
+    <!-- Combined perimeter of every claim. -->
+    <string name="list_stat_edge">Total edge</string>
+    <string name="list_empty_title">No claims yet</string>
+    <string name="list_empty_body">Close your first loop and it will show up here with its shape, size and history.</string>
+    <string name="list_search">Search by name</string>
+    <!-- %1$s is what was typed into the search box. -->
+    <string name="list_no_match_title">Nothing matches “%1$s”</string>
+    <string name="list_no_match_body">Try a different name, or clear the search.</string>
+    <!-- A claim\'s line: %1$s its area, %2$s its perimeter, %3$s its climb, all with units. -->
+    <string name="list_row">%1$s · %2$s around</string>
+    <string name="list_row_with_climb">%1$s · %2$s around · %3$s up</string>
+    <!-- %1$s is the claim\'s name. -->
+    <string name="list_row_actions">Actions for %1$s</string>
+</resources>

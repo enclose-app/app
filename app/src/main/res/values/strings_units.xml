@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Units and small formatted values, used on every screen through Format.kt.
+  Numbers are formatted in the device's locale, so a translation only needs to
+  place the unit: "%1$.2f km" becomes "1,24 km" in Greek without changes here.
+-->
+<resources>
+    <!-- Area. %1$.2f is square kilometres; %1$d whole square metres. -->
+    <string name="unit_area_km2">%1$.2f km²</string>
+    <string name="unit_area_m2">%1$d m²</string>
+
+    <!-- Distance. %1$.2f is kilometres; %1$d whole metres. -->
+    <string name="unit_distance_km">%1$.2f km</string>
+    <string name="unit_distance_m">%1$d m</string>
+
+    <!-- Elevation gain in whole metres, with digit grouping ("1,240 m"). Never converted to km. -->
+    <string name="unit_climb">%1$,d m</string>
+
+    <!-- Average pace: %1$d minutes and %2$02d seconds per kilometre. -->
+    <string name="unit_pace">%1$d:%2$02d /km</string>
+
+    <!-- File sizes, e.g. for a backup. -->
+    <string name="unit_file_mb">%1$.1f MB</string>
+    <string name="unit_file_kb">%1$d KB</string>
+    <plurals name="unit_file_bytes">
+        <item quantity="one">%1$d byte</item>
+        <item quantity="other">%1$d bytes</item>
+    </plurals>
+
+    <!-- A coordinate: %1$.5f is degrees, followed by the compass direction. -->
+    <string name="coord_north">%1$.5f° N</string>
+    <string name="coord_south">%1$.5f° S</string>
+    <string name="coord_east">%1$.5f° E</string>
+    <string name="coord_west">%1$.5f° W</string>
+    <!-- Latitude, then longitude. -->
+    <string name="coord_pair">%1$s, %2$s</string>
+
+    <!-- A date followed by a time of day, e.g. "Oct 7, 2026 · 14:32". -->
+    <string name="date_and_time">%1$s · %2$s</string>
+    <!-- Recency in lists. %1$s is a time of day, e.g. "14:32". -->
+    <string name="day_today">Today %1$s</string>
+    <string name="day_yesterday">Yesterday %1$s</string>
+    <plurals name="days_ago">
+        <item quantity="one">%1$d day ago</item>
+        <item quantity="other">%1$d days ago</item>
+    </plurals>
+
+    <string name="sync_synced">Synced</string>
+    <string name="sync_not_synced">Not synced</string>
+</resources>

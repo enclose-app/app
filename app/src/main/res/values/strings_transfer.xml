@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  GPX import and backup/restore: the progress dialogs and the reports written by
+  EncloseViewModel. Several are paragraphs joined from optional sentences, so
+  each sentence stands alone.
+-->
+<resources>
+    <!-- GPX import. -->
+    <string name="import_title">Importing GPX</string>
+    <string name="import_reading">Reading the file…</string>
+    <!-- %1$d points replayed so far, of %2$d (the quantity). -->
+    <plurals name="import_replaying">
+        <item quantity="one">Replaying the track — %1$d of %2$d point</item>
+        <item quantity="other">Replaying the track — %1$d of %2$d points</item>
+    </plurals>
+    <string name="import_done_title">Track imported</string>
+    <string name="import_failed_title">Couldn\'t import that</string>
+    <string name="import_refused_walking">There\'s a walk in progress. Stop it first — importing a track would throw away the route you\'re recording.</string>
+    <string name="import_unreadable">Couldn\'t read that file.</string>
+    <!-- trkpt, rtept and wpt are GPX tag names; leave them as they are. -->
+    <string name="import_no_points">No track points in that file — looked for &lt;trkpt&gt;, &lt;rtept&gt; and &lt;wpt&gt;.</string>
+    <!-- %1$d is the number of points in the file, %2$s a distance and %3$s an elevation gain, both with units. -->
+    <plurals name="import_headline">
+        <item quantity="one">%1$d point · %2$s · %3$s climb</item>
+        <item quantity="other">%1$d points · %2$s · %3$s climb</item>
+    </plurals>
+    <!-- How many of the file\'s points were kept in the walk. -->
+    <plurals name="import_kept">
+        <item quantity="one">%1$d kept — the rest sat closer together than the jitter filter allows.</item>
+        <item quantity="other">%1$d kept — the rest sat closer together than the jitter filter allows.</item>
+    </plurals>
+    <!-- %1$s is a distance with its unit. -->
+    <string name="import_overshoot">Ended where the track came back to its start — the %1$s recorded after that isn\'t part of the loop.</string>
+    <string name="import_closes">The loop closes here: press Close loop &amp; claim to keep it.</string>
+    <!-- %1$s is how far from the start the track ends, %2$s the closing radius; both distances with units. -->
+    <string name="import_never_closes">The track ends %1$s from where it starts and never comes back within %2$s of it, so it can\'t be claimed as a loop.</string>
+
+    <!-- Backup and restore progress. -->
+    <string name="backup_exporting_title">Backing up</string>
+    <string name="backup_exporting">Collecting everything on this device…</string>
+    <string name="backup_importing_title">Restoring</string>
+    <string name="backup_importing">Reading the backup and putting it back…</string>
+    <string name="backup_done_title">Done</string>
+    <string name="backup_failed_title">That didn\'t work</string>
+
+    <!-- Backup written. %1$s, %2$s and %3$s are the claim count, walk count and file size phrases below. -->
+    <string name="backup_export_headline">%1$s · %2$s · %3$s</string>
+    <plurals name="backup_claims">
+        <item quantity="one">%1$d claim</item>
+        <item quantity="other">%1$d claims</item>
+    </plurals>
+    <plurals name="backup_walks">
+        <item quantity="one">%1$d walk</item>
+        <item quantity="other">%1$d walks</item>
+    </plurals>
+    <string name="backup_export_detail">Saved. The file holds everything on this device — every claim standing and fallen, every walk, your profile, and your settings. Anyone who opens it can read where you walk, so keep it somewhere you\'d keep a diary.</string>
+    <string name="backup_export_failed">Couldn\'t write the backup. The file wasn\'t saved.</string>
+
+    <!-- Restore refused or failed. -->
+    <string name="backup_refused_walking">There\'s a walk in progress. Stop it first — restoring would overwrite the walk being recorded, and those points aren\'t anywhere else yet.</string>
+    <string name="backup_unreadable">Couldn\'t read that file.</string>
+    <!-- %1$s is a file size with its unit. -->
+    <string name="backup_too_large">That file is larger than %1$s, which is past anything Enclose writes. It\'s probably not a backup.</string>
+    <string name="backup_not_json">That file isn\'t an Enclose backup — it isn\'t even JSON.</string>
+    <string name="backup_not_backup">That file isn\'t an Enclose backup.</string>
+    <string name="backup_no_format">That file isn\'t an Enclose backup — it has no format version in it.</string>
+    <!-- %1$d is the file\'s format version, %2$d the newest this build reads. -->
+    <string name="backup_newer_format">That backup was written by a newer version of Enclose (format %1$d; this build reads %2$d). Update the app and try again.</string>
+    <string name="backup_restore_failed">Couldn\'t write the backup into the app. Nothing was changed.</string>
+
+    <!-- Restore report: the two count phrases below. In those, %1$d is how many are new and %2$d how many the file held. -->
+    <string name="restore_headline">%1$s · %2$s</string>
+    <plurals name="restore_new_claims">
+        <item quantity="one">%1$d new claim of %2$d</item>
+        <item quantity="other">%1$d new claims of %2$d</item>
+    </plurals>
+    <plurals name="restore_new_walks">
+        <item quantity="one">%1$d new walk of %2$d</item>
+        <item quantity="other">%1$d new walks of %2$d</item>
+    </plurals>
+    <!-- %1$d is the file\'s database version, %2$d this build\'s. -->
+    <string name="restore_newer_schema">It was made with a newer version of the app\'s database (v%1$d, this build uses v%2$d). Anything this build has no place for was left out.</string>
+    <string name="restore_nothing_deleted">Nothing already on this device was deleted.</string>
+    <plurals name="restore_replaced">
+        <item quantity="one">%1$d record the backup also had was replaced with its version.</item>
+        <item quantity="other">%1$d records the backup also had were replaced with its version.</item>
+    </plurals>
+    <string name="restore_profile">Your profile and settings came back too.</string>
+    <string name="restore_walk_resumed">It also held a walk that was still being recorded — it\'s back, and will carry on from where it stopped the next time you start recording.</string>
+    <string name="restore_walk_skipped">It also held an unfinished walk, which was left alone: this device already has one, and overwriting it would lose those points.</string>
+    <string name="restore_offline_skipped">Downloaded map areas aren\'t restored — the tiles themselves aren\'t in the file — so they\'ll download again on Wi-Fi.</string>
+</resources>

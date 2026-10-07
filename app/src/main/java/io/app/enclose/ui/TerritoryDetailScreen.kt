@@ -1,5 +1,7 @@
 package io.app.enclose.ui
 
+import io.app.enclose.R
+import androidx.compose.ui.res.stringResource
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
@@ -59,6 +61,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -87,6 +90,7 @@ fun TerritoryDetailScreen(
     onDelete: (Territory) -> Unit = {},
     viewModel: EncloseViewModel = viewModel(),
 ) {
+    val res = LocalResources.current
     val territories by viewModel.territories.collectAsStateWithLifecycle()
     val walksById by viewModel.walksById.collectAsStateWithLifecycle()
     val territory = territories.firstOrNull { it.id == territoryId }
@@ -126,23 +130,23 @@ fun TerritoryDetailScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.territory_back))
                     }
                 },
                 actions = {
                     IconButton(onClick = { renaming = true }) {
-                        Icon(Icons.Filled.Edit, contentDescription = "Rename")
+                        Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.territory_rename))
                     }
                     Box {
                         IconButton(onClick = { menuOpen = true }) {
-                            Icon(Icons.Filled.MoreVert, contentDescription = "More actions")
+                            Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.territory_more_actions))
                         }
                         DropdownMenu(
                             expanded = menuOpen,
                             onDismissRequest = { menuOpen = false },
                         ) {
                             DropdownMenuItem(
-                                text = { Text("Show on map") },
+                                text = { Text(stringResource(R.string.territory_show_on_map)) },
                                 leadingIcon = { Icon(Icons.Filled.Map, null) },
                                 onClick = {
                                     menuOpen = false
@@ -150,7 +154,7 @@ fun TerritoryDetailScreen(
                                 },
                             )
                             DropdownMenuItem(
-                                text = { Text("Delete") },
+                                text = { Text(stringResource(R.string.territory_delete)) },
                                 leadingIcon = {
                                     Icon(
                                         Icons.Filled.Delete,
@@ -190,9 +194,9 @@ fun TerritoryDetailScreen(
 
             // Area and perimeter already lead the hero, so this card carries only
             // what the hero doesn't say.
-            SectionCard(title = "Details") {
-                DetailRow("Boundary points", territory.ring.size.toString())
-                DetailRow("Claimed", formatDate(territory.claimedAtEpochMs))
+            SectionCard(title = stringResource(R.string.territory_details_title)) {
+                DetailRow(stringResource(R.string.territory_boundary_points), territory.ring.size.toString())
+                DetailRow(stringResource(R.string.territory_claimed), res.formatDate(territory.claimedAtEpochMs))
                 Spacer(Modifier.height(6.dp))
                 SyncBadge(territory.syncStatus)
             }
@@ -201,21 +205,21 @@ fun TerritoryDetailScreen(
 
             LocationCard(territory)
 
-            SectionCard(title = "Color") {
+            SectionCard(title = stringResource(R.string.territory_color_title)) {
                 ColorPickerRow(
                     selectedHex = territory.colorHex,
                     onSelect = { viewModel.recolorTerritory(territory.id, it) },
                 )
             }
 
-            SectionCard(title = "Notes") {
+            SectionCard(title = stringResource(R.string.territory_notes_title)) {
                 OutlinedTextField(
                     value = notes,
                     onValueChange = { notes = it },
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 110.dp),
-                    placeholder = { Text("What happened on this walk?") },
+                    placeholder = { Text(stringResource(R.string.territory_notes_placeholder)) },
                     shape = MaterialTheme.shapes.small,
                 )
                 Spacer(Modifier.height(10.dp))
@@ -226,17 +230,21 @@ fun TerritoryDetailScreen(
                     // Only offer the actions when there is something to act on,
                     // rather than showing a permanently disabled "Saved" button.
                     if (notesDirty) {
-                        TextButton(onClick = { notes = territory.notes }) { Text("Revert") }
+                        TextButton(onClick = { notes = territory.notes }) { Text(stringResource(R.string.territory_notes_revert)) }
                         Spacer(Modifier.size(8.dp))
                         Button(
                             onClick = {
                                 viewModel.updateNotes(territory.id, notes)
-                                scope.launch { snackbarHost.showSnackbar("Notes saved") }
+                                scope.launch {
+                                    snackbarHost.showSnackbar(res.getString(R.string.territory_notes_saved_snackbar))
+                                }
                             },
-                        ) { Text("Save notes") }
+                        ) { Text(stringResource(R.string.territory_notes_save)) }
                     } else {
                         Text(
-                            if (notes.isBlank()) "No notes yet" else "Saved",
+                            stringResource(
+                                if (notes.isBlank()) R.string.territory_notes_empty else R.string.territory_notes_saved,
+                            ),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -249,13 +257,12 @@ fun TerritoryDetailScreen(
                 modifier = Modifier.fillMaxWidth().height(52.dp),
                 shape = PillShape,
             ) {
-                ButtonContent(Icons.Filled.Map, "Show on map")
+                ButtonContent(Icons.Filled.Map, stringResource(R.string.territory_show_on_map))
             }
 
-            SectionCard(title = "Export & share") {
+            SectionCard(title = stringResource(R.string.territory_export_title)) {
                 Text(
-                    "Send this claim to another app — GeoJSON for mapping tools, " +
-                        "GPX for fitness apps.",
+                    stringResource(R.string.territory_export_body),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -287,8 +294,8 @@ fun TerritoryDetailScreen(
 
     if (renaming) {
         TextEntryDialog(
-            title = "Rename territory",
-            label = "Name",
+            title = stringResource(R.string.territory_rename_title),
+            label = stringResource(R.string.territory_rename_label),
             initialValue = territory.name,
             onConfirm = { newName ->
                 viewModel.renameTerritory(territory.id, newName)
@@ -300,9 +307,9 @@ fun TerritoryDetailScreen(
 
     if (confirmingDelete) {
         ConfirmDialog(
-            title = "Delete territory?",
-            message = "“${territory.name}” will be removed. You can undo right after.",
-            confirmLabel = "Delete",
+            title = stringResource(R.string.territory_delete_title),
+            message = stringResource(R.string.territory_delete_body, territory.name),
+            confirmLabel = stringResource(R.string.territory_delete_confirm),
             destructive = true,
             onConfirm = {
                 confirmingDelete = false
@@ -320,6 +327,7 @@ fun TerritoryDetailScreen(
  */
 @Composable
 private fun TerritoryHero(territory: Territory, accent: Color) {
+    val res = LocalResources.current
     Surface(
         shape = MaterialTheme.shapes.extraLarge,
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -344,15 +352,15 @@ private fun TerritoryHero(territory: Territory, accent: Color) {
                 Spacer(Modifier.height(14.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     StatTile(
-                        label = "Area",
-                        value = formatArea(territory.areaSqMeters),
+                        label = stringResource(R.string.territory_area),
+                        value = res.formatArea(territory.areaSqMeters),
                         modifier = Modifier.weight(1f),
                         accent = accent,
                         container = MaterialTheme.colorScheme.surface.copy(alpha = 0.75f),
                     )
                     StatTile(
-                        label = "Perimeter",
-                        value = formatDistance(territory.perimeterMeters),
+                        label = stringResource(R.string.territory_perimeter),
+                        value = res.formatDistance(territory.perimeterMeters),
                         modifier = Modifier.weight(1f),
                         container = MaterialTheme.colorScheme.surface.copy(alpha = 0.75f),
                     )
@@ -382,6 +390,7 @@ private fun TerritoryHero(territory: Territory, accent: Color) {
  */
 @Composable
 private fun WalkCard(walk: Walk?) {
+    val res = LocalResources.current
     if (walk == null) return
     val duration = walk.durationMs
     val moving = walk.movingMs?.takeIf { it > 0 }
@@ -389,26 +398,27 @@ private fun WalkCard(walk: Walk?) {
     val hasClimb = walk.elevationGainMeters > 0.0
     if (duration == null && !hasClimb) return
 
-    SectionCard(title = "The walk") {
+    SectionCard(title = stringResource(R.string.territory_walk_title)) {
         if (duration != null) {
-            DetailRow("Duration", formatElapsed(duration))
+            DetailRow(stringResource(R.string.territory_walk_duration), formatElapsed(duration))
             // Only worth its own row when it differs enough to notice; on a walk
             // with no stops it would just repeat the duration.
             if (moving != null && duration - moving >= NOTABLE_PAUSE_MS) {
-                DetailRow("Moving", formatElapsed(moving))
+                DetailRow(stringResource(R.string.territory_walk_moving), formatElapsed(moving))
             }
         }
         if (pacing != null) {
-            DetailRow("Pace", formatPace(walk.perimeterMeters, pacing))
+            DetailRow(stringResource(R.string.territory_walk_pace), res.formatPace(walk.perimeterMeters, pacing))
         }
         if (hasClimb) {
-            DetailRow("Climb", formatClimb(walk.elevationGainMeters))
+            DetailRow(stringResource(R.string.territory_walk_climb), res.formatClimb(walk.elevationGainMeters))
         }
     }
 }
 
 @Composable
 private fun LocationCard(territory: Territory) {
+    val res = LocalResources.current
     val context = LocalContext.current
     val center = remember(territory.id) {
         territory.ring.takeIf { it.isNotEmpty() }?.let { Geo.centroid(it) }
@@ -431,25 +441,31 @@ private fun LocationCard(territory: Territory) {
         resolving = false
     }
 
-    SectionCard(title = "Location") {
+    SectionCard(title = stringResource(R.string.territory_location_title)) {
         if (center != null) {
-            DetailRow("Coordinates", formatCoordinates(center))
+            DetailRow(stringResource(R.string.territory_coordinates), res.formatCoordinates(center))
         }
-        place.city?.let { DetailRow("City", it) }
-        place.area?.let { DetailRow("Area", it) }
+        place.city?.let { DetailRow(stringResource(R.string.territory_city), it) }
+        place.area?.let { DetailRow(stringResource(R.string.territory_place_area), it) }
         place.country?.let {
-            DetailRow("Country", place.countryCode?.let { code -> "$it ($code)" } ?: it)
+            DetailRow(
+                stringResource(R.string.territory_country),
+                place.countryCode
+                    ?.let { code -> stringResource(R.string.territory_country_with_code, it, code) }
+                    ?: it,
+            )
         }
 
         if (place.isEmpty) {
             Spacer(Modifier.height(4.dp))
             Text(
-                if (resolving) {
-                    "Looking up the place names…"
-                } else {
-                    "Place names need a connection — they'll fill in next time " +
-                        "you open this with one."
-                },
+                stringResource(
+                    if (resolving) {
+                        R.string.territory_place_resolving
+                    } else {
+                        R.string.territory_place_offline
+                    },
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -467,7 +483,7 @@ private fun LoadingScreen(onBack: () -> Unit) {
                 title = { Text("") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.territory_back))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -496,6 +512,7 @@ private fun LoadingScreen(onBack: () -> Unit) {
     }
 }
 
+/** [label] is the format's own name, the same in every language. */
 private enum class ExportFormat(
     val label: String,
     val extension: String,
@@ -535,12 +552,12 @@ private fun shareTerritory(
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
     context.startActivity(
-        Intent.createChooser(send, "Share ${format.label}").apply {
+        Intent.createChooser(send, context.getString(R.string.territory_share_chooser, format.label)).apply {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         },
     )
     null
-}.getOrElse { "Couldn't share as ${format.label}" }
+}.getOrElse { context.getString(R.string.territory_share_failed, format.label) }
 
 /**
  * Below this, the difference between elapsed and moving time is noise from a

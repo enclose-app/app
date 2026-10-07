@@ -224,8 +224,11 @@ class BackupTest {
 
         val ok = decodeOk(text)
 
-        assertNotNull("a newer schema has to be said out loud", ok.note)
-        assertTrue(ok.note!!.contains("newer"))
+        assertEquals(
+            "a newer schema has to be said out loud",
+            Backup.NewerSchema(fileSchema = schema + 3, currentSchema = schema),
+            ok.newerSchema,
+        )
         assertEquals(2, ok.data.territories.size)
     }
 
@@ -240,7 +243,10 @@ class BackupTest {
         val decoded = Backup.decode(text, currentSchemaVersion = schema)
 
         assertTrue(decoded is Backup.Decoded.Failed)
-        assertTrue((decoded as Backup.Decoded.Failed).reason.contains("newer version"))
+        assertEquals(
+            Backup.Problem.NewerFormat(Backup.FORMAT_VERSION + 1, Backup.FORMAT_VERSION),
+            (decoded as Backup.Decoded.Failed).problem,
+        )
     }
 
     @Test
@@ -315,6 +321,6 @@ class BackupTest {
         val decoded = Backup.decode(truncated, currentSchemaVersion = schema)
 
         assertTrue(decoded is Backup.Decoded.Failed)
-        assertTrue((decoded as Backup.Decoded.Failed).reason.isNotBlank())
+        assertEquals(Backup.Problem.NotJson, (decoded as Backup.Decoded.Failed).problem)
     }
 }

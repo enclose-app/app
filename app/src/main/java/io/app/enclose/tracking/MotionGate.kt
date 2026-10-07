@@ -24,12 +24,8 @@ enum class MotionActivity { WALKING, RUNNING, CYCLING, VEHICLE, STILL, UNKNOWN }
  * of those was loosened by as much.
  */
 enum class ActivityType(
-    /** Chip label: "Walk", "Run", "Bike". */
-    val label: String,
-    /** Present-tense wording for the live panel: "Walking", "Cycling"… */
-    val activeLabel: String,
-    /** The trip as a noun: "Start a **ride**", "too fast for a **run**". */
-    val noun: String,
+    // No wording here: what each type is called lives in string resources,
+    // picked per type in the UI — see io.app.enclose.ui.pick.
     val maxSpeedMps: Double,
     /**
      * Whether this mode can currently be chosen. Running and cycling are turned
@@ -41,9 +37,9 @@ enum class ActivityType(
      */
     val available: Boolean = true,
 ) {
-    WALK("Walk", "Walking", "walk", 5.0), // ~18 km/h
-    RUN("Run", "Running", "run", 8.0, available = false), // ~29 km/h
-    BIKE("Bike", "Cycling", "ride", 11.0, available = false), // ~40 km/h
+    WALK(5.0), // ~18 km/h
+    RUN(8.0, available = false), // ~29 km/h
+    BIKE(11.0, available = false), // ~40 km/h
     ;
 
     companion object {

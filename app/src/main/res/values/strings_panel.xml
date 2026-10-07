@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The map's bottom control panel: expanded, collapsed, and the notices inside it.
+
+  Sentences that name the activity come in one variant per ActivityType (walk,
+  run, ride) rather than with the noun spliced in: articles, gender and case
+  follow the noun in most languages, so "Start %s" can't be translated.
+-->
+<resources>
+    <!-- Activity type chips above the Start button. -->
+    <string name="activity_walk">Walk</string>
+    <string name="activity_run">Run</string>
+    <string name="activity_bike">Bike</string>
+
+    <!-- Panel title while a walk of that type is recording. -->
+    <string name="activity_walking">Walking</string>
+    <string name="activity_running">Running</string>
+    <string name="activity_cycling">Cycling</string>
+
+    <!-- Accessibility labels for folding and unfolding the panel. -->
+    <string name="panel_minimise">Minimise the panel</string>
+    <string name="panel_expand">Expand the panel</string>
+
+    <string name="panel_start_walk">Start walk</string>
+    <string name="panel_start_run">Start run</string>
+    <string name="panel_start_ride">Start ride</string>
+
+    <string name="panel_idle_title">Ready to claim ground</string>
+    <string name="panel_idle_body">Walk a loop and finish near where you started to claim everything inside it.</string>
+    <string name="panel_how_it_works">How Enclose works</string>
+
+    <string name="panel_title_paused">Paused — not recording</string>
+    <string name="panel_title_ready">Back at the start</string>
+    <!-- Collapsed panel's second line: distance, then elapsed time, e.g. "1.2 km · 14:05". -->
+    <string name="panel_detail_stats">%1$s · %2$s</string>
+
+    <!-- The collapsed panel's one button; kept short, it shares a row. -->
+    <string name="panel_action_claim">Claim</string>
+    <string name="panel_action_end">End</string>
+    <string name="panel_action_grant">Grant</string>
+    <string name="panel_action_settings">Settings</string>
+
+    <!-- Shown in place of Start when location can't record. -->
+    <string name="location_title_off">Location is switched off</string>
+    <string name="location_title_precise">Precise location needed</string>
+    <string name="location_title_needed">Location access needed</string>
+    <string name="location_body_off">Enclose has permission, but the device\'s location switch is off, so no fixes arrive at all.</string>
+    <string name="location_body_precise">Approximate location is off by hundreds of metres — too vague to trace a route. Switch this app\'s location to Precise.</string>
+    <string name="location_body_blocked">Enable it in system settings to record walks.</string>
+    <string name="location_body_needed">Enclose traces your route to work out what you enclosed.</string>
+    <string name="location_open_location_settings">Open location settings</string>
+    <string name="location_open_settings">Open settings</string>
+    <string name="location_grant">Grant location access</string>
+
+    <string name="panel_close_and_claim">Close loop &amp; claim</string>
+    <string name="panel_discard_walk">Discard walk</string>
+    <string name="panel_discard_run">Discard run</string>
+    <string name="panel_discard_ride">Discard ride</string>
+    <string name="panel_end_walk">End walk</string>
+    <string name="panel_end_run">End run</string>
+    <string name="panel_end_ride">End ride</string>
+
+    <!-- Live figures. "Paused" replaces the activity name while movement is rejected. -->
+    <string name="stats_paused">Paused</string>
+    <string name="stats_distance">Distance</string>
+    <string name="stats_time">Time</string>
+    <string name="stats_pace">Pace</string>
+    <string name="stats_climb">Climb</string>
+    <string name="stats_from_start">From start</string>
+
+    <string name="notice_signal_gap">GPS dropped out for a while — still recording, but part of your route is estimated.</string>
+
+    <!-- No usable fix after a walk has been running a while. -->
+    <string name="fix_no_fix_title">No GPS fix yet</string>
+    <string name="fix_no_fix_body">Nothing has been recorded yet. Check that location is switched on, and that you have a view of the sky — indoors and underground, no fix arrives at all.</string>
+    <string name="fix_too_vague_title">GPS too vague to record</string>
+    <!-- %1$d is the accuracy limit in metres. -->
+    <string name="fix_too_vague_body">Fixes are arriving but every one is off by more than %1$d m, so none can be kept. This is what Approximate location looks like — switch Enclose to Precise in system settings.</string>
+    <!-- %1$d is the accuracy limit in metres, %2$d the current accuracy in metres. -->
+    <string name="fix_too_vague_body_current">Fixes are arriving but every one is off by more than %1$d m (currently ±%2$d m), so none can be kept. This is what Approximate location looks like — switch Enclose to Precise in system settings.</string>
+
+    <!-- Movement rejected as not human-powered. -->
+    <string name="motion_vehicle_title">Vehicle movement detected</string>
+    <string name="motion_too_fast_walk">Too fast for a walk</string>
+    <string name="motion_too_fast_run">Too fast for a run</string>
+    <string name="motion_too_fast_ride">Too fast for a ride</string>
+    <string name="motion_body_walk">Not recording — Enclose only counts walking, running and cycling. Slow down to carry on with this walk.</string>
+    <string name="motion_body_run">Not recording — Enclose only counts walking, running and cycling. Slow down to carry on with this run.</string>
+    <string name="motion_body_ride">Not recording — Enclose only counts walking, running and cycling. Slow down to carry on with this ride.</string>
+    <!-- %1$d is seconds left before the walk is discarded. -->
+    <string name="motion_last_warning_walk">Last warning — discarding this walk in %1$ds</string>
+    <string name="motion_last_warning_run">Last warning — discarding this run in %1$ds</string>
+    <string name="motion_last_warning_ride">Last warning — discarding this ride in %1$ds</string>
+    <!-- %1$d is the warning about to be given, %2$d the total allowed, %3$d seconds until it is given. -->
+    <string name="motion_warning_countdown">Warning %1$d of %2$d in %3$ds</string>
+
+    <!-- A warning the walk survived. %1$d used, %2$d allowed. -->
+    <string name="strike_last_walk">Warnings used: %1$d of %2$d — one more ends this walk.</string>
+    <string name="strike_last_run">Warnings used: %1$d of %2$d — one more ends this run.</string>
+    <string name="strike_last_ride">Warnings used: %1$d of %2$d — one more ends this ride.</string>
+    <!-- %1$d used, %2$d allowed, %3$d left (the quantity). -->
+    <plurals name="strike_left_walk">
+        <item quantity="one">Warnings used: %1$d of %2$d — %3$d left before this walk is discarded.</item>
+        <item quantity="other">Warnings used: %1$d of %2$d — %3$d left before this walk is discarded.</item>
+    </plurals>
+    <plurals name="strike_left_run">
+        <item quantity="one">Warnings used: %1$d of %2$d — %3$d left before this run is discarded.</item>
+        <item quantity="other">Warnings used: %1$d of %2$d — %3$d left before this run is discarded.</item>
+    </plurals>
+    <plurals name="strike_left_ride">
+        <item quantity="one">Warnings used: %1$d of %2$d — %3$d left before this ride is discarded.</item>
+        <item quantity="other">Warnings used: %1$d of %2$d — %3$d left before this ride is discarded.</item>
+    </plurals>
+
+    <!-- The three steps to a claimable loop, as short chips. %1$d is metres. -->
+    <string name="loop_step_leave">Leave start</string>
+    <string name="loop_step_cover">Cover %1$d m</string>
+    <string name="loop_step_return">Return</string>
+    <string name="loop_hint_ready">You\'re back at the start — close the loop to claim it!</string>
+    <!-- %1$d is metres to the start. -->
+    <string name="loop_hint_head_back">Head back to the start zone — %1$d m away</string>
+    <!-- %1$d is the radius in metres. -->
+    <string name="loop_hint_leave">Move at least %1$d m from your start to begin the loop</string>
+    <!-- %1$d is metres still to walk. -->
+    <string name="loop_hint_keep_going">Keep going — about %1$d m more before you can close</string>
+
+    <!-- GPS accuracy chip. %1$d is the accuracy in metres. -->
+    <string name="gps_acquiring">GPS acquiring…</string>
+    <string name="gps_accuracy">GPS ±%1$d m</string>
+    <string name="gps_not_recorded">GPS ±%1$d m — not recorded</string>
+</resources>
