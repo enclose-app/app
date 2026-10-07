@@ -1,5 +1,6 @@
 package io.app.enclose.ui
 
+import io.app.enclose.BuildConfig
 import io.app.enclose.export.GeoExporter
 import io.app.enclose.data.VoidedWalk
 import androidx.compose.ui.platform.LocalContext
@@ -78,6 +79,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.Role
@@ -493,6 +495,19 @@ fun ProfileScreen(
                     onClick = { backupReader.launch(arrayOf("*/*")) },
                 )
             }
+
+            // versionCode is the build number: CI bumps it on every release
+            // (see .github/workflows/ci.yml), so it identifies the build exactly.
+            Text(
+                text = "Enclose ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})" +
+                    if (BuildConfig.DEBUG) " · debug" else "",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                textAlign = TextAlign.Center,
+            )
 
             Spacer(Modifier.height(8.dp))
         }
