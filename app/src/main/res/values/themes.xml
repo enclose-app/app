@@ -5,5 +5,22 @@
         <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
     </style>
 
-    <style name="Theme.Enclose" parent="Base.Theme.Enclose" />
+    <!--
+      Edge-to-edge is set up here rather than with enableEdgeToEdge(). That
+      helper calls Window.setStatusBarColor/setNavigationBarColor, and before
+      API 30 picks LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES: all deprecated in
+      Android 15 and reported by Play even though they only run on older
+      versions. From API 35 targetSdk enforces edge-to-edge and ignores these
+      colours; on 33-34 they make the bars transparent, and MainActivity turns
+      off decor fitting. Icon colour follows the system theme, as EncloseTheme
+      does.
+    -->
+    <style name="Theme.Enclose" parent="Base.Theme.Enclose">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:windowLightStatusBar">?attr/isLightTheme</item>
+        <item name="android:windowLightNavigationBar">?attr/isLightTheme</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">always</item>
+    </style>
 </resources>

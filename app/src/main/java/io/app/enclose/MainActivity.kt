@@ -10,13 +10,13 @@ import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import androidx.core.view.WindowCompat
 import android.provider.Settings
 import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
@@ -90,7 +90,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // Edge-to-edge without enableEdgeToEdge(), whose pre-35 branches call
+        // APIs Play reports as deprecated — the bars are set up in
+        // Theme.Enclose. A no-op from API 35, where edge-to-edge is enforced.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         multiWindow.value = isInMultiWindowMode && !isInPictureInPictureMode
         // Only on a fresh create. After a process kill the system re-delivers the
         // intent that started the task, which would replay a track shared hours
