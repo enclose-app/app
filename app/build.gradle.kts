@@ -15,8 +15,9 @@ android {
         minSdk = 35
         //noinspection OldTargetApi
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        // Both from gradle.properties, bumped by CI on every push to master.
+        versionCode = providers.gradleProperty("enclose.versionCode").get().toInt()
+        versionName = providers.gradleProperty("enclose.versionName").get()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

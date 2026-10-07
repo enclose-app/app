@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests and debug build
+        run: ./gradlew testDebugUnitTest :watchlink:test assembleDebug
+
+      # Lint fails on this repo by design (3 pre-existing MissingPermission
+      # errors, see CLAUDE.md), so it reports rather than gates.
+      - name: Lint
+        run: ./gradlew lintDebug
+        continue-on-error: true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reports
+          path: |
+            **/build/reports/
+            **/build/test-results/
+          if-no-files-found: ignore
+
+  # Every push to master that passes `check` bumps the version in
+  # gradle.properties (read by both :app and :wear), commits it, tags it and
+  # opens a GitHub release. Patch by default; put #minor or #major in the
+  # merge/squash commit message to bump those instead.
+  release:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump version
+        id: bump
+        env:
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          name=$(sed -n 's/^enclose\.versionName=//p' gradle.properties)
+          code=$(sed -n 's/^enclose\.versionCode=//p' gradle.properties)
+          IFS=. read -r major minor patch <<< "$name"
+
+          if   grep -q '#major' <<< "$MESSAGE"; then major=$((major+1)); minor=0; patch=0
+          elif grep -q '#minor' <<< "$MESSAGE"; then minor=$((minor+1)); patch=0
+          else patch=$((patch+1)); fi
+
+          name="$major.$minor.$patch"
+          code=$((code+1))
+          sed -i "s/^enclose\.versionName=.*/enclose.versionName=$name/; s/^enclose\.versionCode=.*/enclose.versionCode=$code/" gradle.properties
+
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+      # Pushes made with GITHUB_TOKEN don't trigger workflows, so this commit
+      # can't loop; [skip ci] is belt and braces.
+      - name: Commit, tag and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release ${{ steps.bump.outputs.name }} (${{ steps.bump.outputs.code }}) [skip ci]"
+          git tag -a "v${{ steps.bump.outputs.name }}" -m "Release ${{ steps.bump.outputs.name }} (versionCode ${{ steps.bump.outputs.code }})"
+          git push origin HEAD:master "v${{ steps.bump.outputs.name }}"
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "v${{ steps.bump.outputs.name }}" --generate-notes --title "v${{ steps.bump.outputs.name }}"

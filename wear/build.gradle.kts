@@ -22,8 +22,8 @@ android {
         targetSdk = 36
         // Its own range, well clear of the phone's: Play requires every artifact
         // in one listing to have a distinct versionCode.
-        versionCode = 100_001
-        versionName = "1.0"
+        versionCode = 100_000 + providers.gradleProperty("enclose.versionCode").get().toInt()
+        versionName = providers.gradleProperty("enclose.versionName").get()
     }
 
     buildTypes {
