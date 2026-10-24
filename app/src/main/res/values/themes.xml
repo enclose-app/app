@@ -1,8 +1,14 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Base.Theme.Enclose" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your light theme here. -->
-        <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
+    <!--
+      The window theme only covers the moment before Compose draws, so it is the
+      platform's own DayNight rather than Material Components'. That library was
+      here for nothing but this parent, and it carries BottomSheetDialog,
+      SheetDialog and EdgeToEdgeUtils, which call the Window bar-colour setters
+      Play reports as deprecated in Android 15.
+    -->
+    <style name="Base.Theme.Enclose" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
     </style>
 
     <!--
@@ -19,8 +25,8 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:enforceStatusBarContrast">false</item>
-        <item name="android:windowLightStatusBar">?attr/isLightTheme</item>
-        <item name="android:windowLightNavigationBar">?attr/isLightTheme</item>
+        <item name="android:windowLightStatusBar">?android:attr/isLightTheme</item>
+        <item name="android:windowLightNavigationBar">?android:attr/isLightTheme</item>
         <item name="android:windowLayoutInDisplayCutoutMode">always</item>
     </style>
 </resources>

@@ -76,7 +76,6 @@ dependencies {
     implementation(libs.compose.material.icons.extended)
     debugImplementation(libs.compose.ui.tooling)
 
-    implementation(libs.material)
     implementation(libs.maplibre)
     implementation(libs.play.services.location)
 
