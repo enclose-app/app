@@ -154,8 +154,13 @@ fun WalkMap(
             // pushed up into the part of the map that shows: the walker sits
             // above the strip, not under it. Set here, not when the map loads,
             // because the view has a height by now and may not have had then.
-            m.setPadding(0, 0, 0, (mapView.height * STRIP_FRACTION).toInt())
-            m.animateCamera(CameraUpdateFactory.newLatLng(LatLng(target.lat, target.lng)), FOLLOW_ANIM_MS)
+            // Built from the current camera, as newLatLng does, so the crown's
+            // zoom is kept.
+            val camera = CameraPosition.Builder(m.cameraPosition)
+                .target(LatLng(target.lat, target.lng))
+                .padding(0.0, 0.0, 0.0, mapView.height * STRIP_FRACTION.toDouble())
+                .build()
+            m.animateCamera(CameraUpdateFactory.newCameraPosition(camera), FOLLOW_ANIM_MS)
         }
     }
 }

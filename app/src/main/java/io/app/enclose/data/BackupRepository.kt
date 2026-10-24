@@ -115,7 +115,7 @@ class BackupRepository(
             // the walk somebody is out on right now, and they exist nowhere else.
             val backedUpProgress = data.walkProgress
             val adoptProgress = backedUpProgress != null && progressDao.session() == null
-            if (adoptProgress && backedUpProgress != null) {
+            if (adoptProgress) {
                 progressDao.begin(backedUpProgress)
                 progressDao.insertPoints(data.walkProgressPoints.map(WalkProgressPointEntity::of))
             }

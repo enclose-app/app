@@ -236,8 +236,8 @@ class MotionGate {
         // Stale classifications are worse than none: a WALKING reading from five
         // minutes ago must not whitelist the drive happening now.
         val fresh = motion != null && (nowElapsedMs - motion.atElapsedMs) <= ACTIVITY_MAX_AGE_MS
-        val inVehicle = fresh && motion!!.vehicleConfidence >= VEHICLE_CONFIDENCE
-        val detected = if (fresh && motion!!.confidence >= HUMAN_CONFIDENCE) {
+        val inVehicle = fresh && motion.vehicleConfidence >= VEHICLE_CONFIDENCE
+        val detected = if (fresh && motion.confidence >= HUMAN_CONFIDENCE) {
             ceilingFor(motion.activity)
         } else {
             null

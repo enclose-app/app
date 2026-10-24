@@ -61,7 +61,7 @@ class PauseTracker {
     ): Boolean {
         val fresh = motion != null && (nowElapsedMs - motion.atElapsedMs) <= ACTIVITY_MAX_AGE_MS
         val classifiedStill = fresh &&
-            motion!!.activity == MotionActivity.STILL &&
+            motion.activity == MotionActivity.STILL &&
             motion.confidence >= STILL_CONFIDENCE
         val slow = speedMps != null && speedMps.isFinite() && speedMps < STILL_SPEED_MPS
         return classifiedStill || slow

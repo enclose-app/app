@@ -32,6 +32,14 @@ android {
             }
         }
     }
+    packaging {
+        jniLibs {
+            // Prebuilt by MapLibre and androidx.graphics and shipped already
+            // stripped. Asking AGP to strip them again needs an NDK, and without
+            // one (CI has none) it only warns and packages them as they are.
+            keepDebugSymbols += setOf("**/libmaplibre.so", "**/libandroidx.graphics.path.so")
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
