@@ -184,7 +184,7 @@ class SnapPolicyTest {
         assertEquals(expected, (verdict as SnapVerdict.Rejected).reason)
     }
 
-    /** An axis-aligned square, matching the fixture idiom in ConquestTest. */
+    /** An axis-aligned square, matching the fixture idiom in TerritoryHitTest. */
     private fun square(sizeDeg: Double): List<LatLng> = listOf(
         BERLIN,
         LatLng(BERLIN.lat, BERLIN.lng + sizeDeg),

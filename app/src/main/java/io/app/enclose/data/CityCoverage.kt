@@ -11,6 +11,7 @@ data class CityCoverage(
     /** Resolved city name, or blank when reverse geocoding hasn't answered yet. */
     val city: String,
     val territoryCount: Int,
+    /** Ground the city's claims cover, shared ground counted once — see [Footprint]. */
     val claimedAreaSqMeters: Double,
     /** Area of the box containing every claim in this city — the denominator. */
     val boundingAreaSqMeters: Double,
@@ -27,11 +28,13 @@ data class CityCoverage(
 /**
  * Turns claims into per-city coverage.
  *
- * Coverage is claimed area as a share of the bounding box of the claims **in
- * that city**. Measuring per city rather than across every claim is what makes
- * the number mean anything once someone has walked in more than one place: a
- * single box spanning two cities is mostly the countryside between them, so the
- * old whole-collection figure collapsed towards zero the moment you travelled.
+ * Coverage is the ground claimed — shared ground counted once, by [Footprint],
+ * since claims are layers and can overlap — as a share of the bounding box of
+ * the claims **in that city**. Measuring per city rather than across every
+ * claim is what makes the number mean anything once someone has walked in more
+ * than one place: a single box spanning two cities is mostly the countryside
+ * between them, so the old whole-collection figure collapsed towards zero the
+ * moment you travelled.
  *
  * Pure and free of Android/DB types so it can be unit tested.
  */
@@ -45,7 +48,7 @@ object Coverage {
             .sortedByDescending { it.claimedAreaSqMeters }
 
     private fun coverageFor(city: String, claims: List<Territory>): CityCoverage {
-        val claimedArea = claims.sumOf { it.areaSqMeters }
+        val claimedArea = Footprint.areaSqMeters(claims)
         val boxArea = boundingBoxAreaSqMeters(claims.flatMap { it.ring })
         val percent = if (boxArea > 0.0 && claimedArea > 0.0) {
             (claimedArea / boxArea * 100.0).coerceIn(0.0, 100.0)

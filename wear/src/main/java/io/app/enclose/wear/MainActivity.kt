@@ -18,11 +18,18 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             // Asked once, up front: the ready-to-close prompt is the companion's
-            // main job, and asking at that moment would be asking mid-walk.
-            val notifications = rememberLauncherForActivityResult(
-                ActivityResultContracts.RequestPermission(),
+            // main job, the steps it counts vouch for the walk, and asking at
+            // either moment would be asking mid-walk. Both are optional — the
+            // buzz comes without the prompt, and the phone judges on its own
+            // steps without the watch's.
+            val permissions = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestMultiplePermissions(),
             ) { }
-            LaunchedEffect(Unit) { notifications.launch(Manifest.permission.POST_NOTIFICATIONS) }
+            LaunchedEffect(Unit) {
+                permissions.launch(
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.ACTIVITY_RECOGNITION),
+                )
+            }
 
             val state by link.state.collectAsStateWithLifecycle()
             val map by link.map.collectAsStateWithLifecycle()

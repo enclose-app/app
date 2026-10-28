@@ -8,6 +8,33 @@
     <!-- %1$s is a distance with its unit ("4 m"), %2$s an elevation gain with its unit ("12 m"). -->
     <string name="claim_closed_caption">Closed %1$s from your start · %2$s climbed</string>
     <string name="claim_signal_gap_note">Note: GPS dropped out along the way, so part of this outline is a straight line between the last fix before the gap and the first one after it.</string>
+    <string name="claim_steps_covered_gap">The signal was lost along the way, but your steps covered the gap, so it counts as walked.</string>
+
+    <!-- How the boundary was covered. %1$s is a distance with its unit; the step counts are grouped (%2$,d, %3$,d), and the quantity is the first count shown. -->
+    <string name="claim_on_foot">On foot %1$s</string>
+    <plurals name="claim_on_foot_phone">
+        <item quantity="one">On foot %1$s · %2$,d step on the phone</item>
+        <item quantity="other">On foot %1$s · %2$,d steps on the phone</item>
+    </plurals>
+    <plurals name="claim_on_foot_watch">
+        <item quantity="one">On foot %1$s · %2$,d step on the watch</item>
+        <item quantity="other">On foot %1$s · %2$,d steps on the watch</item>
+    </plurals>
+    <plurals name="claim_on_foot_both">
+        <item quantity="one">On foot %1$s · %2$,d step on the phone · %3$,d on the watch</item>
+        <item quantity="other">On foot %1$s · %2$,d steps on the phone · %3$,d on the watch</item>
+    </plurals>
+    <!-- One bridge. %1$s is its length with unit, %2$s the time it spans ("14:02–14:06"), %3$d the share of the boundary in percent, %4$d the limit in percent. -->
+    <string name="claim_bridged">Bridged %1$s · %2$s · %3$d%% of the boundary, limit %4$d%%</string>
+    <!-- One bridge with no clock behind it: as above without the time. -->
+    <string name="claim_bridged_untimed">Bridged %1$s · %2$d%% of the boundary, limit %3$d%%</string>
+    <!-- Several bridges. %1$s is their total length with unit, %2$d how many (the quantity), %3$d the share of the boundary in percent, %4$d the limit in percent. -->
+    <plurals name="claim_bridged_several">
+        <item quantity="one">Bridged %1$s in %2$d stretch · %3$d%% of the boundary, limit %4$d%%</item>
+        <item quantity="other">Bridged %1$s in %2$d stretches · %3$d%% of the boundary, limit %4$d%%</item>
+    </plurals>
+    <!-- A span of time: %1$s when it began, %2$s when it ended. -->
+    <string name="claim_time_range">%1$s–%2$s</string>
     <string name="claim_name_label">Territory name</string>
     <!-- Accessibility label for the dice button that suggests a random name. -->
     <string name="claim_suggest_name">Suggest another name</string>

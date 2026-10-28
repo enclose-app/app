@@ -26,7 +26,12 @@ class WatchMapOfTest {
         LatLng(center.lat + halfDeg, center.lng - halfDeg),
     )
 
-    private fun territory(id: String, center: LatLng, color: String = "#1E88A8"): Territory {
+    private fun territory(
+        id: String,
+        center: LatLng,
+        color: String = "#1E88A8",
+        claimedAt: Long = 0L,
+    ): Territory {
         val ring = square(center)
         return Territory(
             id = id,
@@ -35,7 +40,7 @@ class WatchMapOfTest {
             polygons = Territory.polygonsFromRing(ring),
             areaSqMeters = 1.0,
             perimeterMeters = 1.0,
-            claimedAtEpochMs = 0L,
+            claimedAtEpochMs = claimedAt,
             colorHex = color,
         )
     }
@@ -77,13 +82,32 @@ class WatchMapOfTest {
     }
 
     @Test
-    fun `only nearby claims are sent, nearest first`() {
-        val near = territory("near", LatLng(origin.lat + 0.005, origin.lng))
-        val nearer = territory("nearer", LatLng(origin.lat + 0.002, origin.lng), color = "#7B1FA2")
+    fun `only nearby claims are sent`() {
+        val near = territory("near", LatLng(origin.lat + 0.005, origin.lng), color = "#7B1FA2")
         val far = territory("far", LatLng(origin.lat + 1.0, origin.lng))
-        val claims = watchClaimsNear(listOf(near, far, nearer), origin)
-        assertEquals(2, claims.claims.size)
-        assertEquals(0xFF7B1FA2.toInt(), claims.claims.first().color)
+        val claims = watchClaimsNear(listOf(near, far), origin)
+        assertEquals(listOf(0xFF7B1FA2.toInt()), claims.claims.map { it.color })
+    }
+
+    /** The watch draws claims in the order they arrive, and the newest goes on top. */
+    @Test
+    fun `nearby claims are sent oldest first`() {
+        val newer = territory("newer", LatLng(origin.lat + 0.002, origin.lng), color = "#7B1FA2", claimedAt = 2L)
+        val older = territory("older", LatLng(origin.lat + 0.005, origin.lng), color = "#1E88A8", claimedAt = 1L)
+        val claims = watchClaimsNear(listOf(newer, older), origin)
+        assertEquals(listOf(0xFF1E88A8.toInt(), 0xFF7B1FA2.toInt()), claims.claims.map { it.color })
+    }
+
+    /** Nearest first decides who makes the cut, even though the order sent is by age. */
+    @Test
+    fun `the cap keeps the nearest claims`() {
+        val far = territory("far", LatLng(origin.lat + 0.03, origin.lng), color = "#7B1FA2", claimedAt = 0L)
+        val near = (0 until WatchClaims.MAX_CLAIMS).map {
+            territory("t$it", LatLng(origin.lat + it * 1e-4, origin.lng), claimedAt = 10L + it)
+        }
+        val sent = watchClaimsNear(listOf(far) + near, origin).claims
+        assertEquals(WatchClaims.MAX_CLAIMS, sent.size)
+        assertTrue("The farthest claim is the one left out", sent.none { it.color == 0xFF7B1FA2.toInt() })
     }
 
     @Test

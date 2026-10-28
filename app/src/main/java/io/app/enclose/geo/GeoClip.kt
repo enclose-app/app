@@ -5,42 +5,41 @@ import org.locationtech.jts.geom.Geometry
 import org.locationtech.jts.geom.GeometryFactory
 import org.locationtech.jts.geom.LinearRing
 import org.locationtech.jts.geom.Polygon
+import org.locationtech.jts.operation.union.UnaryUnionOp
 import kotlin.math.cos
 
 /**
- * Polygon boolean geometry for claim overlaps, backed by JTS.
+ * Polygon geometry over claims, backed by JTS: how much ground they share, and
+ * whether a ring is simple.
  *
  * WGS84 coordinates are projected to a local planar frame (equirectangular
- * around a reference latitude) so JTS — which is planar — can operate, then
- * unprojected back. Accurate at city-walk scale, matching [Geo]'s area math.
+ * around a reference latitude) so JTS — which is planar — can operate.
+ * Accurate at city-walk scale, matching [Geo]'s area math.
  */
 object GeoClip {
 
     private const val EARTH_RADIUS_M = 6_371_000.0
     private val factory = GeometryFactory()
-    private const val OVERLAP_EPSILON_SQ_M = 1.0
-
-    /** True if [cut] overlaps [base] by more than a negligible sliver. */
-    fun overlaps(base: List<GeoPolygon>, cut: GeoRing): Boolean {
-        if (base.isEmpty() || cut.size < 3) return false
-        val lat0 = cut.map { it.lat }.average()
-        val b = toJts(base, lat0) ?: return false
-        val c = toJts(listOf(listOf(cut)), lat0) ?: return false
-        return runCatching { b.intersection(c).area > OVERLAP_EPSILON_SQ_M }.getOrDefault(false)
-    }
 
     /**
-     * [base] with [cut] removed, as a list of polygons (may be empty if [cut]
-     * fully covers [base], or several polygons if it splits it). On any failure
-     * the original [base] is returned unchanged.
+     * How much ground [shapes] share, in square metres: the sum of their areas
+     * less the area of their union, both measured in one projection around the
+     * shapes' mean latitude. Zero when none of them overlap.
+     *
+     * Zero as well on any failure. The caller takes this off a sum of areas, so
+     * a failure reads as the old figure — every claim counted whole — rather
+     * than as ground lost.
      */
-    fun subtract(base: List<GeoPolygon>, cut: GeoRing): List<GeoPolygon> {
-        if (base.isEmpty() || cut.size < 3) return base
-        val lat0 = cut.map { it.lat }.average()
-        val b = toJts(base, lat0) ?: return base
-        val c = toJts(listOf(listOf(cut)), lat0) ?: return base
-        val diff = runCatching { b.difference(c) }.getOrNull() ?: return base
-        return fromJts(diff, lat0)
+    fun sharedSqMeters(shapes: List<List<GeoPolygon>>): Double {
+        val points = shapes.flatten().flatten().flatten()
+        if (shapes.size < 2 || points.isEmpty()) return 0.0
+        val lat0 = points.map { it.lat }.average()
+        val geometries = shapes.mapNotNull { toJts(it, lat0) }
+        if (geometries.size < 2) return 0.0
+        return runCatching {
+            val union = UnaryUnionOp.union(geometries) ?: return 0.0
+            (geometries.sumOf { it.area } - union.area).coerceAtLeast(0.0)
+        }.getOrDefault(0.0)
     }
 
     /**
@@ -70,12 +69,6 @@ object GeoClip {
         EARTH_RADIUS_M * Math.toRadians(p.lat),
     )
 
-    private fun unproject(x: Double, y: Double, lat0: Double): LatLng {
-        val lat = Math.toDegrees(y / EARTH_RADIUS_M)
-        val lng = Math.toDegrees(x / (EARTH_RADIUS_M * cos(Math.toRadians(lat0))))
-        return LatLng(lat, lng)
-    }
-
     // --- conversion ----------------------------------------------------------
 
     private fun ringToJts(ring: GeoRing, lat0: Double): LinearRing? {
@@ -97,29 +90,5 @@ object GeoClip {
         val geom = if (jts.size == 1) jts[0] else factory.createMultiPolygon(jts.toTypedArray())
         // buffer(0) repairs orientation / minor self-intersections from GPS noise.
         return runCatching { geom.buffer(0.0) }.getOrDefault(geom)
-    }
-
-    private fun fromJts(geometry: Geometry, lat0: Double): List<GeoPolygon> {
-        val out = mutableListOf<GeoPolygon>()
-        for (i in 0 until geometry.numGeometries) {
-            val g = geometry.getGeometryN(i)
-            if (g is Polygon && !g.isEmpty) out.add(jtsPolygonToGeo(g, lat0))
-        }
-        return out
-    }
-
-    private fun jtsPolygonToGeo(polygon: Polygon, lat0: Double): GeoPolygon {
-        val rings = mutableListOf<GeoRing>()
-        rings.add(coordsToRing(polygon.exteriorRing.coordinates, lat0))
-        for (i in 0 until polygon.numInteriorRing) {
-            rings.add(coordsToRing(polygon.getInteriorRingN(i).coordinates, lat0))
-        }
-        return rings
-    }
-
-    private fun coordsToRing(coords: Array<Coordinate>, lat0: Double): GeoRing {
-        val ring = coords.map { unproject(it.x, it.y, lat0) }
-        // Drop the JTS closing duplicate; our rings are implicitly closed.
-        return if (ring.size > 1 && ring.first() == ring.last()) ring.dropLast(1) else ring
     }
 }

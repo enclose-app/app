@@ -22,6 +22,13 @@ data class WalkEntity(
     val movingMs: Long? = null,
     val claimed: Boolean,
     val syncStatus: SyncStatus,
+    /** Null for walks recorded before stretches were judged. */
+    val onFootMeters: Double? = null,
+    val bridgedMeters: Double? = null,
+    val phoneSteps: Int? = null,
+    val watchSteps: Int? = null,
+    /** The full recorded track, in the same shape as [ringJson]; null when it is the ring. */
+    val trackJson: String? = null,
 ) {
     fun toDomain(): Walk = Walk(
         id = id,
@@ -35,6 +42,12 @@ data class WalkEntity(
         movingMs = movingMs,
         claimed = claimed,
         syncStatus = syncStatus,
+        onFootMeters = onFootMeters,
+        bridgedMeters = bridgedMeters,
+        phoneSteps = phoneSteps,
+        watchSteps = watchSteps,
+        // A track that can't be read is no reason to lose the walk it belongs to.
+        track = trackJson?.let { runCatching { ringFromJson(it) }.getOrNull() },
     )
 
     companion object {
@@ -50,6 +63,11 @@ data class WalkEntity(
             movingMs = w.movingMs,
             claimed = w.claimed,
             syncStatus = w.syncStatus,
+            onFootMeters = w.onFootMeters,
+            bridgedMeters = w.bridgedMeters,
+            phoneSteps = w.phoneSteps,
+            watchSteps = w.watchSteps,
+            trackJson = w.track?.let(::ringToJson),
         )
 
         private fun ringToJson(ring: List<LatLng>): String {

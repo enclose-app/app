@@ -11,6 +11,8 @@ import org.junit.Test
  */
 class PassportTest {
 
+    private var placed = 0
+
     @Test
     fun `countries are stamped in the order they were first walked`() {
         val stamps = Passport.stamps(
@@ -78,6 +80,18 @@ class PassportTest {
         assertEquals(3_500.0, stamps.single().claimedAreaSqMeters, 0.001)
     }
 
+    /** Claims are layers, so a loop walked twice is one place, not two. */
+    @Test
+    fun `ground claimed twice in a country is counted once`() {
+        val first = claim("a", city = "Athens", country = "Greece", at = 1L)
+        val again = first.copy(id = "b", claimedAtEpochMs = 2L)
+
+        val stamp = Passport.stamps(listOf(first, again)).single()
+
+        assertEquals(first.areaSqMeters, stamp.claimedAreaSqMeters, first.areaSqMeters * 0.01)
+        assertEquals(2, stamp.territoryCount)
+    }
+
     @Test
     fun `no claims yields no stamps`() {
         assertTrue(Passport.stamps(emptyList()).isEmpty())
@@ -88,19 +102,22 @@ class PassportTest {
         city: String,
         country: String,
         at: Long,
-        area: Double = 100.0,
+        area: Double? = null,
     ): Territory {
+        // Each claim on ground of its own, so only the test that means to
+        // overlap two claims does: overlapping ones share ground (Footprint).
+        val south = 37.9838 + placed++ * 0.01
         val ring = listOf(
-            LatLng(37.9838, 23.7275),
-            LatLng(37.9838, 23.7285),
-            LatLng(37.9848, 23.7285),
+            LatLng(south, 23.7275),
+            LatLng(south, 23.7285),
+            LatLng(south + 0.001, 23.7285),
         )
         return Territory(
             id = id,
             name = "Claim $id",
             ring = ring,
             polygons = Territory.polygonsFromRing(ring),
-            areaSqMeters = area,
+            areaSqMeters = area ?: io.app.enclose.geo.Geo.polygonAreaSqMeters(ring),
             perimeterMeters = 0.0,
             claimedAtEpochMs = at,
             city = city,

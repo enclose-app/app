@@ -47,6 +47,22 @@
     <string name="territory_walk_moving">Moving</string>
     <string name="territory_walk_pace">Pace</string>
     <string name="territory_walk_climb">Climb</string>
+    <string name="territory_walk_steps">Steps</string>
+    <!-- %1$,d: steps the phone counted over the loop. -->
+    <plurals name="territory_walk_steps_phone">
+        <item quantity="one">%1$,d on the phone</item>
+        <item quantity="other">%1$,d on the phone</item>
+    </plurals>
+    <!-- %1$,d: steps the watch counted over the loop. -->
+    <plurals name="territory_walk_steps_watch">
+        <item quantity="one">%1$,d on the watch</item>
+        <item quantity="other">%1$,d on the watch</item>
+    </plurals>
+    <!-- %1$,d: steps the phone counted; %2$,d: steps the watch counted, over the same loop. -->
+    <plurals name="territory_walk_steps_both">
+        <item quantity="one">%1$,d on the phone · %2$,d on the watch</item>
+        <item quantity="other">%1$,d on the phone · %2$,d on the watch</item>
+    </plurals>
 
     <!-- Where the claim is. -->
     <string name="territory_location_title">Location</string>

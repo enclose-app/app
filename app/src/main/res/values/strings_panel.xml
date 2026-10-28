@@ -29,7 +29,6 @@
     <string name="panel_idle_body">Walk a loop and finish near where you started to claim everything inside it.</string>
     <string name="panel_how_it_works">How Enclose works</string>
 
-    <string name="panel_title_paused">Paused — not recording</string>
     <string name="panel_title_ready">Back at the start</string>
     <!-- Collapsed panel's second line: distance, then elapsed time, e.g. "1.2 km · 14:05". -->
     <string name="panel_detail_stats">%1$s · %2$s</string>
@@ -53,22 +52,43 @@
     <string name="location_grant">Grant location access</string>
 
     <string name="panel_close_and_claim">Close loop &amp; claim</string>
+    <!-- Beside "Close loop & claim": opens the Stop dialog, which offers Save, Keep going and Discard. -->
+    <string name="panel_stop_without_claim">Stop without claiming</string>
     <string name="panel_discard_walk">Discard walk</string>
     <string name="panel_discard_run">Discard run</string>
     <string name="panel_discard_ride">Discard ride</string>
     <string name="panel_end_walk">End walk</string>
     <string name="panel_end_run">End run</string>
     <string name="panel_end_ride">End ride</string>
+    <!-- In place of the walk's buttons after Stop, for at most a few seconds, while a doubtful stretch waits on the steps the paired watch counted. -->
+    <string name="panel_asking_watch">Asking your watch for its last steps…</string>
 
-    <!-- Live figures. "Paused" replaces the activity name while movement is rejected. -->
-    <string name="stats_paused">Paused</string>
+    <!-- Live figures. -->
     <string name="stats_distance">Distance</string>
+    <!-- Replaces "Distance" once part of the walk is set aside — a drive before the walking began, or a stretch nothing showed was walked. -->
+    <string name="stats_on_foot">On foot</string>
     <string name="stats_time">Time</string>
     <string name="stats_pace">Pace</string>
     <string name="stats_climb">Climb</string>
     <string name="stats_from_start">From start</string>
 
     <string name="notice_signal_gap">GPS dropped out for a while — still recording, but part of your route is estimated.</string>
+
+    <!-- Steps counted so far, beside the activity name. %1$,d is the phone's count; the quantity is that count. -->
+    <plurals name="stats_steps">
+        <item quantity="one">%1$,d step</item>
+        <item quantity="other">%1$,d steps</item>
+    </plurals>
+    <!-- %1$,d is the phone's count and the quantity; %2$,d is the watch's count. -->
+    <plurals name="stats_steps_and_watch">
+        <item quantity="one">%1$,d step · watch %2$,d</item>
+        <item quantity="other">%1$,d steps · watch %2$,d</item>
+    </plurals>
+    <!-- Only the watch is counting. %1$,d is its count and the quantity. -->
+    <plurals name="stats_steps_watch">
+        <item quantity="one">Watch: %1$,d step</item>
+        <item quantity="other">Watch: %1$,d steps</item>
+    </plurals>
 
     <!-- No usable fix after a walk has been running a while. -->
     <string name="fix_no_fix_title">No GPS fix yet</string>
@@ -79,38 +99,23 @@
     <!-- %1$d is the accuracy limit in metres, %2$d the current accuracy in metres. -->
     <string name="fix_too_vague_body_current">Fixes are arriving but every one is off by more than %1$d m (currently ±%2$d m), so none can be kept. This is what Approximate location looks like — switch Enclose to Precise in system settings.</string>
 
-    <!-- Movement rejected as not human-powered. -->
-    <string name="motion_vehicle_title">Vehicle movement detected</string>
-    <string name="motion_too_fast_walk">Too fast for a walk</string>
-    <string name="motion_too_fast_run">Too fast for a run</string>
-    <string name="motion_too_fast_ride">Too fast for a ride</string>
-    <string name="motion_body_walk">Not recording — Enclose only counts walking, running and cycling. Slow down to carry on with this walk.</string>
-    <string name="motion_body_run">Not recording — Enclose only counts walking, running and cycling. Slow down to carry on with this run.</string>
-    <string name="motion_body_ride">Not recording — Enclose only counts walking, running and cycling. Slow down to carry on with this ride.</string>
-    <!-- %1$d is seconds left before the walk is discarded. -->
-    <string name="motion_last_warning_walk">Last warning — discarding this walk in %1$ds</string>
-    <string name="motion_last_warning_run">Last warning — discarding this run in %1$ds</string>
-    <string name="motion_last_warning_ride">Last warning — discarding this ride in %1$ds</string>
-    <!-- %1$d is the warning about to be given, %2$d the total allowed, %3$d seconds until it is given. -->
-    <string name="motion_warning_countdown">Warning %1$d of %2$d in %3$ds</string>
+    <!-- A stretch nothing showed was walked. Recording carries on; the stretch becomes a straight line in the claim. -->
+    <string name="doubt_vehicle_title">Looks like a vehicle</string>
+    <string name="doubt_too_fast_walk">Faster than walking</string>
+    <string name="doubt_too_fast_run">Faster than running</string>
+    <string name="doubt_too_fast_ride">Faster than riding</string>
+    <string name="doubt_body_walk">Still recording. If your steps don\'t back this stretch up, it becomes a straight line in your claim. Your walk carries on.</string>
+    <string name="doubt_body_run">Still recording. If your steps don\'t back this stretch up, it becomes a straight line in your claim. Your run carries on.</string>
+    <!-- Under the doubt notice, when the walk closed a loop before the doubtful stretch: Stop away from the start offers that loop. %1$s: the time of day it closed, e.g. 14:32. -->
+    <string name="doubt_loop_closed">Your loop closed at %1$s. This stretch isn\'t part of it.</string>
+    <string name="doubt_body_ride">Still recording. Unless it turns out to be part of a ride, this stretch becomes a straight line in your claim. Your ride carries on.</string>
 
-    <!-- A warning the walk survived. %1$d used, %2$d allowed. -->
-    <string name="strike_last_walk">Warnings used: %1$d of %2$d — one more ends this walk.</string>
-    <string name="strike_last_run">Warnings used: %1$d of %2$d — one more ends this run.</string>
-    <string name="strike_last_ride">Warnings used: %1$d of %2$d — one more ends this ride.</string>
-    <!-- %1$d used, %2$d allowed, %3$d left (the quantity). -->
-    <plurals name="strike_left_walk">
-        <item quantity="one">Warnings used: %1$d of %2$d — %3$d left before this walk is discarded.</item>
-        <item quantity="other">Warnings used: %1$d of %2$d — %3$d left before this walk is discarded.</item>
-    </plurals>
-    <plurals name="strike_left_run">
-        <item quantity="one">Warnings used: %1$d of %2$d — %3$d left before this run is discarded.</item>
-        <item quantity="other">Warnings used: %1$d of %2$d — %3$d left before this run is discarded.</item>
-    </plurals>
-    <plurals name="strike_left_ride">
-        <item quantity="one">Warnings used: %1$d of %2$d — %3$d left before this ride is discarded.</item>
-        <item quantity="other">Warnings used: %1$d of %2$d — %3$d left before this ride is discarded.</item>
-    </plurals>
+    <!-- Ground set aside so far. %1$s is a distance with its unit, %2$d its share of the loop in percent, %3$d the limit in percent. -->
+    <string name="bridged_so_far">Bridged so far %1$s · %2$d%% of the loop · limit %3$d%%</string>
+    <!-- As above, once the share is past the limit: a loop closed now couldn\'t be claimed. -->
+    <string name="bridged_over_walk">Bridged so far %1$s · %2$d%% of the loop, over the %3$d%% limit. Walking on brings the share down.</string>
+    <string name="bridged_over_run">Bridged so far %1$s · %2$d%% of the loop, over the %3$d%% limit. Running on brings the share down.</string>
+    <string name="bridged_over_ride">Bridged so far %1$s · %2$d%% of the loop, over the %3$d%% limit. Riding on brings the share down.</string>
 
     <!-- The three steps to a claimable loop, as short chips. %1$d is metres. -->
     <string name="loop_step_leave">Leave start</string>

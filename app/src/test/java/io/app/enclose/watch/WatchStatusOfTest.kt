@@ -1,7 +1,7 @@
 package io.app.enclose.watch
 
 import io.app.enclose.geo.LatLng
-import io.app.enclose.tracking.BlockReason
+import io.app.enclose.tracking.DoubtReason
 import io.app.enclose.tracking.RecordingFailure
 import io.app.enclose.tracking.TrackingManager.PendingClaim
 import io.app.enclose.tracking.TrackingManager.WalkState
@@ -45,7 +45,9 @@ class WatchStatusOfTest {
             WalkState(
                 isTracking = true,
                 startedAtMs = 1_000L,
-                distanceMeters = 1_234.0,
+                // A drive is in what was recorded; the watch shows what was walked.
+                distanceMeters = 1_934.0,
+                onFootMeters = 1_234.0,
                 distanceToStartMeters = 13.0,
                 canCloseLoop = true,
             ),
@@ -56,13 +58,24 @@ class WatchStatusOfTest {
         assertEquals(1_230, status.distanceMeters)
         assertEquals(15, status.toStartMeters)
         assertTrue(status.canCloseLoop)
-        assertFalse(status.canStopFromWatch)
+        assertFalse(status.readyToClose)
     }
 
     @Test
-    fun `stop is offered only once the loop is ready to close`() {
-        val status = watchStatusOf(WalkState(isTracking = true, readyToClose = true), null)
-        assertTrue(status.canStopFromWatch)
+    fun `stop is offered at any point of a walk`() {
+        // Stop keeps a walk it can't claim, so it no longer waits for the loop.
+        assertTrue(watchStatusOf(WalkState(isTracking = true), null).canStopFromWatch)
+        assertTrue(watchStatusOf(WalkState(isTracking = true, readyToClose = true), null).canStopFromWatch)
+    }
+
+    @Test
+    fun `a doubtful stretch after a loop says when the loop closed`() {
+        val status = watchStatusOf(
+            WalkState(isTracking = true, doubtReason = DoubtReason.VEHICLE, earlierLoopClosedAtMs = 5_000L),
+            null,
+        )
+        assertTrue(status.doubtful)
+        assertEquals(5_000L, status.loopClosedAtEpochMs)
     }
 
     @Test
@@ -81,16 +94,16 @@ class WatchStatusOfTest {
     }
 
     @Test
-    fun `blocking and a dead recorder are passed on`() {
+    fun `a doubtful stretch and a dead recorder are passed on`() {
         val status = watchStatusOf(
             WalkState(
                 isTracking = true,
-                blockedReason = BlockReason.VEHICLE,
+                doubtReason = DoubtReason.VEHICLE,
                 recordingFailure = RecordingFailure.PERMISSION,
             ),
             null,
         )
-        assertTrue(status.blocked)
+        assertTrue(status.doubtful)
         assertTrue(status.notRecording)
     }
 

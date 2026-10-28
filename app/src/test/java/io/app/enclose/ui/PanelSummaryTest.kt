@@ -1,8 +1,9 @@
 package io.app.enclose.ui
 
-import io.app.enclose.tracking.BlockReason
+import io.app.enclose.tracking.DoubtReason
 import io.app.enclose.tracking.TrackingManager.WalkState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -84,16 +85,29 @@ class PanelSummaryTest {
     }
 
     @Test
-    fun `blocked movement outranks everything else about the walk`() {
+    fun `a doubtful stretch is said, and the walk carries on`() {
+        val summary = summarize(WalkState(isTracking = true, doubtReason = DoubtReason.VEHICLE))
+        assertEquals(PanelStatus.DOUBTFUL, summary.status)
+        assertTrue(summary.status.isTracking)
+        assertEquals(PanelAction.END, summary.action)
+    }
+
+    /**
+     * Someone standing at the start can claim even while the last stretch is in
+     * doubt — at worst it is bridged. Leading with the doubt would hide the one
+     * button that keeps the walk.
+     */
+    @Test
+    fun `a closable loop outranks a doubtful stretch`() {
         val summary = summarize(
             WalkState(
                 isTracking = true,
                 readyToClose = true,
-                blockedReason = BlockReason.VEHICLE,
+                doubtReason = DoubtReason.TOO_FAST,
             ),
         )
-        assertEquals(PanelStatus.BLOCKED, summary.status)
-        assertEquals(PanelAction.END, summary.action)
+        assertEquals(PanelStatus.READY, summary.status)
+        assertEquals(PanelAction.CLAIM, summary.action)
     }
 
     /**

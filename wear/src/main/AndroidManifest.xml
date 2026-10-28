@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- The tap-to-stop prompt that comes with it. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- The steps counted on the wrist during a walk: its second witness. -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
 
     <application
         android:allowBackup="false"
@@ -53,7 +55,25 @@
                     android:host="*"
                     android:path="/enclose/status" />
             </intent-filter>
+            <!-- The phone's Stop, asking for the last of the walk's steps. -->
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:path="/enclose/steps/flush" />
+            </intent-filter>
         </service>
+
+        <!--
+          Where Health Services delivers the steps it counted, registered only
+          while a walk is on (StepRecorder). The permission means only Health
+          Services can bind it.
+        -->
+        <service
+            android:name=".StepListenerService"
+            android:exported="true"
+            android:permission="com.google.android.wearable.healthservices.permission.PASSIVE_DATA_BINDING" />
     </application>
 
 </manifest>

@@ -23,7 +23,10 @@
 
     <!-- One line on what the walk needs next. -->
     <string name="watch_hint_not_recording">Phone isn\'t recording — check it</string>
-    <string name="watch_hint_vehicle">Vehicle detected — not recording</string>
+    <!-- A stretch nothing showed was walked. Recording carries on; it becomes a straight line in the claim. -->
+    <string name="watch_hint_doubtful">Faster than walking — still recording</string>
+    <!-- The same, after a loop closed earlier in the walk: that loop is still theirs. %1$s is the time of day it closed, e.g. 14:32. -->
+    <string name="watch_hint_doubtful_after_loop">Faster than walking · loop closed %1$s</string>
     <string name="watch_hint_finding_gps">Finding GPS on your phone…</string>
     <string name="watch_hint_ready">Ready to close!</string>
     <!-- %1$s is a distance with its unit. -->
@@ -33,6 +36,9 @@
 
     <string name="watch_stopping">Stopping…</string>
     <string name="watch_stop_claim">Stop &amp; claim</string>
+    <!-- Stop away from the start: ends the walk, keeping it (or the loop it closed earlier). Asks for a second tap. -->
+    <string name="watch_end_walk">End walk</string>
+    <string name="watch_tap_again_to_end">Tap again to end</string>
     <string name="watch_phone_unreachable">Phone not reachable</string>
     <string name="watch_check_phone">Check your phone</string>
     <string name="watch_loop_closed">Loop closed</string>
@@ -42,4 +48,10 @@
     <string name="watch_ready_channel">Ready to close</string>
     <string name="watch_ready_title">Loop ready to close</string>
     <string name="watch_ready_body">Stop now to claim it</string>
+
+    <!-- Notification when a stretch turns doubtful after the walk closed a loop. -->
+    <string name="watch_doubt_channel">Vehicle after a loop</string>
+    <string name="watch_doubt_title">Looks like a vehicle</string>
+    <!-- %1$s is the time of day the loop closed, e.g. 14:32. -->
+    <string name="watch_doubt_body">Your loop closed at %1$s. This stretch isn\'t part of it.</string>
 </resources>

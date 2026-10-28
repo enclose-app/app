@@ -47,7 +47,6 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Flag
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.material.icons.filled.Loop
 import androidx.compose.material.icons.filled.Public
@@ -264,19 +263,6 @@ fun ProfileScreen(
                     )
                     Spacer(Modifier.height(10.dp))
                     stats.stamps.forEach { stamp -> CountryStampRow(stamp) }
-                }
-            }
-
-            // Only worth a section once something has actually fallen.
-            if (state.fallen.isNotEmpty()) {
-                SectionCard(title = stringResource(R.string.fallen_title)) {
-                    Text(
-                        stringResource(R.string.fallen_body),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    state.fallen.forEach { fallen -> FallenClaimRow(fallen) }
                 }
             }
 
@@ -728,6 +714,8 @@ private fun voidedReasonLabel(reason: VoidedWalk.Reason): Int = when (reason) {
     VoidedWalk.Reason.VEHICLE -> R.string.voided_reason_vehicle
     VoidedWalk.Reason.TOO_FAST -> R.string.voided_reason_too_fast
     VoidedWalk.Reason.UNVERIFIED_GAP -> R.string.voided_reason_gap
+    VoidedWalk.Reason.NOT_CLOSED -> R.string.voided_reason_not_closed
+    VoidedWalk.Reason.TOO_MUCH_BRIDGED -> R.string.voided_reason_bridged
 }
 
 /**
@@ -750,58 +738,6 @@ private fun shareVoidedWalk(context: Context, walk: VoidedWalk): String? = runCa
     )
     null
 }.getOrElse { context.getString(R.string.voided_share_failed) }
-
-/** One absorbed territory: what it was, how big, and what took it. */
-@Composable
-private fun FallenClaimRow(fallen: FallenClaim) {
-    val res = LocalResources.current
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = 7.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            Icons.Filled.History,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(18.dp),
-        )
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                fallen.name,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                // The claim that took it may have been deleted since; say what
-                // happened either way rather than showing a dangling name.
-                fallen.takenByName
-                    ?.let {
-                        stringResource(
-                            R.string.fallen_absorbed_by,
-                            it,
-                            res.formatRelativeDay(fallen.conqueredAtEpochMs),
-                        )
-                    }
-                    ?: stringResource(
-                        R.string.fallen_absorbed,
-                        res.formatRelativeDay(fallen.conqueredAtEpochMs),
-                    ),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Spacer(Modifier.width(12.dp))
-        Text(
-            res.formatArea(fallen.areaSqMeters),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
 
 /**
  * How densely the walker has filled in their strongest city, and the way into

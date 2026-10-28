@@ -1,21 +1,22 @@
-package io.app.enclose.export
+package io.app.enclose.tracking
 
 import io.app.enclose.geo.Geo
 import io.app.enclose.geo.LatLng
 
 /**
- * Where an imported track should end so that its loop closes.
+ * Where a recorded route's loop ends: its last return to the start.
  *
- * A live walk is stopped by the walker, standing at the start. A recorded track
- * is stopped whenever its recorder was — often after walking on past the start
- * to the car, or the front door. Replayed as-is, the walk then "ends" out there
- * and can't close, though the walker plainly came back round. So the replay
- * stops at the walker's last return to the start instead, and the overshoot is
- * left out of the claim (never out of the file).
+ * Serves both ways a route ends somewhere other than its start. A recorded
+ * track is stopped whenever its recorder was — often after walking on past the
+ * start to the car, or the front door — so a GPX import is replayed only up to
+ * here. And a live walk can be stopped anywhere: someone who forgot to press
+ * Stop and walked (or drove) on home still closed a loop, and [LoopVerdict]
+ * claims the loop that closed here rather than throwing the walk away. Either
+ * way what comes after is left out of the claim — never out of the record.
  *
  * Pure, so the choice of where to cut is tested on plain points.
  */
-object ImportClosure {
+object LoopClosure {
 
     /**
      * The index of the point to end the replay on, or null when the track never

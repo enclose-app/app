@@ -19,7 +19,6 @@ import io.app.enclose.offline.OfflineTileCache
 import io.app.enclose.offline.OfflineTileSync
 import io.app.enclose.sync.NoBackendSyncApi
 import io.app.enclose.sync.RemoteSyncApi
-import io.app.enclose.tracking.LocationService
 import io.app.enclose.tracking.TrackingManager
 import io.app.enclose.ui.toWalk
 import io.app.enclose.watch.WatchPublisher
@@ -42,7 +41,7 @@ class EncloseApp : Application() {
     /** Every successful closed-loop walk, persisted locally (offline-first). */
     val walkRepository by lazy { WalkRepository(database.walkDao()) }
 
-    /** Walks the anti-cheat ended, kept as records — never claims. */
+    /** Walks kept without a claim, as records — never claims. */
     val voidedWalkRepository by lazy { VoidedWalkRepository(database.voidedWalkDao()) }
 
     /** Local, offline-first user profile (random guest name until sign-in). */
@@ -132,11 +131,11 @@ class EncloseApp : Application() {
         MapLibre.getInstance(this)
 
         // These two react to the walk ending, and a walk can end with no screen
-        // open: Stop pressed on the watch, or a void while the phone is in a
-        // pocket. They used to live in EncloseViewModel, where a loop closed with
-        // the map screen gone was never saved and a voided walk left the GPS on.
-        // The process is alive whenever a walk is (LocationService is a
-        // foreground service), so the application is the scope that always hears.
+        // open: Stop pressed on the watch while the phone is in a pocket. They
+        // used to live in EncloseViewModel, where a loop closed with the map
+        // screen gone was never saved. The process is alive whenever a walk is
+        // (LocationService is a foreground service), so the application is the
+        // scope that always hears.
 
         // Persist EVERY successful closed loop the moment it closes — offline,
         // in local SQLite — whether or not the user goes on to claim it.
@@ -145,24 +144,22 @@ class EncloseApp : Application() {
                 if (pending != null) walkRepository.saveClosed(pending.toWalk(claimed = false))
             }
         }
-        // A walk voided for vehicle movement: shut the GPS service down (the
-        // manager can't, by design). Explaining why is the UI's job, and the
-        // view model still does it.
+        // ...and every walk stopped without a claim, with the evidence it was
+        // judged on. Nothing is claimed, and nothing walked is erased either.
         applicationScope.launch {
-            TrackingManager.voidEvents.collect { LocationService.stop(this@EncloseApp) }
-        }
-        // ...and keep what a voided walk had recorded. The void stands — nothing
-        // is claimed — but the ground covered is no longer erased with it.
-        applicationScope.launch {
-            TrackingManager.voidedRecordings.collect { r ->
+            TrackingManager.unclaimedWalks.collect { r ->
                 voidedWalkRepository.save(
                     VoidedWalk(
                         id = r.id,
                         path = r.path,
                         startedAtEpochMs = r.startedAtEpochMs,
-                        voidedAtEpochMs = r.voidedAtEpochMs,
+                        voidedAtEpochMs = r.endedAtEpochMs,
                         distanceMeters = r.distanceMeters,
                         reason = VoidedWalk.Reason.of(r.reason.name),
+                        onFootMeters = r.onFootMeters,
+                        bridgedMeters = r.bridgedMeters,
+                        phoneSteps = r.phoneSteps,
+                        watchSteps = r.watchSteps,
                     ),
                 )
             }

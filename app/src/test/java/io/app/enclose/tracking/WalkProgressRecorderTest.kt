@@ -1,5 +1,7 @@
 package io.app.enclose.tracking
 
+import io.app.enclose.data.ProgressPoint
+import io.app.enclose.data.ProgressSteps
 import io.app.enclose.data.WalkProgressStore
 import io.app.enclose.geo.LatLng
 import kotlinx.coroutines.runBlocking
@@ -58,6 +60,69 @@ class WalkProgressRecorderTest {
         // Only genuinely new ground gets written.
         recorder.onState(tracking(path(4)))
         assertEquals(1, store.appended.size)
+    }
+
+    @Test
+    fun `each point goes down with its time and what it was judged on`() = runBlocking {
+        val track = listOf(
+            TrackPoint(atEpochMs = 1_000L),
+            TrackPoint(atEpochMs = 4_000L, motion = MotionEvidence.VEHICLE),
+            TrackPoint(atEpochMs = 90_000L, afterGap = true),
+        )
+        recorder.onState(tracking(path(3), track = track))
+
+        // A restored walk is judged on exactly these, so none of it may be lost.
+        assertEquals(
+            listOf(
+                ProgressPoint(path(3)[0], atEpochMs = 1_000L),
+                ProgressPoint(path(3)[1], atEpochMs = 4_000L, motion = "VEHICLE"),
+                ProgressPoint(path(3)[2], atEpochMs = 90_000L, afterGap = true),
+            ),
+            store.points,
+        )
+    }
+
+    @Test
+    fun `a point with no clock behind it is stored without one`() = runBlocking {
+        // A state built without a track — a tap, a replayed GPX point.
+        recorder.onState(tracking(path(2)))
+
+        assertEquals(listOf(null, null), store.points.map { it.atEpochMs })
+        assertEquals(listOf(false, false), store.points.map { it.afterGap })
+    }
+
+    @Test
+    fun `step reports are appended once each`() = runBlocking {
+        val first = StepInterval(StepSource.PHONE, 0L, 10_000L, 14)
+        val second = StepInterval(StepSource.WATCH, 0L, 12_000L, 16)
+        recorder.onState(tracking(path(1), steps = listOf(first)))
+        recorder.onState(tracking(path(2), steps = listOf(first)))
+        recorder.onState(tracking(path(2), steps = listOf(first, second)))
+
+        assertEquals(
+            listOf(ProgressSteps("PHONE", 0L, 10_000L, 14), ProgressSteps("WATCH", 0L, 12_000L, 16)),
+            store.steps,
+        )
+        assertEquals("One write per new report", 2, store.stepAppendCalls)
+    }
+
+    @Test
+    fun `an adopted session does not rewrite the restored steps`() = runBlocking {
+        val restored = listOf(
+            StepInterval(StepSource.PHONE, 0L, 10_000L, 14),
+            StepInterval(StepSource.PHONE, 10_000L, 20_000L, 15),
+        )
+        recorder.adopt(pointCount = 2, stepCount = 2)
+        recorder.onState(tracking(path(2), steps = restored))
+
+        assertEquals(0, store.stepAppendCalls)
+
+        recorder.onState(tracking(path(2), steps = restored + StepInterval(StepSource.PHONE, 20_000L, 30_000L, 0)))
+        assertEquals(
+            "A report of no steps is evidence, and is kept",
+            listOf(ProgressSteps("PHONE", 20_000L, 30_000L, 0)),
+            store.steps,
+        )
     }
 
     @Test
@@ -124,9 +189,13 @@ class WalkProgressRecorderTest {
         path: List<LatLng>,
         climb: Double = 0.0,
         movingMs: Long = 0L,
+        track: List<TrackPoint> = emptyList(),
+        steps: List<StepInterval> = emptyList(),
     ) = TrackingManager.WalkState(
         isTracking = true,
         path = path,
+        track = track,
+        steps = steps,
         start = path.firstOrNull(),
         current = path.lastOrNull(),
         startedAtMs = if (path.isEmpty()) null else 1_000L,
@@ -137,9 +206,12 @@ class WalkProgressRecorderTest {
     private fun idle() = TrackingManager.WalkState(isTracking = false)
 
     private class FakeStore : WalkProgressStore {
-        val appended = mutableListOf<LatLng>()
+        val points = mutableListOf<ProgressPoint>()
+        val appended get() = points.map { it.position }
         val appendSizes = mutableListOf<Int>()
         var appendCalls = 0
+        val steps = mutableListOf<ProgressSteps>()
+        var stepAppendCalls = 0
         var begins = 0
         var clears = 0
         var elevationWrites = 0
@@ -156,10 +228,15 @@ class WalkProgressRecorderTest {
             lastMovingMs = movingMs
         }
 
-        override suspend fun append(points: List<LatLng>) {
+        override suspend fun append(points: List<ProgressPoint>) {
             appendCalls++
             appendSizes += points.size
-            appended += points
+            this.points += points
+        }
+
+        override suspend fun appendSteps(steps: List<ProgressSteps>) {
+            stepAppendCalls++
+            this.steps += steps
         }
 
         override suspend fun clear() {

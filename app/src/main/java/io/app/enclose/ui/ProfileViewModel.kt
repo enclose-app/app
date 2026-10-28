@@ -7,14 +7,17 @@ import io.app.enclose.EncloseApp
 import io.app.enclose.data.CityCoverage
 import io.app.enclose.data.CountryStamp
 import io.app.enclose.data.Coverage
+import io.app.enclose.data.Footprint
 import io.app.enclose.data.Passport
 import io.app.enclose.data.Profile
 import io.app.enclose.data.Territory
 import io.app.enclose.data.VoidedWalk
 import io.app.enclose.data.Walk
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -43,17 +46,19 @@ class ProfileViewModel(app: Application) : AndroidViewModel(app) {
             profileRepository.profile,
             repository.territories,
             walkRepository.walks,
-            repository.conquered,
             voidedWalkRepository.voidedWalks,
-        ) { profile, territories, walks, conquered, voided ->
+        ) { profile, territories, walks, voided ->
             ProfileUiState(
                 profile = profile,
                 stats = computeStats(territories, walks),
-                fallen = fallenClaims(conquered, territories),
                 voided = voided,
                 loading = false,
             )
-        }.stateIn(
+        }
+            // The totals measure shared ground with JTS (Footprint), which is far
+            // too slow for the main thread once there are a few dozen claims.
+            .flowOn(Dispatchers.Default)
+            .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = ProfileUiState(),
@@ -73,29 +78,10 @@ class ProfileViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { profileRepository.regenerate() }
     }
 
-    /**
-     * Conquered claims, resolved into something displayable. The claim that took
-     * each one may itself have fallen since, so names are looked up across both
-     * lists — a chain of absorptions still reads correctly.
-     */
-    private fun fallenClaims(
-        conquered: List<Territory>,
-        active: List<Territory>,
-    ): List<FallenClaim> {
-        val namesById = (active + conquered).associate { it.id to it.name }
-        return conquered.map { territory ->
-            FallenClaim(
-                id = territory.id,
-                name = territory.name,
-                areaSqMeters = territory.areaSqMeters,
-                conqueredAtEpochMs = territory.conqueredAtEpochMs ?: 0L,
-                takenByName = territory.conqueredById?.let { namesById[it] },
-            )
-        }
-    }
-
     private fun computeStats(territories: List<Territory>, walks: List<Walk>): ProfileStats {
-        val totalArea = territories.sumOf { it.areaSqMeters }
+        // Claims are layers and can overlap, so ground walked over twice is
+        // counted once rather than added up.
+        val totalArea = Footprint.areaSqMeters(territories)
         val totalDistance = walks.sumOf { it.perimeterMeters }
         val totalClimb = walks.sumOf { it.elevationGainMeters }
         val biggest = territories.maxByOrNull { it.areaSqMeters }
@@ -123,27 +109,15 @@ class ProfileViewModel(app: Application) : AndroidViewModel(app) {
 data class ProfileUiState(
     val profile: Profile? = null,
     val stats: ProfileStats = ProfileStats(),
-    /** Claims a later walk swallowed whole, most recently fallen first. */
-    val fallen: List<FallenClaim> = emptyList(),
     /** Walks the anti-cheat ended, most recent first. */
     val voided: List<VoidedWalk> = emptyList(),
     val loading: Boolean = true,
 )
 
-/** A territory that was absorbed by a later claim, ready to display. */
-data class FallenClaim(
-    val id: String,
-    val name: String,
-    /** The area it held at the moment it fell. */
-    val areaSqMeters: Double,
-    val conqueredAtEpochMs: Long,
-    /** Name of the claim that took it, if that claim is still on record. */
-    val takenByName: String?,
-)
-
 data class ProfileStats(
     val territoryCount: Int = 0,
     val walkCount: Int = 0,
+    /** Ground covered by every claim, shared ground counted once — see [Footprint]. */
     val totalAreaSqMeters: Double = 0.0,
     val totalDistanceMeters: Double = 0.0,
     /**

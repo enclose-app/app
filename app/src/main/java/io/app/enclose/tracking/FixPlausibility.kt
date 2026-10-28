@@ -15,17 +15,17 @@ import io.app.enclose.geo.LatLng
  *
  * A jump is not *rejected* on this answer — a frozen fix snapping to the true
  * position is a jump too, and that one is real. [TrackingManager] holds a jump
- * back until the next fix says which it was. This only answers the question; it
- * never sees the motion gate, which still judges every fix as before.
+ * back until the next fix says which it was. This only answers the question; how
+ * the ground was covered is [StretchJudge]'s, over every fix the path keeps.
  */
 object FixPlausibility {
 
     /**
-     * The speed no fix may imply. [MotionGate.ABSOLUTE_MAX_SPEED_MPS]: past it the
-     * movement is not human-powered, so a fix needing it to be reached is either
-     * a fault or a vehicle — and a vehicle is the gate's call, not this.
+     * The speed no fix may imply. [StretchJudge.ABSOLUTE_MAX_SPEED_MPS]: past it
+     * the movement is not human-powered, so a fix needing it to be reached is
+     * either a fault or a vehicle — and a vehicle is the judge's call, not this.
      */
-    const val MAX_SPEED_MPS = MotionGate.ABSOLUTE_MAX_SPEED_MPS
+    const val MAX_SPEED_MPS = StretchJudge.ABSOLUTE_MAX_SPEED_MPS
 
     /**
      * Never call anything shorter than this a jump, whatever the timing. A burst of

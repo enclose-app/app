@@ -85,7 +85,7 @@ also means you cannot leave a schema change half-done.
   (`updateCity` is the pattern), and consider whether it should touch
   `syncStatus`: locally derived data shouldn't queue an upload, user edits should.
 - **Multi-row writes that only make sense together belong in one
-  `@Transaction`** (`TerritoryDao.applyClaim` is the example). `TerritoryDao` and
+  `@Transaction`** (`WalkProgressDao.begin` is the example). `TerritoryDao` and
   `WalkProgressDao` are abstract classes rather than interfaces precisely so they
   can host these.
 - Versions **1–4 have no exported schema** (`exportSchema` was off then) and no

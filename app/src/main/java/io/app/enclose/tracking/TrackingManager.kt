@@ -2,7 +2,6 @@ package io.app.enclose.tracking
 
 import io.app.enclose.geo.Geo
 import io.app.enclose.geo.LatLng
-import io.app.enclose.geo.PathSpikes
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -34,28 +33,74 @@ enum class RecordingFailure {
 }
 
 /**
- * Owns the walk in progress and runs loop-closure detection. The
- * [LocationService] feeds it GPS fixes; the UI observes [walk]. When a loop
- * closes it publishes a [PendingClaim] on [pendingClaim] — the UI shows a modal
- * to name/color it, then confirms or discards. Persistence (SQLite) is handled
- * by whoever confirms, keeping this object free of Android/DB dependencies.
+ * Owns the walk in progress. The [LocationService] feeds it GPS fixes and step
+ * counts; the UI observes [walk].
+ *
+ * **Only the user ends a walk.** Every kept fix is recorded with its time, and
+ * movement that doesn't look human-powered is labelled, live, by [StretchJudge]
+ * — it is never a reason to stop recording or to end anything. The walk is
+ * judged once, when Stop is pressed ([finishWalk]), by [LoopVerdict]: a loop
+ * whose boundary is mostly walked becomes a [PendingClaim] for the UI to name
+ * and confirm, and anything else is handed over on [unclaimedWalks] as a record.
+ *
+ * Persistence (SQLite) is handled by whoever listens, keeping this object free
+ * of Android/DB dependencies.
  */
 object TrackingManager {
 
     /** Snapshot of the walk in progress (or the idle state between walks). */
     data class WalkState(
         val isTracking: Boolean = false,
+        /** Every point recorded, drive and all, in walked order. */
         val path: List<LatLng> = emptyList(),
+        /**
+         * What is known about each point of [path] besides where it is — see
+         * [TrackPoint]. Index for index with [path]; a state built by hand may
+         * leave it short, and a missing entry reads as a point with no clock.
+         */
+        val track: List<TrackPoint> = emptyList(),
+        /** Step counts reported so far, from every source, in arrival order. */
+        val steps: List<StepInterval> = emptyList(),
+        /** Where the loop has to come back to: [path] at [startIndex]. */
         val start: LatLng? = null,
+        /**
+         * Index in [path] where the walk being claimed begins. Above zero once a
+         * walk that began in a vehicle is seen to carry on on foot — the drive to
+         * the park is no part of the loop — see [StretchJudge.walkStart].
+         */
+        val startIndex: Int = 0,
         val current: LatLng? = null,
+        /** Everything recorded, drive included. */
         val distanceMeters: Double = 0.0,
+        /**
+         * Ground covered under the walker's own power since [start]: what was
+         * recorded, less every stretch judged doubtful. What the panel shows,
+         * and what the minimum loop is measured in.
+         */
+        val onFootMeters: Double = 0.0,
+        /** The straight lines the claim would draw over doubtful stretches so far. */
+        val bridgedMeters: Double = 0.0,
+        /** Runs of [path] judged doubtful, merged; drawn dotted on the map. */
+        val doubtfulRuns: List<IntRange> = emptyList(),
+        /**
+         * Why the latest judged stretch is doubtful, or null when it isn't. The
+         * walk carries on either way; this only drives the notice that says so.
+         */
+        val doubtReason: DoubtReason? = null,
+        /**
+         * When the loop Stop would claim closed, while a stretch is in doubt away
+         * from the start: "looks like a vehicle — your loop closed at 14:32", so
+         * nobody rides on believing the walk is lost. Null at any other time, and
+         * for a loop closed with no clock behind it.
+         */
+        val earlierLoopClosedAtMs: Long? = null,
         val distanceToStartMeters: Double? = null,
         /** True once the walk has moved beyond the start zone. */
         val hasLeftStart: Boolean = false,
-        /** True once the walk is long enough AND has left the start zone. */
+        /** True once the walk is long enough on foot AND has left the start zone. */
         val canCloseLoop: Boolean = false,
         /**
-         * True when stopping right now would claim a valid loop: long enough,
+         * True when stopping right now would close the loop here: long enough,
          * left the start zone, and currently within the closing radius of start.
          */
         val readyToClose: Boolean = false,
@@ -63,13 +108,6 @@ object TrackingManager {
         val startedAtMs: Long? = null,
         /** Accuracy (meters) of the most recent fix; null when unknown. */
         val accuracyMeters: Float? = null,
-        /**
-         * Set while movement is being rejected as not human-powered. Fixes are
-         * not recorded and the loop cannot be closed while this is non-null.
-         */
-        val blockedReason: BlockReason? = null,
-        /** Monotonic ms at which blocking began, for the warning's countdown. */
-        val blockedSinceElapsedMs: Long? = null,
         /** What the user set out to do; sets the speed ceiling and the wording. */
         val activityType: ActivityType = ActivityType.WALK,
         /** Confirmed climb so far, in metres. Noise-gated — see [ElevationAccumulator]. */
@@ -85,13 +123,6 @@ object TrackingManager {
          */
         val hadSignalGap: Boolean = false,
         /**
-         * Warnings this walk has used, out of [MotionGate.MAX_STRIKES]. A strike
-         * is spent when movement stays blocked past the grace window, or when
-         * recording resumes further from where it stopped than the recorded path
-         * can account for. The walk survives every strike but the last.
-         */
-        val strikes: Int = 0,
-        /**
          * Set when the walk is on screen but nothing is reaching it: the location
          * recorder could not be started, or stopped being able to run. Cleared by
          * the next fix that arrives, because a fix is the only proof it works.
@@ -102,37 +133,85 @@ object TrackingManager {
          * to protect.
          */
         val recordingFailure: RecordingFailure? = null,
+        /** Steps the phone has counted this walk; null until it reports any. */
+        val phoneSteps: Int? = null,
+        /** Steps the watch has counted this walk; null until it reports any. */
+        val watchSteps: Int? = null,
     ) {
-        /** True while a vehicle (or implausible speed) is suspending recording. */
-        val motionBlocked: Boolean get() = blockedReason != null
+        /** True while the latest stretch reads as a vehicle or as too fast. Still recording. */
+        val doubtful: Boolean get() = doubtReason != null
 
-        /** Warnings left before the next one ends the walk. */
-        val strikesRemaining: Int get() = (MotionGate.MAX_STRIKES - strikes).coerceAtLeast(0)
+        /**
+         * [bridgedMeters] as a share of the loop so far — the figure the claim's
+         * [LoopVerdict.MAX_BRIDGED_SHARE] will be measured against.
+         */
+        val bridgedShare: Double
+            get() = (onFootMeters + bridgedMeters).let { if (it > 0.0) bridgedMeters / it else 0.0 }
     }
 
     /** A closed loop awaiting the user's decision to claim (with name/color). */
     data class PendingClaim(
         /** Stable id assigned at close; reused as the walk/territory id. */
         val id: String,
+        /** The boundary as claimed: walked ground, with each doubtful run bridged. */
         val ring: List<LatLng>,
         val areaSqMeters: Double,
         val perimeterMeters: Double,
         /** How far the closing point landed from the start (the closing gap). */
         val distanceToStartMeters: Double,
         val closedAtEpochMs: Long,
-        /** When the first fix landed, so the walk's duration and pace survive. */
+        /** When the loop's walking began, so the walk's duration and pace survive. */
         val startedAtEpochMs: Long?,
         val elevationGainMeters: Double,
         /** Time spent moving, excluding stops, so pace reflects the walking. */
         val movingMs: Long,
         /**
-         * True when the recording lost the signal at some point, so part of the
-         * ring is a straight line across ground that was never observed. The
-         * claim is still offered — the walking was real — but the user is told,
-         * rather than the walk being thrown away or the gap hidden.
+         * True when part of the ring is a straight line across a signal gap that
+         * no steps vouched for. The claim is still offered — the walking was
+         * real — but the user is told, rather than the gap hidden.
          */
         val hadSignalGap: Boolean,
         val suggestedName: String,
+        /** The loop's boundary walked under the walker's own power. */
+        val onFootMeters: Double = perimeterMeters,
+        /** The straight lines standing in for doubtful stretches, oldest first. */
+        val bridges: List<LoopVerdict.Bridge> = emptyList(),
+        /** Bridged metres as a share of [perimeterMeters]. */
+        val bridgedShare: Double = 0.0,
+        /** Steps counted over the loop, per source; null where none were. */
+        val phoneSteps: Int? = null,
+        val watchSteps: Int? = null,
+        /** A signal gap the steps covered, so it counts as walked. */
+        val stepsCoveredGap: Boolean = false,
+        /**
+         * Everything recorded, when it differs from [ring] — a leading drive, a
+         * bridge, or ground covered after the loop closed. Kept on the walk row:
+         * what isn't claimed is still the walker's.
+         */
+        val recordedTrack: List<LatLng>? = null,
+    ) {
+        val bridgedMeters: Double get() = bridges.sumOf { it.meters }
+    }
+
+    /**
+     * A walk stopped without a claim, handed over before the walk is reset: Save
+     * in the Stop dialog, or a loop with too much of it bridged. Whoever owns
+     * persistence keeps it (EncloseApp); this object still has no DB of its own.
+     */
+    data class UnclaimedRecording(
+        val id: String,
+        val path: List<LatLng>,
+        val startedAtEpochMs: Long?,
+        val endedAtEpochMs: Long,
+        val distanceMeters: Double,
+        val reason: UnclaimedReason,
+        val activityType: ActivityType,
+        val onFootMeters: Double,
+        val bridgedMeters: Double,
+        /** Of the loop that closed, for [UnclaimedReason.TOO_MUCH_BRIDGED]; zero otherwise. */
+        val bridgedShare: Double,
+        val phoneSteps: Int?,
+        val watchSteps: Int?,
     )
 
     private val _walk = MutableStateFlow(WalkState())
@@ -142,37 +221,16 @@ object TrackingManager {
     val pendingClaim: StateFlow<PendingClaim?> = _pendingClaim.asStateFlow()
 
     /**
-     * Emitted when a walk is thrown away because the movement wasn't
-     * human-powered. The UI explains it; whoever owns the location service also
-     * listens so it can be shut down.
+     * Every walk stopped without a claim, with everything it recorded. The UI
+     * explains it; EncloseApp keeps it under "Walks that didn't count".
      */
-    private val _voidEvents = MutableSharedFlow<VoidReason>(extraBufferCapacity = 4)
-    val voidEvents: SharedFlow<VoidReason> = _voidEvents.asSharedFlow()
-
-    /** What a voided walk had recorded, handed over before the walk is reset. */
-    data class VoidedRecording(
-        val id: String,
-        val path: List<LatLng>,
-        val startedAtEpochMs: Long?,
-        val voidedAtEpochMs: Long,
-        val distanceMeters: Double,
-        val reason: VoidReason,
-    )
-
-    /**
-     * Every void that had recorded any ground, with that ground. The void stands
-     * — nothing is claimed — but the path is kept: most voids are honest walks the
-     * classifier got wrong, and the walking happened either way. Whoever owns
-     * persistence saves it (EncloseApp); this object still has no DB of its own.
-     */
-    private val _voidedRecordings = MutableSharedFlow<VoidedRecording>(extraBufferCapacity = 4)
-    val voidedRecordings: SharedFlow<VoidedRecording> = _voidedRecordings.asSharedFlow()
+    private val _unclaimedWalks = MutableSharedFlow<UnclaimedRecording>(extraBufferCapacity = 4)
+    val unclaimedWalks: SharedFlow<UnclaimedRecording> = _unclaimedWalks.asSharedFlow()
 
     /**
      * Emitted when the recorder could not be started, or stopped being able to
-     * run. Separate from [voidEvents]: nothing was walked and nothing was thrown
-     * away — the app simply cannot do the thing it just said it was doing, and
-     * has to say so.
+     * run. Nothing was walked and nothing was thrown away — the app simply
+     * cannot do the thing it just said it was doing, and has to say so.
      */
     private val _recordingFailures = MutableSharedFlow<RecordingFailure>(extraBufferCapacity = 4)
     val recordingFailures: SharedFlow<RecordingFailure> = _recordingFailures.asSharedFlow()
@@ -180,10 +238,7 @@ object TrackingManager {
     /** When true, use relaxed thresholds so a tap-tested loop can still close. */
     private var relaxed = false
 
-    /** Rejects vehicle movement; state is per-walk, so it's reset on start. */
-    private val motionGate = MotionGate()
-
-    /** Running climb; like the gate, its state belongs to a single walk. */
+    /** Running climb; its state belongs to a single walk. */
     private val elevation = ElevationAccumulator()
 
     /** Moving time, so pace isn't diluted by waiting at crossings. */
@@ -191,14 +246,19 @@ object TrackingManager {
 
     /**
      * The previous fix, accepted or not. Segment speed is measured against this
-     * rather than the last recorded point, so one rejected fix can't make the
+     * rather than the last recorded point, so one dropped fix can't make the
      * following (legitimate) one look like a teleport.
      */
     private var lastFix: LatLng? = null
     private var lastFixAtElapsedMs: Long? = null
 
     /** Fixes too far from the path to append yet, oldest first; see [FixPlausibility]. */
-    private data class HeldFix(val point: LatLng, val atElapsedMs: Long, val accuracyMeters: Float?)
+    private data class HeldFix(
+        val point: LatLng,
+        val atElapsedMs: Long,
+        val accuracyMeters: Float?,
+        val info: TrackPoint,
+    )
     private val heldFixes = mutableListOf<HeldFix>()
 
     /**
@@ -209,34 +269,44 @@ object TrackingManager {
     private var trustedAtElapsedMs: Long? = null
     private var trustedAccuracyMeters: Float? = null
 
+    /**
+     * The signal went silent (or the process died) since the last point was
+     * recorded, so the next one appended is reached across unobserved ground.
+     */
+    private var gapPending = false
+
+    /** Wall clock minus the monotonic one, for fixes that arrive with no epoch time. */
+    private var epochBaseMs: Long? = null
+
+    /** Where the stretch still being walked begins: the end of the last one judged. */
+    private var judgedUntil = 0
+
     /** Called from the UI when the user taps "Start walk" (or the first test tap). */
     fun startWalk(
         relaxedThresholds: Boolean = false,
         activityType: ActivityType = ActivityType.WALK,
     ) {
         relaxed = relaxedThresholds
-        motionGate.reset(activityType)
         elevation.reset()
         pause.reset()
-        lastFix = null
-        lastFixAtElapsedMs = null
-        clearHeld()
+        resetPerWalk()
         _walk.value = WalkState(isTracking = true, activityType = activityType)
     }
 
     /**
      * Resume a walk that outlived the process that was recording it.
      *
-     * Only the path, its start time, and the declared activity are handed back;
-     * distance, whether the start zone was left and whether the loop may close
-     * are all recomputed from the path, so restored state can't disagree with
-     * the points it came from.
+     * The path, what is known about each point, the step counts, the start time
+     * and the declared activity are handed back; distance, whether the start zone
+     * was left, whether the loop may close and how each stretch counts are all
+     * recomputed from them, so restored state can't disagree with the points it
+     * came from — and a restored walk gets the verdict the same walk would have
+     * got uninterrupted.
      *
      * [WalkState.readyToClose] deliberately starts false: closing means being
      * within the closing radius *now*, and the last recorded point is only
      * evidence of where the walker was before the process died. The next fix
-     * settles it. The motion gate starts clean for the same reason — its speed
-     * window describes movement nobody is still observing.
+     * settles it, and the line to it is a gap: nobody watched the ground between.
      *
      * Returns false (changing nothing) when there's no usable path to resume.
      */
@@ -248,36 +318,39 @@ object TrackingManager {
         elevationGainMeters: Double = 0.0,
         /** Moving time accumulated before the process died. */
         movingMs: Long = 0L,
+        /** What was known about each point; shorter (or empty) for points stored without it. */
+        track: List<TrackPoint> = emptyList(),
+        steps: List<StepInterval> = emptyList(),
     ): Boolean {
         if (path.isEmpty()) return false
 
         relaxed = false
-        motionGate.reset(activityType)
         // Resume the running totals, but not the references they were measured
         // against: the first fix after a restore would otherwise read as a jump
         // from wherever the walker was when the process died, and the interval
         // since then is time nobody observed.
         elevation.reset(elevationGainMeters)
         pause.reset(movingMs)
-        lastFix = null
-        lastFixAtElapsedMs = null
-        clearHeld()
+        resetPerWalk()
 
         val start = path.first()
         val last = path.last()
         val distance = Geo.pathLengthMeters(path)
         val leftStart = path.any { Geo.distanceMeters(start, it) > leaveStartRadiusMeters }
+        val log = StepLog(steps)
 
-        _walk.value = WalkState(
+        var state = WalkState(
             isTracking = true,
             path = path,
+            track = List(path.size) { i -> track.getOrNull(i) ?: TrackPoint(atEpochMs = null) },
+            steps = steps,
             start = start,
             current = last,
             distanceMeters = distance,
+            onFootMeters = distance,
             distanceToStartMeters = Geo.distanceMeters(start, last),
             hasLeftStart = leftStart,
             canCloseLoop = leftStart && distance >= minPerimeterMeters,
-            readyToClose = false,
             startedAtMs = startedAtMs,
             activityType = activityType,
             elevationGainMeters = elevationGainMeters,
@@ -287,11 +360,16 @@ object TrackingManager {
             // brief costs a line of explanation; staying quiet when it was long
             // hides a straight line across ground nobody recorded.
             hadSignalGap = true,
+            phoneSteps = log.total(StepSource.PHONE),
+            watchSteps = log.total(StepSource.WATCH),
         )
+        if (path.size >= 2) state = judged(state)
+        gapPending = true
+        _walk.value = state.copy(readyToClose = false)
         return true
     }
 
-    /** Called from the UI to abandon the current walk without claiming. */
+    /** Abandon the current walk without keeping anything — only behind the confirmed Discard. */
     fun cancelWalk() {
         _walk.value = WalkState(isTracking = false)
     }
@@ -328,22 +406,28 @@ object TrackingManager {
     }
 
     /**
-     * Feed a new GPS fix. This only updates live walk state — the loop is never
-     * closed automatically; closing happens when the user presses Stop (see
+     * Feed a new GPS fix. This only records and labels — the walk is never
+     * stopped or closed from here; that happens when the user presses Stop (see
      * [finishWalk]). [WalkState.readyToClose] reflects whether stopping now would
-     * claim a valid loop.
+     * close the loop where the walker stands.
      */
     fun onLocation(
         point: LatLng,
         accuracyMeters: Float? = null,
         /** The fix's own speed, when the provider reports one. */
         speedMps: Float? = null,
-        /** Monotonic time of the fix. Null skips motion checks (test taps). */
+        /** Monotonic time of the fix. Null skips the timing checks (test taps). */
         atElapsedMs: Long? = null,
         /** Latest activity classification, when available. */
         motion: MotionSample? = null,
         /** Altitude in metres, when the provider reports one. */
         altitudeMeters: Double? = null,
+        /**
+         * Wall-clock time of the fix, epoch ms — what the point is stored and
+         * judged by, and what step counts are matched against. Derived from
+         * [atElapsedMs] when absent.
+         */
+        atEpochMs: Long? = null,
     ) {
         var state = _walk.value
         if (!state.isTracking) return
@@ -353,32 +437,35 @@ object TrackingManager {
         if (state.recordingFailure != null) state = state.copy(recordingFailure = null)
 
         // A fix this vague describes nothing, so it must shape nothing: not the
-        // path, and not the motion verdict either. Reacquiring after signal loss
-        // routinely lands hundreds of metres out, and letting that reach the
-        // speed window was on its own enough to void an honest walk. Keep the
-        // marker roughly fresh and wait for a fix worth believing.
+        // path, and not the judging of it either. Reacquiring after signal loss
+        // routinely lands hundreds of metres out. Keep the marker roughly fresh
+        // and wait for a fix worth believing.
         if (accuracyMeters != null && accuracyMeters > MAX_ACCURACY_METERS) {
             val toStart = state.start?.let { Geo.distanceMeters(it, point) }
             _walk.value = state.copy(
                 current = point,
                 distanceToStartMeters = toStart ?: state.distanceToStartMeters,
                 accuracyMeters = accuracyMeters,
-                readyToClose = !state.motionBlocked &&
-                    state.canCloseLoop &&
+                readyToClose = state.canCloseLoop &&
                     toStart != null &&
                     toStart <= closureRadiusMeters,
             )
             return
         }
 
+        val info = TrackPoint(
+            atEpochMs = epochOf(atElapsedMs, atEpochMs),
+            motion = MotionEvidence.of(motion, atElapsedMs),
+        )
+
         // Set when this fix arrived impossibly fast from the previous one.
         var snapped = false
 
-        // Only human-powered movement counts. Test mode is exempt: tapped points
-        // jump across the map by design and would always look like a vehicle.
+        // Test mode is exempt from timing: tapped points jump across the map by
+        // design and carry no clock.
         if (atElapsedMs != null && !relaxed) {
-            // Losing the signal is not evidence of speed, and it shows up in
-            // two different shapes — both of which used to end the walk.
+            // Losing the signal shows up in two different shapes, and both are
+            // gaps — ground nobody observed — rather than speed.
             //
             //  - Silence: a dozing device stops delivering entirely, then hands
             //    the missed stretch over in a burst on wake.
@@ -391,28 +478,21 @@ object TrackingManager {
             // The snap is recognised by being physically impossible rather than
             // merely fast: no road vehicle sustains REACQUISITION_SPEED_MPS, so
             // a segment that quick is the map catching up, not the user moving.
-            // Ordinary driving stays well below it and is still judged as
-            // driving by the gate.
+            // Either way the line to the next point is judged whole, as one
+            // stretch, on how long it took and on the steps taken in it.
             val silenceMs = lastFixAtElapsedMs?.let { atElapsedMs - it }
+            val silent = silenceMs != null && silenceMs > SIGNAL_GAP_MS
             val segmentSpeed = segmentSpeedMps(point, atElapsedMs)
-            val reacquired = (silenceMs != null && silenceMs > SIGNAL_GAP_MS) ||
-                (segmentSpeed != null && segmentSpeed > REACQUISITION_SPEED_MPS)
-            if (reacquired) {
-                // Start the speed window over rather than judging the walk on
-                // the jump; the gate's grace countdown restarts with it. Also
-                // drops the baseline, so the jump itself never becomes a speed
-                // sample. `blockedReason` is deliberately left alone: if
-                // movement was already being rejected when the signal went, the
-                // resume check below still has to answer for the ground between.
-                // The strikes stay banked too — silence is not an amnesty.
-                motionGate.clearSpeedWindow()
+            if (silent || (segmentSpeed != null && segmentSpeed > REACQUISITION_SPEED_MPS)) {
+                // Drops the baseline, so the jump itself never becomes a speed.
                 lastFix = null
                 lastFixAtElapsedMs = null
                 // Silence is a gap whatever comes next. A snap is only one if the
                 // fix it snapped to is kept — a spike that is dropped below
                 // leaves no hole in the recording.
-                if (silenceMs != null && silenceMs > SIGNAL_GAP_MS) {
+                if (silent) {
                     state = state.copy(hadSignalGap = true)
+                    gapPending = true
                 } else {
                     snapped = true
                 }
@@ -421,77 +501,8 @@ object TrackingManager {
             val speed = fusedSpeedMps(point, speedMps, atElapsedMs)
             lastFix = point
             lastFixAtElapsedMs = atElapsedMs
-
-            when (val verdict = motionGate.evaluate(atElapsedMs, speed, motion)) {
-                is MotionGate.Verdict.Void -> {
-                    voidWalk(VoidReason.from(verdict.reason))
-                    return
-                }
-
-                is MotionGate.Verdict.Blocked -> {
-                    // Keep the live marker following the user so the map doesn't
-                    // look frozen, but record nothing and make closing impossible.
-                    _walk.value = state.copy(
-                        current = point,
-                        accuracyMeters = accuracyMeters,
-                        blockedReason = verdict.reason,
-                        blockedSinceElapsedMs = verdict.sinceElapsedMs,
-                        readyToClose = false,
-                    )
-                    return
-                }
-
-                is MotionGate.Verdict.Strike -> {
-                    // A warning, not an ending. The movement is still being
-                    // rejected — `blockedReason` deliberately stays set — so the
-                    // resume check below still has to account for the ground
-                    // covered in the meantime. What changes is only that the
-                    // countdown starts again, against one fewer strike.
-                    _walk.value = state.copy(
-                        current = point,
-                        accuracyMeters = accuracyMeters,
-                        blockedReason = verdict.reason,
-                        blockedSinceElapsedMs = atElapsedMs,
-                        strikes = verdict.count,
-                        readyToClose = false,
-                    )
-                    return
-                }
-
-                MotionGate.Verdict.Allowed -> {
-                    if (state.motionBlocked) {
-                        // Recording resumes. Nothing was recorded while blocked, so
-                        // connecting to the resume point would bridge ground the
-                        // user never covered.
-                        val gap = state.path.lastOrNull()
-                            ?.let { Geo.distanceMeters(it, point) } ?: 0.0
-                        when {
-                            // Too far to be anything but a ride. No number of
-                            // warnings makes a straight line across half a city
-                            // into ground someone walked.
-                            gap > MAX_UNVERIFIED_GAP_METERS -> {
-                                voidWalk(VoidReason.UNVERIFIED_GAP)
-                                return
-                            }
-                            // Far enough that the route now contains ground the
-                            // recording never saw: a warning, and the outline is
-                            // marked as estimated, rather than an hour thrown out.
-                            gap > MAX_RESUME_GAP_METERS -> {
-                                val count = motionGate.bankStrike()
-                                if (count >= MotionGate.MAX_STRIKES) {
-                                    voidWalk(VoidReason.UNVERIFIED_GAP)
-                                    return
-                                }
-                                state = state.copy(strikes = count, hadSignalGap = true)
-                            }
-                        }
-                        state = state.copy(blockedReason = null, blockedSinceElapsedMs = null)
-                    }
-                    // Credited only once the movement is accepted: time spent
-                    // being rejected as a vehicle is not walking time.
-                    state = state.copy(movingMs = pause.update(atElapsedMs, speed, motion))
-                }
-            }
+            // Time on a stretch judged doubtful is not walking time.
+            state = state.copy(movingMs = pause.update(atElapsedMs, speed, motion, credit = !state.doubtful))
         }
 
         // Climb is credited on any usable fix, including ones too close to the
@@ -504,13 +515,16 @@ object TrackingManager {
         if (state.path.isEmpty()) {
             _walk.value = state.copy(
                 path = listOf(point),
+                track = listOf(info),
                 start = point,
+                startIndex = 0,
                 current = point,
                 distanceToStartMeters = 0.0,
-                startedAtMs = System.currentTimeMillis(),
+                startedAtMs = info.atEpochMs ?: System.currentTimeMillis(),
                 accuracyMeters = accuracyMeters,
                 elevationGainMeters = climb,
             )
+            gapPending = false
             trustFix(atElapsedMs, accuracyMeters)
             return
         }
@@ -519,7 +533,7 @@ object TrackingManager {
         // fixes after it say what it was — see [FixPlausibility]. Only timed
         // fixes are judged: taps and imports have no clock to judge them by.
         if (atElapsedMs != null && !relaxed) {
-            val fix = HeldFix(point, atElapsedMs, accuracyMeters)
+            val fix = HeldFix(point, atElapsedMs, accuracyMeters, info)
             val anchorAt = trustedAtElapsedMs
             val nearPath = anchorAt == null || !FixPlausibility.isJump(
                 state.path.last(), anchorAt, trustedAccuracyMeters, point, atElapsedMs, accuracyMeters,
@@ -553,13 +567,15 @@ object TrackingManager {
                         return
                     }
                     // The position really did move. The held fixes go on the
-                    // path first, and the straight line to them crosses ground
-                    // nobody observed.
+                    // path first, and the straight line to the first of them
+                    // crosses ground nobody observed.
                     heldFixes.clear()
                     state = state.copy(hadSignalGap = true)
-                    for (h in held.dropLast(1)) {
-                        state = extend(state, h.point, h.accuracyMeters, state.elevationGainMeters)
+                    held.dropLast(1).forEachIndexed { k, h ->
+                        val jump = if (k == 0) h.info.copy(afterGap = true) else h.info
+                        state = extend(state, h.point, h.accuracyMeters, state.elevationGainMeters, jump)
                     }
+                    snapped = false
                 }
 
                 // A jump from everything so far: start holding afresh.
@@ -573,21 +589,84 @@ object TrackingManager {
         }
 
         if (snapped) state = state.copy(hadSignalGap = true)
-        _walk.value = extend(state, point, accuracyMeters, climb)
+        _walk.value = extend(state, point, accuracyMeters, climb, info.copy(afterGap = snapped))
         trustFix(atElapsedMs, accuracyMeters)
+    }
+
+    /**
+     * Take a count of steps from the phone or the watch. Steps are evidence for
+     * the stretches they span, so the walk is judged again with them — a count
+     * arriving late (the watch batches) can still vouch for ground already
+     * recorded. A report overlapping one the same source already made is
+     * dropped rather than counting the same steps twice.
+     */
+    fun onSteps(interval: StepInterval) = onSteps(listOf(interval))
+
+    /**
+     * Several reports at once — the watch sends every interval it has each
+     * time, most of them already here — judged once rather than per report.
+     */
+    fun onSteps(intervals: List<StepInterval>) {
+        val state = _walk.value
+        if (!state.isTracking) return
+        // The watch resends what it sent before; a repeat is found without a scan.
+        val seen = state.steps.mapTo(HashSet()) { Triple(it.source, it.fromEpochMs, it.toEpochMs) }
+        val taken = mutableListOf<StepInterval>()
+        for (interval in intervals) {
+            if (interval.toEpochMs <= interval.fromEpochMs || interval.steps < 0) continue
+            if (!seen.add(Triple(interval.source, interval.fromEpochMs, interval.toEpochMs))) continue
+            fun overlaps(it: StepInterval) = it.source == interval.source &&
+                it.fromEpochMs < interval.toEpochMs &&
+                interval.fromEpochMs < it.toEpochMs
+            if (state.steps.none(::overlaps) && taken.none(::overlaps)) taken += interval
+        }
+        if (taken.isEmpty()) return
+
+        fun added(source: StepSource, before: Int?): Int? {
+            val counted = taken.filter { it.source == source }
+            return if (counted.isEmpty()) before else (before ?: 0) + counted.sumOf { it.steps }
+        }
+        var next = state.copy(
+            steps = state.steps + taken,
+            phoneSteps = added(StepSource.PHONE, state.phoneSteps),
+            watchSteps = added(StepSource.WATCH, state.watchSteps),
+        )
+        if (!relaxed && next.path.size >= 2) next = judged(next)
+        _walk.value = next
+    }
+
+    /**
+     * Whether Stop would bridge anything as the walk stands — the one case in
+     * which waiting for the watch's last steps can change the verdict, since
+     * its steps can only turn a doubtful stretch into one on foot.
+     */
+    fun hasDoubt(state: WalkState = _walk.value): Boolean {
+        if (!state.isTracking || relaxed || state.path.size < 2) return false
+        return StretchJudge.stretches(
+            state.path, state.track, StepLog(state.steps), state.activityType, complete = true,
+        ).any { it.label == StretchLabel.DOUBTFUL }
     }
 
     /**
      * [state] with [point] added to the path, or — inside [MIN_MOVE_METERS] of the
      * last point — with only the live figures moved on.
      */
-    private fun extend(state: WalkState, point: LatLng, accuracyMeters: Float?, climb: Double): WalkState {
+    private fun extend(
+        state: WalkState,
+        point: LatLng,
+        accuracyMeters: Float?,
+        climb: Double,
+        info: TrackPoint,
+    ): WalkState {
         val last = state.path.last()
         val start = state.start!!
         val toStart = Geo.distanceMeters(start, point)
 
         // Ignore GPS jitter so the path stays clean.
         if (Geo.distanceMeters(last, point) < MIN_MOVE_METERS) {
+            // Within a few metres of where the signal went: no ground was
+            // crossed unseen, so there is no gap to judge.
+            gapPending = false
             return state.copy(
                 current = point,
                 distanceToStartMeters = toStart,
@@ -597,15 +676,26 @@ object TrackingManager {
             )
         }
 
-        val newPath = state.path + point
-        val distance = state.distanceMeters + Geo.distanceMeters(last, point)
+        val segment = Geo.distanceMeters(last, point)
+        val track = if (state.track.size == state.path.size) {
+            state.track
+        } else {
+            List(state.path.size) { i -> state.track.getOrNull(i) ?: TrackPoint(atEpochMs = null) }
+        }
+        val afterGap = info.afterGap || gapPending
+        gapPending = false
+        // Counted on foot until judged otherwise: the stretch still being walked
+        // hasn't been judged yet, and most never will be anything else.
+        val onFoot = state.onFootMeters + segment
         val leftStart = state.hasLeftStart || toStart > leaveStartRadiusMeters
-        val canClose = leftStart && distance >= minPerimeterMeters
+        val canClose = leftStart && onFoot >= minPerimeterMeters
 
-        return state.copy(
-            path = newPath,
+        val next = state.copy(
+            path = state.path + point,
+            track = track + info.copy(afterGap = afterGap),
             current = point,
-            distanceMeters = distance,
+            distanceMeters = state.distanceMeters + segment,
+            onFootMeters = onFoot,
             distanceToStartMeters = toStart,
             hasLeftStart = leftStart,
             canCloseLoop = canClose,
@@ -613,6 +703,59 @@ object TrackingManager {
             readyToClose = canClose && toStart <= closureRadiusMeters,
             elevationGainMeters = climb,
         )
+        return if (!relaxed && stretchDue(next)) judged(next) else next
+    }
+
+    /** True once the stretch still being walked has run its full length, or a gap just ended. */
+    private fun stretchDue(state: WalkState): Boolean {
+        val last = state.track.lastOrNull() ?: return false
+        if (last.afterGap) return true
+        val from = state.track.getOrNull(judgedUntil)?.atEpochMs ?: return false
+        val to = last.atEpochMs ?: return false
+        return to - from >= StretchJudge.STRETCH_MS
+    }
+
+    /**
+     * [state] with every stretch judged again — see [StretchJudge] — and every
+     * figure measured from the start brought into line: the start itself moves
+     * past a leading drive, so "back to start" points at where the walking began.
+     */
+    private fun judged(state: WalkState): WalkState {
+        val path = state.path
+        val stretches = StretchJudge.stretches(
+            path, state.track, StepLog(state.steps), state.activityType, complete = false,
+        )
+        judgedUntil = stretches.lastOrNull()?.toIndex ?: 0
+        val startIndex = StretchJudge.walkStart(stretches, path, minDriveMeters = leaveStartRadiusMeters)
+        val runs = StretchJudge.doubtfulRuns(stretches, fromIndex = startIndex)
+        val fromStart = Geo.pathLengthMeters(path.subList(startIndex, path.size))
+        val doubtfulGround = runs.sumOf { Geo.pathLengthMeters(path.subList(it.first, it.last + 1)) }
+        val onFoot = (fromStart - doubtfulGround).coerceAtLeast(0.0)
+
+        val start = path[startIndex]
+        val leftStart = if (startIndex == state.startIndex && state.start == start) {
+            state.hasLeftStart
+        } else {
+            path.subList(startIndex, path.size).any { Geo.distanceMeters(start, it) > leaveStartRadiusMeters }
+        }
+        val toStart = state.current?.let { Geo.distanceMeters(start, it) }
+        val canClose = leftStart && onFoot >= minPerimeterMeters
+        val next = state.copy(
+            start = start,
+            startIndex = startIndex,
+            onFootMeters = onFoot,
+            bridgedMeters = runs.sumOf { Geo.distanceMeters(path[it.first], path[it.last]) },
+            doubtfulRuns = runs,
+            doubtReason = stretches.lastOrNull()?.reason,
+            distanceToStartMeters = toStart,
+            hasLeftStart = leftStart,
+            canCloseLoop = canClose,
+            readyToClose = canClose && toStart != null && toStart <= closureRadiusMeters,
+        )
+        // Looked for only while it would be said: a scan of the path per fix is
+        // worth it then, and not for a walk going well.
+        val earlier = if (next.doubtful && !next.readyToClose) earlierLoop(next)?.closedAtEpochMs else null
+        return next.copy(earlierLoopClosedAtMs = earlier)
     }
 
     /** Record that the path's last point was still where the walker was at [atElapsedMs]. */
@@ -621,64 +764,163 @@ object TrackingManager {
         trustedAccuracyMeters = accuracyMeters
     }
 
-    /** Forget the held fix and what the path was last trusted at: a new walk, or none. */
-    private fun clearHeld() {
+    /** Forget everything that belonged to the previous walk's fixes. */
+    private fun resetPerWalk() {
+        lastFix = null
+        lastFixAtElapsedMs = null
         heldFixes.clear()
         trustedAtElapsedMs = null
         trustedAccuracyMeters = null
+        gapPending = false
+        epochBaseMs = null
+        judgedUntil = 0
+    }
+
+    /** The wall-clock time of a fix: the one given, or the monotonic one carried onto the wall clock. */
+    private fun epochOf(atElapsedMs: Long?, atEpochMs: Long?): Long? {
+        if (atEpochMs != null) return atEpochMs
+        if (atElapsedMs == null) return null
+        val base = epochBaseMs ?: (System.currentTimeMillis() - atElapsedMs).also { epochBaseMs = it }
+        return base + atElapsedMs
     }
 
     /**
-     * Called when the user presses Stop. If the loop is [WalkState.readyToClose]
-     * it's claimed (opens the modal); otherwise the walk is simply abandoned.
+     * Called when the user presses Stop, from the panel or the watch. Never
+     * throws a walk away: at the start it closes the loop here; anywhere else it
+     * claims the loop that last closed, if one did. Either way [LoopVerdict]
+     * decides whether enough of it was walked, and a walk that can't be claimed
+     * is handed over on [unclaimedWalks] instead.
      */
     fun finishWalk() {
         val state = _walk.value
-        if (state.readyToClose && state.path.size >= 3) {
-            closeLoop(state)
-        } else {
-            cancelWalk()
+        if (!state.isTracking) return
+        when (val verdict = verdictFor(state, atStart = state.readyToClose)) {
+            is LoopVerdict.Claim -> closeLoop(state, verdict)
+            is LoopVerdict.Unclaimed -> keep(state, verdict)
         }
     }
 
-    private fun closeLoop(state: WalkState) {
-        // A spike the live hold let through — two bad fixes in a row, or one
-        // already on disk in a restored walk — would otherwise be claimed.
-        val path = PathSpikes.remove(state.path)
-        val start = path.first()
-        // The closing gap: how far the triggering GPS fix was from the start.
-        val closingGap = Geo.distanceMeters(path.last(), start)
-        // Snap the loop shut *at the start* rather than at the (slightly off) GPS
-        // fix, so the claimed shape and the preview line close on the start point.
-        val ring = if (path.size >= 2) path.dropLast(1) + start else path
-        val perimeter = Geo.pathLengthMeters(ring)
+    /**
+     * Stop and keep the walk as it is, claiming nothing — Save in the Stop
+     * dialog, which is what Stop away from the start leads with.
+     */
+    fun saveWalk() {
+        val state = _walk.value
+        if (!state.isTracking) return
+        keep(
+            state,
+            LoopVerdict.saved(
+                path = state.path,
+                track = state.track,
+                steps = state.steps,
+                activityType = state.activityType,
+                judged = !relaxed,
+                leaveRadiusMeters = leaveStartRadiusMeters,
+            ),
+        )
+    }
+
+    /**
+     * The loop this walk last closed, when the walker is away from the start —
+     * what the Stop dialog offers to claim — or null when it never closed one.
+     * [closedAtEpochMs] is null for a walk with no clock behind it.
+     */
+    data class EarlierLoop(val closedAtEpochMs: Long?)
+
+    fun earlierLoop(state: WalkState = _walk.value): EarlierLoop? {
+        if (!state.isTracking) return null
+        val end = LoopVerdict.loopEnd(
+            path = state.path,
+            startIndex = state.startIndex,
+            atStart = false,
+            closeRadiusMeters = closureRadiusMeters,
+            leaveRadiusMeters = leaveStartRadiusMeters,
+            minPerimeterMeters = minPerimeterMeters,
+        ) ?: return null
+        return EarlierLoop(state.track.getOrNull(end)?.atEpochMs)
+    }
+
+    private fun verdictFor(state: WalkState, atStart: Boolean): LoopVerdict.Result = LoopVerdict.of(
+        path = state.path,
+        track = state.track,
+        steps = state.steps,
+        activityType = state.activityType,
+        judged = !relaxed,
+        atStart = atStart,
+        closeRadiusMeters = closureRadiusMeters,
+        leaveRadiusMeters = leaveStartRadiusMeters,
+        minPerimeterMeters = minPerimeterMeters,
+    )
+
+    private fun closeLoop(state: WalkState, claim: LoopVerdict.Claim) {
+        val ring = claim.ring
+        val split = claim.split
+        val trimmed = claim.startIndex > 0 ||
+            claim.endIndex < state.path.lastIndex ||
+            split.bridges.isNotEmpty()
         // Stop tracking but keep the closed ring on screen as a preview.
         _walk.value = WalkState(
             isTracking = false,
             path = ring,
-            start = start,
+            start = ring.first(),
             hadSignalGap = state.hadSignalGap,
         )
         _pendingClaim.value = PendingClaim(
             id = UUID.randomUUID().toString(),
             ring = ring,
             areaSqMeters = Geo.polygonAreaSqMeters(ring),
-            perimeterMeters = perimeter,
-            distanceToStartMeters = closingGap,
+            perimeterMeters = Geo.pathLengthMeters(ring),
+            distanceToStartMeters = claim.closingGapMeters,
             closedAtEpochMs = System.currentTimeMillis(),
-            startedAtEpochMs = state.startedAtMs,
+            // A walk that began with a drive began, as far as the loop goes,
+            // where the walking did.
+            startedAtEpochMs = state.track.getOrNull(claim.startIndex)?.atEpochMs
+                ?.takeIf { claim.startIndex > 0 }
+                ?: state.startedAtMs,
             elevationGainMeters = state.elevationGainMeters,
             movingMs = state.movingMs,
-            hadSignalGap = state.hadSignalGap,
+            hadSignalGap = split.unobservedGap,
             suggestedName = NameGenerator.random(),
+            onFootMeters = split.onFootMeters,
+            bridges = split.bridges,
+            bridgedShare = claim.bridgedShare,
+            phoneSteps = split.phoneSteps,
+            watchSteps = split.watchSteps,
+            stepsCoveredGap = split.stepsCoveredGap,
+            recordedTrack = state.path.takeIf { trimmed },
         )
+    }
+
+    /** End the walk without a claim, handing over everything it recorded first. */
+    private fun keep(state: WalkState, verdict: LoopVerdict.Unclaimed) {
+        // Taken before the reset below, which would otherwise erase it. A walk
+        // with nothing on the ground has nothing to keep.
+        if (state.path.size >= 2) {
+            _unclaimedWalks.tryEmit(
+                UnclaimedRecording(
+                    id = UUID.randomUUID().toString(),
+                    path = state.path,
+                    startedAtEpochMs = state.startedAtMs,
+                    endedAtEpochMs = System.currentTimeMillis(),
+                    distanceMeters = state.distanceMeters,
+                    reason = verdict.reason,
+                    activityType = state.activityType,
+                    onFootMeters = verdict.split.onFootMeters,
+                    bridgedMeters = verdict.split.bridgedMeters,
+                    bridgedShare = verdict.bridgedShare,
+                    phoneSteps = verdict.split.phoneSteps,
+                    watchSteps = verdict.split.watchSteps,
+                ),
+            )
+        }
+        resetPerWalk()
+        _walk.value = WalkState(isTracking = false)
     }
 
     /**
      * Best estimate of how fast the user is moving right now: the larger of the
      * fix's own speed and the speed implied by the distance since the previous
-     * fix. Taking the larger of the two means neither a provider that reports no
-     * speed nor one that under-reports it can hide a drive.
+     * fix. Only moving time uses it; stretches are judged on displacement.
      *
      * Must be called before [lastFix] is advanced to the new fix.
      */
@@ -703,35 +945,6 @@ object TrackingManager {
         val previousAt = lastFixAtElapsedMs ?: return null
         if (atElapsedMs <= previousAt) return null
         return Geo.distanceMeters(previous, point) / ((atElapsedMs - previousAt) / 1000.0)
-    }
-
-    /**
-     * End the walk without a claim: the recorded path no longer reflects a real
-     * trip. The path itself is handed to [voidedRecordings] first, not discarded.
-     */
-    private fun voidWalk(reason: VoidReason) {
-        // Taken before the reset below, which is what used to erase it.
-        val walked = _walk.value
-        if (walked.path.size >= 2) {
-            _voidedRecordings.tryEmit(
-                VoidedRecording(
-                    id = UUID.randomUUID().toString(),
-                    path = walked.path,
-                    startedAtEpochMs = walked.startedAtMs,
-                    voidedAtEpochMs = System.currentTimeMillis(),
-                    distanceMeters = walked.distanceMeters,
-                    reason = reason,
-                ),
-            )
-        }
-        motionGate.reset()
-        elevation.reset()
-        pause.reset()
-        lastFix = null
-        lastFixAtElapsedMs = null
-        clearHeld()
-        _walk.value = WalkState(isTracking = false)
-        _voidEvents.tryEmit(reason)
     }
 
     /** Clears the pending claim and resets the map to idle (claim or discard). */
@@ -760,7 +973,7 @@ object TrackingManager {
     const val MIN_PERIMETER_METERS = 200.0
     // Test mode (map taps) and imported tracks: forgiving, so a loop is actually
     // reachable on screen, and a recorded track stopped a few dozen metres short
-    // of its start still closes. Neither runs the motion gate, so a wider circle
+    // of its start still closes. Neither is judged for speed, so a wider circle
     // here gives away no anti-cheat protection.
     private const val CLOSURE_RADIUS_TEST_METERS = 75.0
     private const val LEAVE_START_TEST_METERS = 40.0
@@ -776,25 +989,6 @@ object TrackingManager {
     /** Fixes closer than this to the previous point are treated as noise. */
     private const val MIN_MOVE_METERS = 4.0
 
-    /**
-     * How far recording may resume from where it was suspended before it costs
-     * the walk anything. Ground covered while movement was blocked is not
-     * recorded, so a longer gap draws a straight line across land nobody
-     * observed.
-     *
-     * Raised from 50 m with the move to strikes. Fifty metres is inside the error
-     * of a fix reacquired after a blocked stretch, so honest walks were being
-     * voided by the recovery rather than by the gap.
-     */
-    private const val MAX_RESUME_GAP_METERS = 150.0
-
-    /**
-     * The gap that no warning covers. Past a kilometre of unrecorded ground the
-     * path is not a walk with a hole in it — it is two walks with a drive
-     * between them, and claiming the polygon they enclose would be claiming the
-     * drive.
-     */
-    private const val MAX_UNVERIFIED_GAP_METERS = 1_000.0
     /**
      * Fixes worse than this accuracy (meters) are kept off the path.
      *
@@ -820,15 +1014,14 @@ object TrackingManager {
     /**
      * A single segment quicker than this is the position catching up, not the
      * user moving. 55 m/s ≈ 200 km/h: faster than any road vehicle in normal
-     * use, so it cannot be the drive that [MotionGate] exists to catch, while a
+     * use, so it cannot be the drive that [StretchJudge] exists to catch, while a
      * reacquisition snap after a frozen fix is typically an order of magnitude
      * beyond it (300 m against a 1 s interval is 300 m/s).
      *
-     * Deliberately well clear of [MotionGate.ABSOLUTE_MAX_SPEED_MPS] (20 m/s):
-     * everything between the two is still judged as movement and still voids the
-     * walk. Only the physically impossible is reclassified as an artefact — and
-     * even then the ground it skips is recorded as [WalkState.hadSignalGap]
-     * rather than quietly absorbed into the route.
+     * Deliberately well clear of [StretchJudge.ABSOLUTE_MAX_SPEED_MPS]: everything
+     * between the two is still judged as movement. Only the physically impossible
+     * is reclassified as an artefact — and even then the ground it skips is a gap,
+     * judged whole on how long it took, rather than quietly absorbed into the route.
      */
     const val REACQUISITION_SPEED_MPS = 55.0
 }

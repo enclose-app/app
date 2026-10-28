@@ -3,6 +3,8 @@ package io.app.enclose.export
 import io.app.enclose.data.MapCamera
 import io.app.enclose.data.OfflineRegionEntity
 import io.app.enclose.data.ProfileEntity
+import io.app.enclose.data.ProgressPoint
+import io.app.enclose.data.ProgressSteps
 import io.app.enclose.data.SettingsSnapshot
 import io.app.enclose.data.SyncStatus
 import io.app.enclose.data.TerritoryEntity
@@ -11,6 +13,7 @@ import io.app.enclose.data.WalkEntity
 import io.app.enclose.data.WalkProgressEntity
 import io.app.enclose.geo.LatLng
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -59,6 +62,11 @@ class BackupTest {
         movingMs = 1_234_567,
         claimed = true,
         syncStatus = SyncStatus.PENDING,
+        onFootMeters = 180.5,
+        bridgedMeters = 19.5,
+        phoneSteps = 260,
+        watchSteps = 255,
+        trackJson = """[{"lat":37.9838,"lng":23.7275},{"lat":37.99,"lng":23.73}]""",
     )
 
     private fun full() = BackupData(
@@ -80,9 +88,20 @@ class BackupTest {
             movingMs = 60_000,
         ),
         walkProgressPoints = listOf(
-            LatLng(37.9838, 23.7275),
-            LatLng(37.9840, 23.7277),
-            LatLng(37.9842, 23.7279),
+            // One stored before times were kept, one ordinary, one across a gap
+            // with a reading: every shape a point can have.
+            ProgressPoint(LatLng(37.9838, 23.7275)),
+            ProgressPoint(LatLng(37.9840, 23.7277), atEpochMs = 1_700_200_003_000),
+            ProgressPoint(
+                LatLng(37.9842, 23.7279),
+                atEpochMs = 1_700_200_600_000,
+                afterGap = true,
+                motion = "VEHICLE",
+            ),
+        ),
+        walkProgressSteps = listOf(
+            ProgressSteps("PHONE", 1_700_200_000_000, 1_700_200_010_000, 17),
+            ProgressSteps("WATCH", 1_700_200_000_000, 1_700_200_060_000, 0),
         ),
         offlineRegions = listOf(
             OfflineRegionEntity(
@@ -102,6 +121,18 @@ class BackupTest {
                 voidedAtEpochMs = 1_700_300_600_000,
                 distanceMeters = 1_840.5,
                 reason = "VEHICLE",
+            ),
+            VoidedWalkEntity(
+                id = "v2",
+                pathJson = "[{\"lat\":37.9838,\"lng\":23.7275},{\"lat\":37.99,\"lng\":23.74}]",
+                startedAtEpochMs = 1_700_400_000_000,
+                voidedAtEpochMs = 1_700_400_900_000,
+                distanceMeters = 2_200.0,
+                reason = "NOT_CLOSED",
+                onFootMeters = 1_900.0,
+                bridgedMeters = 300.0,
+                phoneSteps = 2_700,
+                watchSteps = null,
             ),
         ),
         settings = SettingsSnapshot(
@@ -138,6 +169,7 @@ class BackupTest {
         assertEquals(original.profile, restored.profile)
         assertEquals(original.walkProgress, restored.walkProgress)
         assertEquals(original.walkProgressPoints, restored.walkProgressPoints)
+        assertEquals(original.walkProgressSteps, restored.walkProgressSteps)
         assertEquals(original.offlineRegions, restored.offlineRegions)
         assertEquals(original.voidedWalks, restored.voidedWalks)
         assertEquals(original.settings, restored.settings)
@@ -213,6 +245,12 @@ class BackupTest {
         // as having begun in 1970.
         assertNull(data.walks.single().startedAtEpochMs)
         assertNull(data.walks.single().movingMs)
+        // Walked before stretches were judged: no split at all, rather than a
+        // zero that would say none of it was on foot.
+        assertNull(data.walks.single().onFootMeters)
+        assertNull(data.walks.single().bridgedMeters)
+        assertNull(data.walks.single().phoneSteps)
+        assertNull(data.walks.single().trackJson)
         // Written before voided walks were kept: there are none, not an error.
         assertTrue(data.voidedWalks.isEmpty())
         assertEquals(SettingsSnapshot(), data.settings)
@@ -273,8 +311,59 @@ class BackupTest {
 
         assertEquals(original.walkProgressPoints, restored.walkProgressPoints)
         assertEquals(3, restored.walkProgressPoints.size)
-        assertEquals(37.9838, restored.walkProgressPoints.first().lat, 1e-9)
-        assertEquals(37.9842, restored.walkProgressPoints.last().lat, 1e-9)
+        assertEquals(37.9838, restored.walkProgressPoints.first().position.lat, 1e-9)
+        assertEquals(37.9842, restored.walkProgressPoints.last().position.lat, 1e-9)
+    }
+
+    /**
+     * Position first and trailing defaults left off, so an ordinary point is
+     * still the `[lat,lng]` pair an older build reads — a file written now
+     * opens there with its path intact — and the longest list in the file
+     * doesn't grow a `false,null` per fix.
+     */
+    @Test
+    fun `a point with nothing extra is written as a bare pair`() {
+        val text = Backup.encode(full())
+
+        assertTrue(text.contains("[37.9838,23.7275]"))
+        assertTrue(text.contains("[37.984,23.7277,1700200003000]"))
+        assertTrue(text.contains("[37.9842,23.7279,1700200600000,true,\"VEHICLE\"]"))
+    }
+
+    /** A file from before times were kept: its points have no clock, as the migration gave the same rows. */
+    @Test
+    fun `a pair from an older file restores with no time, no gap and no reading`() {
+        val text = """
+            {"formatVersion":1,"schemaVersion":14,
+             "walkInProgress":{"startedAtEpochMs":1,"activityType":"WALK","points":[[1.0,2.0]]}}
+        """.trimIndent()
+
+        val point = decodeOk(text).data.walkProgressPoints.single()
+
+        assertNull(point.atEpochMs)
+        assertFalse(point.afterGap)
+        assertNull(point.motion)
+        // And no steps list at all reads as none.
+        assertTrue(decodeOk(text).data.walkProgressSteps.isEmpty())
+    }
+
+    /** A count that can't be placed on the walk is left out, never put at 1970. */
+    @Test
+    fun `a step report missing its span is left out`() {
+        val text = """
+            {"formatVersion":1,"schemaVersion":15,
+             "walkInProgress":{"startedAtEpochMs":1,"activityType":"WALK","points":[],
+               "steps":[{"source":"PHONE","fromEpochMs":10,"toEpochMs":20,"steps":5},
+                        {"source":"PHONE","toEpochMs":30,"steps":5},
+                        {"source":"WATCH","fromEpochMs":10,"toEpochMs":40,"steps":9}]}}
+        """.trimIndent()
+
+        val steps = decodeOk(text).data.walkProgressSteps
+
+        assertEquals(
+            listOf(ProgressSteps("PHONE", 10, 20, 5), ProgressSteps("WATCH", 10, 40, 9)),
+            steps,
+        )
     }
 
     /** A truncated or malformed point is dropped; it can't shift the rest along. */
@@ -288,7 +377,10 @@ class BackupTest {
 
         val data = decodeOk(text).data
 
-        assertEquals(listOf(LatLng(1.0, 2.0), LatLng(5.0, 6.0)), data.walkProgressPoints)
+        assertEquals(
+            listOf(ProgressPoint(LatLng(1.0, 2.0)), ProgressPoint(LatLng(5.0, 6.0))),
+            data.walkProgressPoints,
+        )
     }
 
     /**

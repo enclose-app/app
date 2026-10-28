@@ -1,6 +1,5 @@
 package io.app.enclose.ui
 
-import android.os.SystemClock
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
@@ -62,7 +61,7 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Splitscreen
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -80,6 +79,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SnackbarDuration
@@ -124,14 +124,14 @@ import io.app.enclose.data.Territory
 import io.app.enclose.data.TerritoryHit
 import io.app.enclose.geo.Geo
 import io.app.enclose.geo.LatLng
-import io.app.enclose.tracking.BlockReason
 import io.app.enclose.R
 import io.app.enclose.tracking.ActivityType
-import io.app.enclose.tracking.MotionGate
+import io.app.enclose.tracking.DoubtReason
+import io.app.enclose.tracking.LoopVerdict
 import io.app.enclose.tracking.NameGenerator
 import io.app.enclose.tracking.RecordingFailure
-import io.app.enclose.tracking.VoidReason
 import io.app.enclose.tracking.TrackingManager
+import io.app.enclose.tracking.UnclaimedReason
 import io.app.enclose.ui.theme.LocalEncloseAccents
 import io.app.enclose.ui.theme.PillShape
 import kotlinx.coroutines.delay
@@ -194,13 +194,15 @@ fun MapScreen(
     val res = LocalResources.current
     val walk by viewModel.walk.collectAsStateWithLifecycle()
     val territories by viewModel.territories.collectAsStateWithLifecycle()
+    val claimedGround by viewModel.claimedGroundSqMeters.collectAsStateWithLifecycle()
     val walksById by viewModel.walksById.collectAsStateWithLifecycle()
     val testMode by viewModel.testMode.collectAsStateWithLifecycle()
     val injectedWalk by viewModel.injectedWalk.collectAsStateWithLifecycle()
+    val askingWatch by viewModel.askingWatch.collectAsStateWithLifecycle()
     val activityType by viewModel.activityType.collectAsStateWithLifecycle()
     val pendingClaim by viewModel.pendingClaim.collectAsStateWithLifecycle()
     val showHowItWorks by viewModel.showHowItWorks.collectAsStateWithLifecycle()
-    val voidedWalk by viewModel.voidedWalk.collectAsStateWithLifecycle()
+    val unclaimedWalk by viewModel.unclaimedWalk.collectAsStateWithLifecycle()
     val recordingFailure by viewModel.recordingFailure.collectAsStateWithLifecycle()
     val gpxImport by viewModel.gpxImport.collectAsStateWithLifecycle()
     val backupJob by viewModel.backup.collectAsStateWithLifecycle()
@@ -227,6 +229,9 @@ fun MapScreen(
     var showList by rememberSaveable { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var confirmDiscardWalk by remember { mutableStateOf(false) }
+    // Stop with no loop to close where the walker stands. Holds the loop closed
+    // earlier, if any — asked once, when the dialog opens, not on every fix.
+    var stopChoice by remember { mutableStateOf<StopChoice?>(null) }
     // Debug builds only, since that's the only place test mode exists: Start
     // while it's on begins a walk that records no GPS at all, and finding that
     // out at the end costs the whole route.
@@ -539,8 +544,14 @@ fun MapScreen(
                     true
                 } else {
                     // A tap on open ground clears the selection, which is the
-                    // same gesture read the other way round.
-                    val hit = TerritoryHit.at(point = point, territories = territories)
+                    // same gesture read the other way round. Where claims are
+                    // stacked it takes the one drawn on top, the selection
+                    // included.
+                    val hit = TerritoryHit.at(
+                        point = point,
+                        territories = territories,
+                        selectedId = selectedClaimId,
+                    )
                     onSelectClaim(hit?.id)
                     // Not while the map is keeping up with a walk in progress:
                     // the next fix would pull the camera straight back, so the
@@ -611,7 +622,7 @@ fun MapScreen(
                     stringResource(
                         R.string.map_claims_summary,
                         territories.size,
-                        res.formatArea(territories.sumOf { it.areaSqMeters }),
+                        res.formatArea(claimedGround),
                     )
                 },
                 contentDescription = stringResource(R.string.map_open_territories),
@@ -759,6 +770,7 @@ fun MapScreen(
             walk = walk,
             testMode = testMode,
             injectedWalk = injectedWalk,
+            askingWatch = askingWatch,
             activityType = activityType,
             onSelectActivity = viewModel::setActivityType,
             location = location,
@@ -781,7 +793,7 @@ fun MapScreen(
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 viewModel.stopWalk()
             },
-            onFinishWithoutClaim = { confirmDiscardWalk = true },
+            onFinishWithoutClaim = { stopChoice = StopChoice(viewModel.earlierLoop()) },
             onRequestPermission = onRequestPermission,
             onOpenAppSettings = onOpenAppSettings,
             onOpenLocationSettings = onOpenLocationSettings,
@@ -819,24 +831,49 @@ fun MapScreen(
         )
     }
 
-    voidedWalk?.let { reason ->
-        NoticeDialog(
-            title = stringResource(R.string.void_title),
-            message = when (reason) {
-                VoidReason.VEHICLE -> pluralStringResource(
-                    R.plurals.void_vehicle,
-                    MotionGate.MAX_STRIKES,
-                    MotionGate.MAX_STRIKES,
-                )
-                VoidReason.TOO_FAST -> pluralStringResource(
-                    R.plurals.void_too_fast,
-                    MotionGate.MAX_STRIKES,
-                    MotionGate.MAX_STRIKES,
-                )
-                VoidReason.UNVERIFIED_GAP -> stringResource(R.string.void_gap)
-            },
-            onDismiss = viewModel::dismissVoidedWalk,
-        )
+    // A walk kept without a claim. One that never closed a loop, or was saved
+    // by choice, only needs to say where it went; a loop that closed and still
+    // can't be claimed is owed the numbers that decided it.
+    unclaimedWalk?.let { unclaimed ->
+        val type = unclaimed.activityType
+        if (unclaimed.reason == UnclaimedReason.NOT_CLOSED) {
+            val saved = stringResource(
+                type.pick(R.string.unclaimed_saved_walk, R.string.unclaimed_saved_run, R.string.unclaimed_saved_ride),
+            )
+            LaunchedEffect(unclaimed.id) {
+                viewModel.dismissUnclaimedWalk()
+                // On the screen's scope: dismissing ends this effect.
+                scope.launch { snackbarHost.showSnackbar(saved) }
+            }
+        } else {
+            val nothingWalked = unclaimed.bridgedShare >= 1.0
+            NoticeDialog(
+                title = stringResource(
+                    if (nothingWalked) R.string.unclaimed_nothing_title else R.string.unclaimed_bridged_title,
+                ),
+                message = if (nothingWalked) {
+                    stringResource(
+                        type.pick(
+                            R.string.unclaimed_nothing_walk,
+                            R.string.unclaimed_nothing_run,
+                            R.string.unclaimed_nothing_ride,
+                        ),
+                    )
+                } else {
+                    stringResource(
+                        type.pick(
+                            R.string.unclaimed_bridged_walk,
+                            R.string.unclaimed_bridged_run,
+                            R.string.unclaimed_bridged_ride,
+                        ),
+                        res.formatDistance(unclaimed.bridgedMeters),
+                        percentOf(unclaimed.bridgedShare),
+                        percentOf(LoopVerdict.MAX_BRIDGED_SHARE),
+                    )
+                },
+                onDismiss = viewModel::dismissUnclaimedWalk,
+            )
+        }
     }
 
     // The recorder couldn't run. Nothing was walked and nothing was thrown away —
@@ -946,6 +983,27 @@ fun MapScreen(
         )
     }
 
+    stopChoice?.let { choice ->
+        StopDialog(
+            walk = walk,
+            earlier = choice.earlier,
+            onClaimEarlier = {
+                stopChoice = null
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                viewModel.stopWalk()
+            },
+            onSave = {
+                stopChoice = null
+                viewModel.saveWalk()
+            },
+            onDiscard = {
+                stopChoice = null
+                confirmDiscardWalk = true
+            },
+            onDismiss = { stopChoice = null },
+        )
+    }
+
     if (confirmDiscardWalk) {
         ConfirmDialog(
             title = stringResource(
@@ -995,6 +1053,7 @@ fun MapScreen(
     if (showList) {
         TerritoryListSheet(
             territories = territories,
+            totalAreaSqMeters = claimedGround,
             // A claim shares its id with the walk that made it, so the walk's
             // climb is the claim's climb.
             climbById = walksById.mapValues { (_, w) -> w.elevationGainMeters },
@@ -1007,7 +1066,15 @@ fun MapScreen(
             },
             onShowOnMap = { territory ->
                 showList = false
-                controller.fitTo(SnapDisplay.pointsFor(territory))
+                // Selected as well as framed: claims are layers, and this is how
+                // one lying under a newer claim is reached — the selection draws
+                // above every claim, with its card open beneath it.
+                onSelectClaim(territory.id)
+                controller.fitTo(
+                    points = SnapDisplay.pointsFor(territory),
+                    bottomInsetPx = panelHeightPx + claimCardHeightPx +
+                        with(density) { CLAIM_CARD_GAP.roundToPx() },
+                )
             },
             onRename = viewModel::renameTerritory,
             onDelete = { territory ->
@@ -1147,6 +1214,12 @@ private fun ControlPanel(
      * not, and the GPS read-outs have to stand down for it just the same.
      */
     injectedWalk: Boolean,
+    /**
+     * Stop was pressed and is waiting, for at most a few seconds, for the
+     * watch's last steps. The walk's buttons give way to a line saying so: the
+     * walk is ending, and a second press would only end it twice.
+     */
+    askingWatch: Boolean,
     activityType: ActivityType,
     onSelectActivity: (ActivityType) -> Unit,
     location: LocationReadiness,
@@ -1197,6 +1270,7 @@ private fun ControlPanel(
             CollapsedPanel(
                 summary = summary,
                 walk = walk,
+                askingWatch = askingWatch,
                 activityType = activityType,
                 onStart = onStart,
                 onClaim = onClaim,
@@ -1237,13 +1311,17 @@ private fun ControlPanel(
             }
 
             when (summary.status) {
-                PanelStatus.TRACKING, PanelStatus.BLOCKED, PanelStatus.READY -> {
+                PanelStatus.TRACKING, PanelStatus.DOUBTFUL, PanelStatus.READY -> {
                     LiveStats(walk, injected = injectedWalk)
-                    WalkActions(
-                        walk = walk,
-                        onClaim = onClaim,
-                        onFinishWithoutClaim = onFinishWithoutClaim,
-                    )
+                    if (askingWatch) {
+                        AskingWatch()
+                    } else {
+                        WalkActions(
+                            walk = walk,
+                            onClaim = onClaim,
+                            onFinishWithoutClaim = onFinishWithoutClaim,
+                        )
+                    }
                 }
 
                 // Location is the whole point of the app, so an explicit, actionable
@@ -1294,6 +1372,7 @@ private fun ControlPanel(
 private fun CollapsedPanel(
     summary: PanelSummary,
     walk: TrackingManager.WalkState,
+    askingWatch: Boolean,
     activityType: ActivityType,
     onStart: () -> Unit,
     onClaim: () -> Unit,
@@ -1318,7 +1397,8 @@ private fun CollapsedPanel(
     val elapsedMs = walk.startedAtMs?.let { (now - it).coerceAtLeast(0L) } ?: 0L
 
     val dotColor = when (summary.status) {
-        PanelStatus.BLOCKED, PanelStatus.NO_LOCATION -> MaterialTheme.colorScheme.error
+        PanelStatus.NO_LOCATION -> MaterialTheme.colorScheme.error
+        PanelStatus.DOUBTFUL -> accents.doubt
         PanelStatus.READY -> accents.success
         PanelStatus.TRACKING -> accents.trail
         PanelStatus.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -1329,16 +1409,17 @@ private fun CollapsedPanel(
             PanelAction.OPEN_LOCATION_SETTINGS -> stringResource(R.string.location_title_off)
             else -> stringResource(R.string.location_title_needed)
         }
-        PanelStatus.BLOCKED -> stringResource(R.string.panel_title_paused)
+        PanelStatus.DOUBTFUL -> doubtTitle(walk)
         PanelStatus.READY -> stringResource(R.string.panel_title_ready)
         PanelStatus.TRACKING -> stringResource(walk.activityType.activeLabelRes)
     }
-    val detail = when (summary.status) {
-        PanelStatus.IDLE -> stringResource(activityType.labelRes)
-        PanelStatus.NO_LOCATION -> null
+    val detail = when {
+        askingWatch -> stringResource(R.string.panel_asking_watch)
+        summary.status == PanelStatus.IDLE -> stringResource(activityType.labelRes)
+        summary.status == PanelStatus.NO_LOCATION -> null
         else -> stringResource(
             R.string.panel_detail_stats,
-            res.formatDistance(walk.distanceMeters),
+            res.formatDistance(walk.onFootMeters),
             formatElapsed(elapsedMs),
         )
     }
@@ -1372,16 +1453,23 @@ private fun CollapsedPanel(
                 )
             }
         }
-        CollapsedAction(
-            summary = summary,
-            activityType = activityType,
-            onStart = onStart,
-            onClaim = onClaim,
-            onFinishWithoutClaim = onFinishWithoutClaim,
-            onRequestPermission = onRequestPermission,
-            onOpenAppSettings = onOpenAppSettings,
-            onOpenLocationSettings = onOpenLocationSettings,
-        )
+        if (askingWatch) {
+            // In the action's place, so the row doesn't jump when it comes back.
+            Box(Modifier.size(TOUCH_TARGET), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            }
+        } else {
+            CollapsedAction(
+                summary = summary,
+                activityType = activityType,
+                onStart = onStart,
+                onClaim = onClaim,
+                onFinishWithoutClaim = onFinishWithoutClaim,
+                onRequestPermission = onRequestPermission,
+                onOpenAppSettings = onOpenAppSettings,
+                onOpenLocationSettings = onOpenLocationSettings,
+            )
+        }
         if (onExpand != null) {
             IconButton(onClick = onExpand, modifier = Modifier.size(TOUCH_TARGET)) {
                 Icon(
@@ -1422,13 +1510,11 @@ private fun CollapsedAction(
         PanelAction.OPEN_SETTINGS -> onOpenAppSettings
         PanelAction.OPEN_LOCATION_SETTINGS -> onOpenLocationSettings
     }
-    // Ending a walk is destructive and must not wear the inviting colour, exactly
-    // as in the expanded panel.
+    // Ending a walk without its loop leads to a choice, not a loss, so it wears
+    // the quieter colour rather than the inviting one — exactly as in the
+    // expanded panel.
     val colors = if (summary.action == PanelAction.END) {
-        ButtonDefaults.buttonColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer,
-            contentColor = MaterialTheme.colorScheme.onErrorContainer,
-        )
+        ButtonDefaults.filledTonalButtonColors()
     } else {
         ButtonDefaults.buttonColors()
     }
@@ -1598,6 +1684,22 @@ private fun LocationBlock(
     }
 }
 
+/**
+ * What the walk's buttons become while Stop waits for the watch. The height of
+ * the Stop button it replaces, so the panel doesn't shrink and grow back.
+ */
+@Composable
+private fun AskingWatch() {
+    Row(
+        Modifier.fillMaxWidth().height(54.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+    ) {
+        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+        Text(stringResource(R.string.panel_asking_watch), style = MaterialTheme.typography.labelLarge)
+    }
+}
+
 @Composable
 private fun WalkActions(
     walk: TrackingManager.WalkState,
@@ -1613,28 +1715,20 @@ private fun WalkActions(
         ) {
             ButtonContent(Icons.Filled.Flag, stringResource(R.string.panel_close_and_claim))
         }
+        // Stopping without the claim keeps the walk; the dialog says how.
         TextButton(onClick = onFinishWithoutClaim, modifier = Modifier.fillMaxWidth()) {
-            Text(
-                stringResource(
-                    walk.activityType.pick(
-                        R.string.panel_discard_walk,
-                        R.string.panel_discard_run,
-                        R.string.panel_discard_ride,
-                    ),
-                ),
-            )
+            Text(stringResource(R.string.panel_stop_without_claim))
         }
     } else {
-        // Not ready: stopping throws the walk away, so it must not look like
-        // the primary action, and it asks for confirmation.
+        // Not ready: Stop asks what this walk becomes — the loop it closed
+        // earlier, a saved record, or more walking. Pressing it loses nothing,
+        // so it no longer wears the destructive colour; Discard, which does,
+        // sits behind its own confirmation in that dialog.
         Button(
             onClick = onFinishWithoutClaim,
             modifier = Modifier.fillMaxWidth().height(52.dp),
             shape = PillShape,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.errorContainer,
-                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-            ),
+            colors = ButtonDefaults.filledTonalButtonColors(),
         ) {
             ButtonContent(
                 Icons.Filled.Stop,
@@ -1677,27 +1771,42 @@ private fun LiveStats(walk: TrackingManager.WalkState, injected: Boolean) {
         waitingMs = (now - startedWaitingMs).coerceAtLeast(0L),
     )
     val accents = LocalEncloseAccents.current
-    val blocked = walk.motionBlocked
+    val doubtful = walk.doubtful
+    // The walk's whole length until part of it is set aside — a drive before the
+    // walking began, or a stretch the claim will bridge — and from then on the
+    // part that counts, which is what the label then says.
+    val setAside = walk.startIndex > 0 || walk.bridgedMeters > 0.0
+    val steps = stepsLabel(walk)
 
     Row(
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier
                     .size(8.dp)
                     .clip(CircleShape)
-                    .background(if (blocked) MaterialTheme.colorScheme.error else accents.trail),
+                    .background(if (doubtful) accents.doubt else accents.trail),
             )
             Spacer(Modifier.width(8.dp))
+            // Recording carries on through a doubtful stretch, so the label
+            // stays the activity's; the notice below says what is in doubt.
             Text(
-                stringResource(
-                    if (blocked) R.string.stats_paused else walk.activityType.activeLabelRes,
-                ),
+                stringResource(walk.activityType.activeLabelRes),
                 style = MaterialTheme.typography.titleMedium,
             )
+            if (steps != null) {
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    steps,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         // No GPS is involved in an injected walk, so don't report on it — the
         // chip would sit on "acquiring…" for as long as the walk lasted.
@@ -1712,8 +1821,8 @@ private fun LiveStats(walk: TrackingManager.WalkState, injected: Boolean) {
     ) {
         // Equal weights: the figures keep their columns as digits change.
         Metric(
-            label = stringResource(R.string.stats_distance),
-            value = res.formatDistance(walk.distanceMeters),
+            label = stringResource(if (setAside) R.string.stats_on_foot else R.string.stats_distance),
+            value = res.formatDistance(walk.onFootMeters),
             modifier = Modifier.weight(1f),
         )
         Metric(
@@ -1723,7 +1832,7 @@ private fun LiveStats(walk: TrackingManager.WalkState, injected: Boolean) {
         )
         Metric(
             label = stringResource(R.string.stats_pace),
-            value = res.formatPace(walk.distanceMeters, elapsedMs),
+            value = res.formatPace(walk.onFootMeters, elapsedMs),
             modifier = Modifier.weight(1f),
         )
     }
@@ -1748,19 +1857,19 @@ private fun LiveStats(walk: TrackingManager.WalkState, injected: Boolean) {
     }
 
     // Nothing has been recorded and it has stopped being plausible to call that
-    // warm-up. This outranks the loop checklist for the same reason the blocked
-    // notice does: a progress bar towards a loop is meaningless when no part of
-    // the route is being kept.
+    // warm-up. This outranks the loop checklist: a progress bar towards a loop
+    // is meaningless when no part of the route is being kept. A doubtful
+    // stretch takes the checklist's place while it lasts, because it is what
+    // the dotted line on the map needs explaining.
     when {
-        blocked -> MotionBlockedNotice(walk)
         fixWarning != null -> FixWarningNotice(fixWarning, walk.accuracyMeters)
+        doubtful -> DoubtNotice(walk)
         else -> LoopProgress(walk)
     }
 
-    // A strike the walk survived. Kept on screen afterwards because the count is
-    // what decides the next one: someone who doesn't know they're on their last
-    // warning can't act on it.
-    if (!blocked && walk.strikes > 0) StrikeNotice(walk)
+    // Once anything is bridged, the share stays on screen: it is what decides
+    // the claim at Stop, and walking on brings it down.
+    if (walk.bridgedMeters > 0.0 && !injected) BridgedNotice(walk)
 
     // A gap is not a failure and doesn't stop the walk, so it sits below the
     // checklist as a footnote rather than replacing it.
@@ -2051,123 +2160,106 @@ private fun FixWarningNotice(warning: FixWarning, accuracyMeters: Float?) {
 }
 
 /**
- * Shown when the tracker is refusing to record because the movement isn't
- * human-powered. Names the reason, states the consequence, and counts down the
- * grace window so the outcome is never a surprise.
+ * Shown while the stretch just walked is one nothing vouches for: faster than
+ * walking with no steps to explain it, or what the classifier is sure is a
+ * vehicle.
+ *
+ * It replaces the old blocked notice, and the difference is the point: nothing
+ * has stopped. The walk records on, the stretch is drawn dotted, and the claim
+ * will cross it in a straight line unless steps turn up for it — so there is no
+ * countdown, because nothing is counting down.
  */
 @Composable
-private fun MotionBlockedNotice(walk: TrackingManager.WalkState) {
-    // Monotonic clock: the countdown must not jump if wall-clock time changes.
-    var nowElapsed by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
-    LaunchedEffect(walk.blockedSinceElapsedMs) {
-        while (true) {
-            nowElapsed = SystemClock.elapsedRealtime()
-            delay(500)
-        }
-    }
-    val since = walk.blockedSinceElapsedMs ?: nowElapsed
-    val remainingMs = (MotionGate.GRACE_MS - (nowElapsed - since)).coerceAtLeast(0L)
-    val fraction = (remainingMs.toFloat() / MotionGate.GRACE_MS).coerceIn(0f, 1f)
-    val vehicle = walk.blockedReason == BlockReason.VEHICLE
-    // The warning being counted down to is the next one, not the last one given.
-    val pendingStrike = walk.strikes + 1
-    val fatal = pendingStrike >= MotionGate.MAX_STRIKES
-
-    val error = MaterialTheme.colorScheme.error
-    // A tint rather than a solid error fill: the End walk button below is already
-    // solid red, and two blocks of it flatten the panel's hierarchy.
+private fun DoubtNotice(walk: TrackingManager.WalkState) {
+    val doubt = LocalEncloseAccents.current.doubt
     Surface(
         shape = MaterialTheme.shapes.medium,
-        color = error.copy(alpha = 0.10f),
+        color = doubt.copy(alpha = 0.12f),
         contentColor = MaterialTheme.colorScheme.onSurface,
-        border = BorderStroke(1.dp, error.copy(alpha = 0.35f)),
+        border = BorderStroke(1.dp, doubt.copy(alpha = 0.35f)),
     ) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    if (vehicle) Icons.Filled.DirectionsCar else Icons.Filled.Speed,
+                    if (walk.doubtReason == DoubtReason.VEHICLE) Icons.Filled.DirectionsCar else Icons.Filled.Speed,
                     contentDescription = null,
-                    tint = error,
+                    tint = doubt,
                     modifier = Modifier.size(20.dp),
                 )
                 Spacer(Modifier.width(10.dp))
-                Text(
-                    stringResource(
-                        if (vehicle) {
-                            R.string.motion_vehicle_title
-                        } else {
-                            walk.activityType.pick(
-                                R.string.motion_too_fast_walk,
-                                R.string.motion_too_fast_run,
-                                R.string.motion_too_fast_ride,
-                            )
-                        },
-                    ),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = error,
-                )
+                Text(doubtTitle(walk), style = MaterialTheme.typography.titleSmall)
             }
             Spacer(Modifier.height(6.dp))
             Text(
                 stringResource(
                     walk.activityType.pick(
-                        R.string.motion_body_walk,
-                        R.string.motion_body_run,
-                        R.string.motion_body_ride,
+                        R.string.doubt_body_walk,
+                        R.string.doubt_body_run,
+                        R.string.doubt_body_ride,
                     ),
                 ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(10.dp))
-            ProgressTrack(
-                progress = fraction,
-                color = error,
-                trackColor = error.copy(alpha = 0.18f),
-                thickness = 6.dp,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                if (fatal) {
-                    // Last one: say what actually happens, not "warning 3 of 3".
-                    stringResource(
-                        walk.activityType.pick(
-                            R.string.motion_last_warning_walk,
-                            R.string.motion_last_warning_run,
-                            R.string.motion_last_warning_ride,
-                        ),
-                        (remainingMs / 1000).toInt(),
-                    )
-                } else {
-                    stringResource(
-                        R.string.motion_warning_countdown,
-                        pendingStrike,
-                        MotionGate.MAX_STRIKES,
-                        (remainingMs / 1000).toInt(),
-                    )
-                },
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // Ridden on from a loop that closed: it is still theirs, and saying
+            // when is what stops anyone giving the walk up for lost.
+            walk.earlierLoopClosedAtMs?.let { closedAt ->
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    stringResource(R.string.doubt_loop_closed, formatTimeOfDay(closedAt)),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
         }
     }
 }
 
+/** What the doubtful stretch looks like, for the notice and the collapsed row alike. */
+@Composable
+private fun doubtTitle(walk: TrackingManager.WalkState): String = stringResource(
+    if (walk.doubtReason == DoubtReason.VEHICLE) {
+        R.string.doubt_vehicle_title
+    } else {
+        walk.activityType.pick(
+            R.string.doubt_too_fast_walk,
+            R.string.doubt_too_fast_run,
+            R.string.doubt_too_fast_ride,
+        )
+    },
+)
+
 /**
- * Shown for the rest of the walk once a warning has been used and the walk has
- * carried on.
- *
- * The count is the point. Strikes exist so one bad stretch doesn't end an
- * outing, but that only helps if the user can see how much rope is left — and
- * being told about the third one only as it lands is the version of this that
- * feels arbitrary.
+ * How much of the walk the claim will cross in straight lines so far, against
+ * the share a claim allows. Over the limit it says so, and that walking on
+ * brings the share back down: nothing is decided until Stop.
  */
 @Composable
-private fun StrikeNotice(walk: TrackingManager.WalkState) {
-    val error = MaterialTheme.colorScheme.error
+private fun BridgedNotice(walk: TrackingManager.WalkState) {
+    val res = LocalResources.current
+    val share = walk.bridgedShare
+    val limit = LoopVerdict.MAX_BRIDGED_SHARE
+    val text = if (share > limit) {
+        stringResource(
+            walk.activityType.pick(
+                R.string.bridged_over_walk,
+                R.string.bridged_over_run,
+                R.string.bridged_over_ride,
+            ),
+            res.formatDistance(walk.bridgedMeters),
+            percentOf(share),
+            percentOf(limit),
+        )
+    } else {
+        stringResource(
+            R.string.bridged_so_far,
+            res.formatDistance(walk.bridgedMeters),
+            percentOf(share),
+            percentOf(limit),
+        )
+    }
     Surface(
         shape = MaterialTheme.shapes.medium,
-        color = error.copy(alpha = 0.08f),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
         contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         Row(
@@ -2175,40 +2267,46 @@ private fun StrikeNotice(walk: TrackingManager.WalkState) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                Icons.Filled.Warning,
+                Icons.Filled.Straighten,
                 contentDescription = null,
-                tint = error,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(18.dp),
             )
             Spacer(Modifier.width(10.dp))
             Text(
-                if (walk.strikesRemaining == 1) {
-                    stringResource(
-                        walk.activityType.pick(
-                            R.string.strike_last_walk,
-                            R.string.strike_last_run,
-                            R.string.strike_last_ride,
-                        ),
-                        walk.strikes,
-                        MotionGate.MAX_STRIKES,
-                    )
-                } else {
-                    pluralStringResource(
-                        walk.activityType.pick(
-                            R.plurals.strike_left_walk,
-                            R.plurals.strike_left_run,
-                            R.plurals.strike_left_ride,
-                        ),
-                        walk.strikesRemaining,
-                        walk.strikes,
-                        MotionGate.MAX_STRIKES,
-                        walk.strikesRemaining,
-                    )
-                },
+                text,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+/** Steps counted so far, from whichever sources are counting; null when none is. */
+@Composable
+private fun stepsLabel(walk: TrackingManager.WalkState): String? {
+    val phone = walk.phoneSteps
+    val watch = walk.watchSteps
+    return when {
+        phone != null && watch != null -> pluralStringResource(R.plurals.stats_steps_and_watch, phone, phone, watch)
+        phone != null -> pluralStringResource(R.plurals.stats_steps, phone, phone)
+        watch != null -> pluralStringResource(R.plurals.stats_steps_watch, watch, watch)
+        else -> null
+    }
+}
+
+/**
+ * A share as a whole percentage, never rounded across the limit it is shown
+ * against: 20.4% bridged is over a 20% limit and must not read as "20%, over
+ * the 20% limit", and 19.6% is within it and must not read as 20%.
+ */
+private fun percentOf(share: Double, limit: Double = LoopVerdict.MAX_BRIDGED_SHARE): Int {
+    val percent = (share * 100).roundToInt()
+    val limitPercent = (limit * 100).roundToInt()
+    return when {
+        share > limit && percent <= limitPercent -> limitPercent + 1
+        share <= limit && percent > limitPercent -> limitPercent
+        else -> percent
     }
 }
 
@@ -2236,8 +2334,9 @@ private fun LoopProgress(walk: TrackingManager.WalkState) {
         ),
         LoopStep(
             label = stringResource(R.string.loop_step_cover, minPerimeter.roundToInt()),
-            done = walk.distanceMeters >= minPerimeter,
-            progress = (walk.distanceMeters / minPerimeter).toFloat(),
+            // On foot, as canCloseLoop measures it: bridged ground doesn't count.
+            done = walk.onFootMeters >= minPerimeter,
+            progress = (walk.onFootMeters / minPerimeter).toFloat(),
         ),
         LoopStep(
             label = stringResource(R.string.loop_step_return),
@@ -2318,7 +2417,7 @@ private fun StepChip(step: LoopStep, isActive: Boolean, modifier: Modifier = Mod
 /** Explains exactly what still blocks closing, so it's never a mystery. */
 @Composable
 private fun loopHint(walk: TrackingManager.WalkState): String {
-    val remaining = (TrackingManager.minPerimeterMeters - walk.distanceMeters).roundToInt()
+    val remaining = (TrackingManager.minPerimeterMeters - walk.onFootMeters).roundToInt()
     return when {
         walk.readyToClose -> stringResource(R.string.loop_hint_ready)
         walk.canCloseLoop -> stringResource(
@@ -2482,6 +2581,8 @@ private fun ClaimDialog(
                     textAlign = TextAlign.Center,
                 )
 
+                ClaimSplit(pending)
+
                 // Said plainly rather than hidden: the loop is still claimable —
                 // the walking was real — but part of its outline is a straight
                 // line drawn across ground the recording never saw.
@@ -2489,6 +2590,16 @@ private fun ClaimDialog(
                     Spacer(Modifier.height(10.dp))
                     Text(
                         stringResource(R.string.claim_signal_gap_note),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                // A gap the steps covered counts as walked, and says why.
+                if (pending.stepsCoveredGap) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        stringResource(R.string.claim_steps_covered_gap),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -2551,6 +2662,165 @@ private fun ClaimDialog(
             }
         }
     }
+}
+
+/**
+ * How the loop's boundary was covered: the ground on foot with the steps behind
+ * it, and what the claim crosses in straight lines, against the limit. These
+ * are the numbers the verdict used, shown so a claim is never a mystery. A loop
+ * with no steps counted and nothing bridged has nothing to add, and shows
+ * nothing.
+ */
+@Composable
+private fun ClaimSplit(pending: TrackingManager.PendingClaim) {
+    val res = LocalResources.current
+    val phone = pending.phoneSteps
+    val watch = pending.watchSteps
+    val walked = res.formatDistance(pending.onFootMeters)
+    val onFoot = when {
+        phone != null && watch != null ->
+            pluralStringResource(R.plurals.claim_on_foot_both, phone, walked, phone, watch)
+        phone != null -> pluralStringResource(R.plurals.claim_on_foot_phone, phone, walked, phone)
+        watch != null -> pluralStringResource(R.plurals.claim_on_foot_watch, watch, walked, watch)
+        pending.bridges.isNotEmpty() -> stringResource(R.string.claim_on_foot, walked)
+        else -> null
+    }
+    val share = percentOf(pending.bridgedShare)
+    val limit = percentOf(LoopVerdict.MAX_BRIDGED_SHARE)
+    val bridge = pending.bridges.singleOrNull()
+    val from = bridge?.fromEpochMs
+    val to = bridge?.toEpochMs
+    val bridged = when {
+        pending.bridges.isEmpty() -> null
+        bridge == null -> pluralStringResource(
+            R.plurals.claim_bridged_several,
+            pending.bridges.size,
+            res.formatDistance(pending.bridgedMeters),
+            pending.bridges.size,
+            share,
+            limit,
+        )
+        from != null && to != null -> stringResource(
+            R.string.claim_bridged,
+            res.formatDistance(bridge.meters),
+            stringResource(R.string.claim_time_range, formatTimeOfDay(from), formatTimeOfDay(to)),
+            share,
+            limit,
+        )
+        else -> stringResource(R.string.claim_bridged_untimed, res.formatDistance(bridge.meters), share, limit)
+    }
+    if (onFoot == null && bridged == null) return
+    Spacer(Modifier.height(10.dp))
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        for (line in listOfNotNull(onFoot, bridged)) {
+            Text(
+                line,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+// --- Stop --------------------------------------------------------------------
+
+/** Stop pressed with no loop to close where the walker stands, and the loop closed earlier, if any. */
+private data class StopChoice(val earlier: TrackingManager.EarlierLoop?)
+
+/**
+ * Stop, when there is no loop to close where the walker stands — or at the
+ * start, from "Stop without claiming".
+ *
+ * Nothing here throws the walk away unless asked twice. It used to: Stop away
+ * from the start offered only to discard, and said "your route so far will be
+ * lost". Now the choices are, in order, the loop closed earlier if there was
+ * one, Save — which keeps the walk as a record — carrying on, and Discard, the
+ * one destructive choice, which asks again.
+ */
+@Composable
+private fun StopDialog(
+    walk: TrackingManager.WalkState,
+    earlier: TrackingManager.EarlierLoop?,
+    onClaimEarlier: () -> Unit,
+    onSave: () -> Unit,
+    onDiscard: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val res = LocalResources.current
+    val type = walk.activityType
+    val atStart = walk.readyToClose
+    // At the start, the loop to claim is the panel's own button.
+    val loop = earlier?.takeUnless { atStart }
+    val toStart = walk.distanceToStartMeters
+    val title = if (atStart || toStart == null) {
+        stringResource(R.string.stop_unclaimed_title)
+    } else {
+        stringResource(R.string.stop_away_title, res.formatDistance(toStart))
+    }
+    val closedAt = loop?.closedAtEpochMs
+    val body = when {
+        loop != null && closedAt != null -> stringResource(
+            type.pick(
+                R.string.stop_earlier_loop_walk,
+                R.string.stop_earlier_loop_run,
+                R.string.stop_earlier_loop_ride,
+            ),
+            formatTimeOfDay(closedAt),
+        )
+        loop != null -> stringResource(
+            type.pick(
+                R.string.stop_earlier_loop_untimed_walk,
+                R.string.stop_earlier_loop_untimed_run,
+                R.string.stop_earlier_loop_untimed_ride,
+            ),
+        )
+        atStart -> stringResource(
+            type.pick(R.string.stop_save_body_walk, R.string.stop_save_body_run, R.string.stop_save_body_ride),
+        )
+        else -> stringResource(
+            type.pick(R.string.stop_no_loop_walk, R.string.stop_no_loop_run, R.string.stop_no_loop_ride),
+        )
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = MaterialTheme.shapes.extraLarge,
+        title = { Text(title) },
+        text = { Text(body) },
+        // Stacked and full width: four choices don't fit a dialog's button row,
+        // and top to bottom is the order of preference.
+        confirmButton = {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (loop != null) {
+                    Button(onClick = onClaimEarlier, modifier = Modifier.fillMaxWidth(), shape = PillShape) {
+                        ButtonContent(Icons.Filled.Flag, stringResource(R.string.stop_claim_earlier))
+                    }
+                    OutlinedButton(onClick = onSave, modifier = Modifier.fillMaxWidth(), shape = PillShape) {
+                        Text(stringResource(R.string.stop_save))
+                    }
+                } else {
+                    Button(onClick = onSave, modifier = Modifier.fillMaxWidth(), shape = PillShape) {
+                        Text(stringResource(R.string.stop_save))
+                    }
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(type.pick(R.string.stop_keep_walk, R.string.stop_keep_run, R.string.stop_keep_ride)))
+                }
+                TextButton(
+                    onClick = onDiscard,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) {
+                    Text(
+                        stringResource(
+                            type.pick(R.string.panel_discard_walk, R.string.panel_discard_run, R.string.panel_discard_ride),
+                        ),
+                    )
+                }
+            }
+        },
+    )
 }
 
 // --- Onboarding --------------------------------------------------------------

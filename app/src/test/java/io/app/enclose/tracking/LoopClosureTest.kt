@@ -1,4 +1,4 @@
-package io.app.enclose.export
+package io.app.enclose.tracking
 
 import io.app.enclose.geo.LatLng
 import org.junit.Assert.assertEquals
@@ -6,11 +6,12 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * An imported walk that came back round to its start must be claimable even
- * when its recorder ran on past the start — that overshoot is the commonest
- * reason a real track "doesn't close".
+ * A route that came back round to its start must be claimable even when it ran
+ * on past the start — an imported track whose recorder was stopped at the car, a
+ * live walk stopped at the front door. That overshoot is the commonest reason a
+ * real route "doesn't close".
  */
-class ImportClosureTest {
+class LoopClosureTest {
 
     /** ~1 m per 9e-6° of latitude near the equator; good enough for metres here. */
     private fun p(northM: Double, eastM: Double) = LatLng(northM * 9e-6, eastM * 9e-6)
@@ -23,7 +24,7 @@ class ImportClosureTest {
         p(150.0, 0.0), p(100.0, 0.0), p(50.0, 0.0), p(5.0, 0.0),
     )
 
-    private fun end(points: List<LatLng>) = ImportClosure.endIndex(
+    private fun end(points: List<LatLng>) = LoopClosure.endIndex(
         points,
         closeRadiusMeters = 75.0,
         leaveRadiusMeters = 40.0,
@@ -68,7 +69,7 @@ class ImportClosureTest {
 
     @Test
     fun `the end gap is first point to last`() {
-        val gap = ImportClosure.endGapMeters(listOf(p(0.0, 0.0), p(0.0, 100.0), p(0.0, 140.0)))
+        val gap = LoopClosure.endGapMeters(listOf(p(0.0, 0.0), p(0.0, 100.0), p(0.0, 140.0)))
         assertEquals(140.0, gap, 2.0)
     }
 }

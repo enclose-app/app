@@ -40,24 +40,51 @@
     <string name="map_home_set_snackbar">Home set</string>
     <string name="map_home_cleared_snackbar">Home cleared</string>
 
-    <!-- A walk voided by the anti-cheat. %1$d is how many warnings were allowed. -->
-    <string name="void_title">Walk discarded</string>
-    <plurals name="void_vehicle">
-        <item quantity="one">That looked like a vehicle trip, through %1$d warning. Enclose only counts ground you cover walking, running or cycling, so this walk wasn\'t kept.</item>
-        <item quantity="other">That looked like a vehicle trip, through all %1$d warnings. Enclose only counts ground you cover walking, running or cycling, so this walk wasn\'t kept.</item>
-    </plurals>
-    <plurals name="void_too_fast">
-        <item quantity="one">You were moving faster than a walk, run or ride through %1$d warning, so this walk wasn\'t kept.</item>
-        <item quantity="other">You were moving faster than a walk, run or ride through all %1$d warnings, so this walk wasn\'t kept.</item>
-    </plurals>
-    <string name="void_gap">Recording picked up a long way from where it stopped, so there\'s no record of how you covered the ground in between. This walk wasn\'t kept.</string>
+    <!-- A loop that closed but can\'t be claimed: too much of its boundary is bridged. %1$s is the bridged distance with its unit, %2$d its share of the boundary in percent, %3$d the limit in percent. -->
+    <string name="unclaimed_bridged_title">This loop can\'t be claimed</string>
+    <string name="unclaimed_bridged_walk">%1$s of its boundary crosses stretches nothing showed you walking — %2$d%%, over the %3$d%% limit. The walk is saved with its route, under Walks that didn\'t count in your profile.</string>
+    <string name="unclaimed_bridged_run">%1$s of its boundary crosses stretches nothing showed you running — %2$d%%, over the %3$d%% limit. The run is saved with its route, under Walks that didn\'t count in your profile.</string>
+    <string name="unclaimed_bridged_ride">%1$s of its boundary crosses stretches nothing showed you riding — %2$d%%, over the %3$d%% limit. The ride is saved with its route, under Walks that didn\'t count in your profile.</string>
+    <!-- No stretch at all was judged on foot, so there was no loop to look for. -->
+    <string name="unclaimed_nothing_title">Nothing to claim</string>
+    <string name="unclaimed_nothing_walk">Nothing in this walk showed you on foot, so there\'s no loop to claim. It\'s saved with its route, under Walks that didn\'t count in your profile.</string>
+    <string name="unclaimed_nothing_run">Nothing in this run showed you on foot, so there\'s no loop to claim. It\'s saved with its route, under Walks that didn\'t count in your profile.</string>
+    <string name="unclaimed_nothing_ride">Nothing in this ride showed you riding, so there\'s no loop to claim. It\'s saved with its route, under Walks that didn\'t count in your profile.</string>
+    <!-- Snackbar once a walk that didn\'t close is saved. -->
+    <string name="unclaimed_saved_walk">Walk saved — it\'s in your profile, under Walks that didn\'t count.</string>
+    <string name="unclaimed_saved_run">Run saved — it\'s in your profile, under Walks that didn\'t count.</string>
+    <string name="unclaimed_saved_ride">Ride saved — it\'s in your profile, under Walks that didn\'t count.</string>
+
+    <!-- Stop pressed away from the start. %1$s is the distance to the start, with its unit. -->
+    <string name="stop_away_title">You\'re %1$s from your start</string>
+    <!-- Stop pressed at the start, from "Stop without claiming". -->
+    <string name="stop_unclaimed_title">Stop without claiming?</string>
+    <!-- An earlier loop to offer. %1$s is the time it closed ("14:32"). -->
+    <string name="stop_earlier_loop_walk">You closed a loop at %1$s. Claim that loop? Everything after it stays in this walk\'s record.</string>
+    <string name="stop_earlier_loop_run">You closed a loop at %1$s. Claim that loop? Everything after it stays in this run\'s record.</string>
+    <string name="stop_earlier_loop_ride">You closed a loop at %1$s. Claim that loop? Everything after it stays in this ride\'s record.</string>
+    <!-- As above, when the loop\'s time isn\'t known (an imported route). -->
+    <string name="stop_earlier_loop_untimed_walk">You closed a loop earlier. Claim that loop? Everything after it stays in this walk\'s record.</string>
+    <string name="stop_earlier_loop_untimed_run">You closed a loop earlier. Claim that loop? Everything after it stays in this run\'s record.</string>
+    <string name="stop_earlier_loop_untimed_ride">You closed a loop earlier. Claim that loop? Everything after it stays in this ride\'s record.</string>
+    <string name="stop_no_loop_walk">This walk hasn\'t closed a loop, so there\'s nothing to claim yet. Save it to keep the route, or keep walking.</string>
+    <string name="stop_no_loop_run">This run hasn\'t closed a loop, so there\'s nothing to claim yet. Save it to keep the route, or keep running.</string>
+    <string name="stop_no_loop_ride">This ride hasn\'t closed a loop, so there\'s nothing to claim yet. Save it to keep the route, or keep riding.</string>
+    <string name="stop_save_body_walk">Save this walk to keep its route under Walks that didn\'t count, or keep walking.</string>
+    <string name="stop_save_body_run">Save this run to keep its route under Walks that didn\'t count, or keep running.</string>
+    <string name="stop_save_body_ride">Save this ride to keep its route under Walks that didn\'t count, or keep riding.</string>
+    <string name="stop_claim_earlier">Claim that loop</string>
+    <string name="stop_save">Save without claiming</string>
+    <string name="stop_keep_walk">Keep walking</string>
+    <string name="stop_keep_run">Keep running</string>
+    <string name="stop_keep_ride">Keep riding</string>
 
     <!-- The location service couldn\'t run. The body is the cause, then what happened to the walk. -->
     <string name="recording_stopped_title">Recording stopped</string>
     <string name="recording_failed_title">Couldn\'t start recording</string>
     <string name="recording_no_permission">Enclose no longer has precise location access, so there\'s nothing to record your route with.</string>
     <string name="recording_unavailable">This device wouldn\'t hand over location updates. Check that location is switched on, then try again.</string>
-    <string name="recording_kept">Everything walked so far is still here — press Stop to claim or discard it.</string>
+    <string name="recording_kept">Everything walked so far is still here — press Stop to claim or save it.</string>
     <string name="recording_nothing">Nothing was recorded, so the walk has been stopped.</string>
 
     <!-- Home. -->
@@ -78,11 +105,11 @@
     <string name="float_refused_title">Couldn\'t float the window</string>
     <string name="float_refused_body">The system turned the request down. Picture-in-picture can be switched off per app — check Settings › Apps › Enclose › Picture-in-picture and try again.</string>
 
-    <!-- Discarding a walk that hasn\'t closed a loop. The confirm button reuses panel_discard_*. -->
+    <!-- Discard, from the Stop dialog: the one way a walk is thrown away. The confirm button reuses panel_discard_*. -->
     <string name="discard_walk_title">Discard this walk?</string>
     <string name="discard_run_title">Discard this run?</string>
     <string name="discard_ride_title">Discard this ride?</string>
-    <string name="discard_body">You haven\'t closed a loop yet, so nothing will be claimed. Your route so far will be lost.</string>
+    <string name="discard_body">Nothing will be claimed or kept, and the route so far will be lost. Save it instead to keep it under Walks that didn\'t count.</string>
 
     <!-- Starting a walk with test mode on (debug builds only). -->
     <string name="test_walk_title">Test mode is on</string>
@@ -105,7 +132,7 @@
     <!-- %1$d metres to leave the start, %2$d metres to cover. -->
     <string name="how_loop_body">Head at least %1$d m away and cover %2$d m or more, then curve back around.</string>
     <string name="how_claim_title">Close it and claim</string>
-    <string name="how_claim_body">Step back into the dashed circle around your start and close the loop. Everything inside becomes yours — overlapping older claims get carved back.</string>
+    <string name="how_claim_body">Step back into the dashed circle around your start and close the loop. Everything inside becomes yours. A loop over older claims is drawn on top of them, and every claim keeps all of its ground.</string>
     <string name="how_own_power">Under your own power only. Enclose watches how you\'re moving — vehicle trips aren\'t recorded, and driving a loop won\'t claim it.</string>
     <string name="how_got_it">Got it</string>
 </resources>

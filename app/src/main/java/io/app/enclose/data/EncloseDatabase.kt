@@ -15,10 +15,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ProfileEntity::class,
         WalkProgressEntity::class,
         WalkProgressPointEntity::class,
+        WalkProgressStepEntity::class,
         OfflineRegionEntity::class,
         VoidedWalkEntity::class,
     ],
-    version = 13,
+    version = 15,
     // Exported to app/schemas so every future migration can be written against
     // the real previous schema and verified, instead of guessed at.
     exportSchema = true,
@@ -169,7 +170,7 @@ abstract class EncloseDatabase : RoomDatabase() {
         }
 
         /**
-         * Adds `voided_walks`: walks the anti-cheat ended, kept rather than
+         * Adds `voided_walks`: walks the old anti-cheat ended, kept rather than
          * erased (see [VoidedWalk]). A new table, so nothing existing changes;
          * the SQL is copied verbatim from schemas/13.json, which Room validates
          * against. Starts empty — voids before this version were already gone.
@@ -182,6 +183,93 @@ abstract class EncloseDatabase : RoomDatabase() {
                         "`voidedAtEpochMs` INTEGER NOT NULL, `distanceMeters` REAL NOT NULL, " +
                         "`reason` TEXT NOT NULL, PRIMARY KEY(`id`))",
                 )
+            }
+        }
+
+        /**
+         * Puts every claim that carving cut back to the shape it was walked
+         * with (see [WalkedShape]). Claims are layers from this version on: a
+         * newer claim is drawn over an older one and takes nothing from it.
+         *
+         * No schema change — 14.json matches 13.json — only data, and only the
+         * columns carving derived: the shape, the area and the stamps.
+         * `ringJson` is read and never written, so the outline as walked is the
+         * one thing this cannot alter.
+         *
+         * A cut claim is found by its stamp *or* by a shape that differs from
+         * its ring, because claims cut before version 12 carry no stamp. One
+         * that was never cut isn't written at all, so its sync status is left
+         * alone; a restored one is marked PENDING, since what it covers has
+         * changed. A row whose JSON can't be read is skipped rather than allowed
+         * to throw — see [TerritoryEntity.walkedColumns].
+         */
+        private val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val restored = mutableListOf<Pair<String, TerritoryEntity.WalkedColumns>>()
+                db.query(
+                    "SELECT id, ringJson, geometryJson, conqueredAtEpochMs, conqueredById, " +
+                        "carvedAtEpochMs FROM territories",
+                ).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val cut = !cursor.isNull(3) || !cursor.isNull(4) || !cursor.isNull(5)
+                        TerritoryEntity.walkedColumns(
+                            ringJson = cursor.getString(1),
+                            geometryJson = cursor.getString(2),
+                            cut = cut,
+                        )?.let { restored += cursor.getString(0) to it }
+                    }
+                }
+                restored.forEach { (id, walked) ->
+                    db.execSQL(
+                        "UPDATE territories SET geometryJson = ?, areaSqMeters = ?, " +
+                            "conqueredAtEpochMs = NULL, conqueredById = NULL, " +
+                            "carvedAtEpochMs = NULL, syncStatus = 'PENDING' WHERE id = ?",
+                        arrayOf<Any>(walked.geometryJson, walked.areaSqMeters, id),
+                    )
+                }
+            }
+        }
+
+        /**
+         * The evidence a walk is judged on at Stop, now that the app no longer
+         * ends walks itself: steps can vouch for movement faster than walking
+         * pace, and a stretch nothing vouches for becomes a straight line in the
+         * claim (see `tracking.StretchJudge`).
+         *
+         *  - `walk_progress_points` gains each fix's time, whether the line to it
+         *    crosses unobserved ground, and the classifier's reading, so a walk
+         *    restored after a process kill is judged on the same evidence.
+         *    Points stored before this have no time, and a stretch with no clock
+         *    is never judged — they count, as they did when they were recorded.
+         *    `afterGap` is `NOT NULL`, so it needs the SQL `DEFAULT 0` for rows
+         *    already there (see [MIGRATION_8_9]).
+         *  - `walk_progress_steps` is new: the step counts of the walk in progress.
+         *    SQL copied verbatim from schemas/15.json.
+         *  - `walks` and `voided_walks` gain the on-foot/bridged split and the
+         *    step counts, nullable: a walk from before this was never judged, and
+         *    null says so where zero would claim it was. `walks` also gains the
+         *    full recorded track, kept when it differs from the claimed ring.
+         *
+         * Every existing row keeps every value it had.
+         */
+        private val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE walk_progress_points ADD COLUMN atEpochMs INTEGER")
+                db.execSQL("ALTER TABLE walk_progress_points ADD COLUMN afterGap INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE walk_progress_points ADD COLUMN motion TEXT")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `walk_progress_steps` (" +
+                        "`seq` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `source` TEXT NOT NULL, " +
+                        "`fromEpochMs` INTEGER NOT NULL, `toEpochMs` INTEGER NOT NULL, " +
+                        "`steps` INTEGER NOT NULL)",
+                )
+                for (table in listOf("walks", "voided_walks")) {
+                    db.execSQL("ALTER TABLE $table ADD COLUMN onFootMeters REAL")
+                    db.execSQL("ALTER TABLE $table ADD COLUMN bridgedMeters REAL")
+                    db.execSQL("ALTER TABLE $table ADD COLUMN phoneSteps INTEGER")
+                    db.execSQL("ALTER TABLE $table ADD COLUMN watchSteps INTEGER")
+                }
+                db.execSQL("ALTER TABLE walks ADD COLUMN trackJson TEXT")
             }
         }
 
@@ -214,6 +302,8 @@ abstract class EncloseDatabase : RoomDatabase() {
                         MIGRATION_10_11,
                         MIGRATION_11_12,
                         MIGRATION_12_13,
+                        MIGRATION_13_14,
+                        MIGRATION_14_15,
                     )
                     .build().also { instance = it }
             }

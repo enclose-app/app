@@ -117,6 +117,10 @@ internal fun Resources.formatDate(epochMs: Long): String =
 internal fun formatDay(epochMs: Long): String =
     localPattern("yyyyMMMd").format(Date(epochMs))
 
+/** A time of day, "14:32", in the locale's own pattern. */
+internal fun formatTimeOfDay(epochMs: Long): String =
+    localPattern("HHmm").format(Date(epochMs))
+
 /**
  * Human-friendly recency for list rows: "Today 14:32", "Yesterday 09:05",
  * "4 days ago", then an absolute date. Reading "3 days ago" in a list is far

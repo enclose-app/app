@@ -17,6 +17,7 @@ espressoCore = "3.7.0"
 playServicesWearable = "20.0.1"
 wearCompose = "1.7.0"
 wearRemoteInteractions = "1.2.0"
+healthServices = "1.1.0"
 
 [libraries]
 # AndroidX core
@@ -52,7 +53,7 @@ room-compiler = { group = "androidx.room", name = "room-compiler", version.ref =
 # Background sync
 work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
 
-# Polygon boolean geometry (overlap subtraction between claims)
+# Polygon geometry (ground shared between overlapping claims; ring validity)
 jts-core = { group = "org.locationtech.jts", name = "jts-core", version.ref = "jts" }
 
 # Watch companion (see :wear and :watchlink)
@@ -60,6 +61,7 @@ play-services-wearable = { group = "com.google.android.gms", name = "play-servic
 wear-compose-material3 = { group = "androidx.wear.compose", name = "compose-material3", version.ref = "wearCompose" }
 wear-compose-foundation = { group = "androidx.wear.compose", name = "compose-foundation", version.ref = "wearCompose" }
 wear-remote-interactions = { group = "androidx.wear", name = "wear-remote-interactions", version.ref = "wearRemoteInteractions" }
+health-services-client = { group = "androidx.health", name = "health-services-client", version.ref = "healthServices" }
 
 # Testing
 junit = { group = "junit", name = "junit", version.ref = "junit" }

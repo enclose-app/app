@@ -28,17 +28,31 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
  * Foreground service that records the walk. It keeps a high-accuracy location
  * stream alive while the app is backgrounded / the screen is off, and feeds
- * every fix into [TrackingManager]. When the manager reports the loop closed,
- * the service stops itself.
+ * every fix into [TrackingManager] — with the phone's step counts beside them,
+ * which are what a stretch faster than walking pace is judged on. When the
+ * manager reports the loop closed, the service stops itself.
  */
 class LocationService : Service() {
 
     private lateinit var fused: FusedLocationProviderClient
+
+    /**
+     * Wall clock minus the monotonic one, fixed for the life of the service, so
+     * every fix and every step count is put on the wall clock the same way. Two
+     * clocks read separately could disagree by more than a stretch is long the
+     * moment the network corrects the time, and steps would land on the wrong
+     * ground.
+     */
+    private val epochBaseMs = System.currentTimeMillis() - SystemClock.elapsedRealtime()
+
+    private var steps: PhoneStepCounter? = null
 
     /** Cancelled in [onDestroy], so nothing outlives the service. */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -69,8 +83,8 @@ class LocationService : Service() {
                 if (now - fixAt > MAX_FIX_AGE_MS) continue
 
                 // Just record the fix; the loop is closed only when the user stops.
-                // Speed and the current activity ride along so the manager can reject
-                // movement that isn't human-powered (see MotionGate).
+                // The current activity rides along as evidence for judging the
+                // stretch the fix ends (see StretchJudge).
                 TrackingManager.onLocation(
                     point = LatLng(loc.latitude, loc.longitude),
                     accuracyMeters = if (loc.hasAccuracy()) loc.accuracy else null,
@@ -78,6 +92,9 @@ class LocationService : Service() {
                     atElapsedMs = fixAt,
                     motion = ActivityMonitor.latest.value,
                     altitudeMeters = if (loc.hasAltitude()) loc.altitude else null,
+                    // Not loc.time: that is the GPS's clock, and the step counts
+                    // these are matched against are on the phone's.
+                    atEpochMs = epochBaseMs + fixAt,
                 )
             }
         }
@@ -144,7 +161,29 @@ class LocationService : Service() {
             stopSelf()
             return
         }
+        startCountingSteps()
         recorder.record(TrackingManager.walk)
+    }
+
+    /**
+     * Count steps beside the fixes. A phone that can't — no sensor, or the
+     * physical-activity permission declined — records the walk the same, judged
+     * on less evidence.
+     */
+    private fun startCountingSteps() {
+        val counter = PhoneStepCounter(this, epochBaseMs, TrackingManager::onSteps)
+        if (!counter.start()) return
+        steps = counter
+        active = counter
+        // Readings wait in the sensor hub until asked for. Asking on a heartbeat
+        // keeps every stretch covered, including the ones with no steps in them,
+        // which a counter that only reports changes would leave silent.
+        scope.launch {
+            while (isActive) {
+                delay(STEP_REPORT_MS)
+                counter.flush()
+            }
+        }
     }
 
     /** True if a walk left behind by a dead process was picked back up. */
@@ -152,19 +191,34 @@ class LocationService : Service() {
         val saved = progressRepository.load() ?: return false
         val activityType = runCatching { ActivityType.valueOf(saved.activityTypeName) }
             .getOrDefault(ActivityType.WALK)
+        val track = saved.points.map { p ->
+            TrackPoint(
+                atEpochMs = p.atEpochMs,
+                afterGap = p.afterGap,
+                motion = MotionEvidence.entries.firstOrNull { it.name == p.motion },
+            )
+        }
+        // A source this build doesn't know (a backup from a newer one) can't be
+        // weighed, so it is left out rather than guessed at.
+        val counted = saved.steps.mapNotNull { s ->
+            val source = StepSource.entries.firstOrNull { it.name == s.source } ?: return@mapNotNull null
+            StepInterval(source, s.fromEpochMs, s.toEpochMs, s.steps)
+        }
         val restored = TrackingManager.restore(
             path = saved.path,
             startedAtMs = saved.startedAtEpochMs,
             activityType = activityType,
             elevationGainMeters = saved.elevationGainMeters,
             movingMs = saved.movingMs,
+            track = track,
+            steps = counted,
         )
         if (!restored) {
             progressRepository.clear()
             return false
         }
-        // The path and totals are already on disk; don't write them again.
-        recorder.adopt(saved.path.size, saved.elevationGainMeters, saved.movingMs)
+        // The path, steps and totals are already on disk; don't write them again.
+        recorder.adopt(saved.points.size, saved.elevationGainMeters, saved.movingMs, counted.size)
         return true
     }
 
@@ -217,6 +271,9 @@ class LocationService : Service() {
             }
         }
         scope.cancel()
+        steps?.stop()
+        if (active === steps) active = null
+        steps = null
         fused.removeLocationUpdates(callback)
         ActivityMonitor.stop(this)
         super.onDestroy()
@@ -266,6 +323,28 @@ class LocationService : Service() {
          * so dropping the stale ones costs none of the real ones.
          */
         private const val MAX_FIX_AGE_MS = 120_000L
+
+        /**
+         * How often the step counter is asked for its count: a third of a
+         * stretch. The stretch just finished is judged before its last steps
+         * arrive, and judged again within this long, when they do.
+         */
+        private const val STEP_REPORT_MS = 10_000L
+
+        /** How long Stop waits for the last count. Long enough for a flush, short enough not to notice. */
+        private const val STEP_FLUSH_TIMEOUT_MS = 1_000L
+
+        /** The counter of the walk being recorded, for [flushSteps]; main thread only. */
+        private var active: PhoneStepCounter? = null
+
+        /**
+         * Collect the steps the sensor is still holding, before a walk is judged
+         * at Stop — without it the last stretch could be judged on steps that
+         * hadn't arrived yet. Returns at once when nothing is counting.
+         */
+        suspend fun flushSteps() {
+            active?.flushAndWait(STEP_FLUSH_TIMEOUT_MS)
+        }
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(

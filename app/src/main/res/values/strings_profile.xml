@@ -15,7 +15,7 @@
 
     <string name="profile_section_conquest">Your conquest</string>
     <string name="profile_stat_territories">Territories</string>
-    <string name="profile_stat_area">Area conquered</string>
+    <string name="profile_stat_area">Area claimed</string>
     <string name="profile_stat_distance">Distance walked</string>
     <string name="profile_stat_loops">Loops closed</string>
     <string name="profile_stat_climb">Elevation climbed</string>
@@ -57,22 +57,16 @@
         <item quantity="other">%1$d claims · since %2$s</item>
     </plurals>
 
-    <!-- Fallen claims. -->
-    <string name="fallen_title">Fallen claims</string>
-    <string name="fallen_body">Ground you took back with a later walk. These left the map but the walks that earned them are kept.</string>
-    <!-- %1$s is the claim that took it, %2$s when (e.g. "Today 14:32", "3 days ago"). -->
-    <string name="fallen_absorbed_by">Absorbed by %1$s · %2$s</string>
-    <!-- %1$s is when (e.g. "Today 14:32", "3 days ago"). -->
-    <string name="fallen_absorbed">Absorbed %1$s</string>
-
-    <!-- Voided walks. -->
+    <!-- Walks kept without a claim: saved at Stop, or ended by the anti-cheat of older versions. -->
     <string name="voided_title">Walks that didn\'t count</string>
-    <string name="voided_body">Ended by the anti-cheat — the movement read as a vehicle, or picked up too far from where it stopped. They can\'t be claimed, but what you walked is kept here.</string>
+    <string name="voided_body">Walks stopped without a claim, and walks older versions of Enclose ended on their own. None of them can be claimed, but what you walked is kept here.</string>
     <!-- %1$s is a distance with its unit, %2$s when. -->
     <string name="voided_row">%1$s · %2$s</string>
     <string name="voided_reason_vehicle">Read as a vehicle</string>
     <string name="voided_reason_too_fast">Too fast for walking</string>
     <string name="voided_reason_gap">Picked up again too far from where it stopped</string>
+    <string name="voided_reason_not_closed">Saved without a claim</string>
+    <string name="voided_reason_bridged">Too much of the loop bridged</string>
     <string name="voided_share">Share as GPX</string>
     <string name="voided_delete">Delete walk</string>
     <!-- Title of the system share sheet. -->

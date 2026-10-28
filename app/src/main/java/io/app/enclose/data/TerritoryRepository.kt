@@ -12,28 +12,16 @@ import kotlinx.coroutines.flow.map
  */
 class TerritoryRepository(private val dao: TerritoryDao) : SnapStore {
 
-    /** Claims still standing. Conquered ones are excluded — see [conquered]. */
+    /** Every claim, newest first. */
     val territories: Flow<List<Territory>> =
-        dao.observeActive().map { list -> list.map { it.toDomain() } }
-
-    /** Claims swallowed whole by a later walk, most recently fallen first. */
-    val conquered: Flow<List<Territory>> =
-        dao.observeConquered().map { list -> list.map { it.toDomain() } }
-
-    /** Persist a newly claimed territory (starts life as PENDING sync). */
-    suspend fun claim(territory: Territory) {
-        dao.upsert(TerritoryEntity.fromDomain(territory))
-    }
+        dao.observeAll().map { list -> list.map { it.toDomain() } }
 
     /**
-     * Persist a new claim and everything it took ground from, atomically.
-     * See [TerritoryDao.applyClaim] for why these can't be separate writes.
+     * Persist a newly claimed territory (starts life as PENDING sync). One row
+     * and nothing else: claims are layers, so a new one changes no other claim.
      */
-    suspend fun applyClaim(claim: Territory, carved: List<Territory>) {
-        dao.applyClaim(
-            claim = TerritoryEntity.fromDomain(claim),
-            carved = carved.map { TerritoryEntity.fromDomain(it) },
-        )
+    suspend fun claim(territory: Territory) {
+        dao.upsert(TerritoryEntity.fromDomain(territory))
     }
 
     suspend fun delete(id: String) = dao.delete(id)

@@ -77,6 +77,12 @@ private const val SEARCH_THRESHOLD = 6
 fun TerritoryListSheet(
     territories: List<Territory>,
     /**
+     * Ground the claims cover between them, shared ground counted once. Passed
+     * in rather than added up here: claims are layers and can overlap, and
+     * measuring the overlap is JTS work the view model does off the main thread.
+     */
+    totalAreaSqMeters: Double,
+    /**
      * Climb per claim, keyed by territory id. Kept as a lookup rather than a
      * field on [Territory] because elevation belongs to the walk, and claims
      * made before altitude was recorded are simply absent from the map.
@@ -138,7 +144,7 @@ fun TerritoryListSheet(
                 )
                 StatTile(
                     label = stringResource(R.string.list_stat_area),
-                    value = res.formatArea(territories.sumOf { it.areaSqMeters }),
+                    value = res.formatArea(totalAreaSqMeters),
                     modifier = Modifier.weight(1f),
                 )
                 StatTile(

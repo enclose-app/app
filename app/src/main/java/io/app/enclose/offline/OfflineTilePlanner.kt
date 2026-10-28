@@ -46,7 +46,7 @@ object OfflineTilePlanner {
      */
     fun plan(territories: List<Territory>): List<PlannedRegion> =
         territories
-            .filter { it.isActive && it.city.isNotBlank() && it.ring.isNotEmpty() }
+            .filter { it.city.isNotBlank() && it.ring.isNotEmpty() }
             .groupBy { it.city.trim() }
             .mapNotNull { (city, claims) -> regionFor(city, claims.flatMap { it.ring }) }
 

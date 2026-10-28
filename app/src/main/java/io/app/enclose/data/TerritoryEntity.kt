@@ -14,7 +14,7 @@ data class TerritoryEntity(
     val name: String,
     /** Original walked ring, JSON of [{lat,lng}, ...]. */
     val ringJson: String,
-    /** Effective claimed geometry: JSON of [ [ [ {lat,lng} ] ] ] (multipolygon). */
+    /** Claimed geometry: JSON of [ [ [ {lat,lng} ] ] ] (multipolygon), the ring as its only polygon. */
     val geometryJson: String,
     val areaSqMeters: Double,
     val perimeterMeters: Double,
@@ -26,15 +26,19 @@ data class TerritoryEntity(
     val city: String = "",
     /** Reverse-geocoded country, or blank until it resolves. */
     val country: String = "",
-    /** Set when a later claim swallowed this one whole; null while it stands. */
+    /**
+     * When a later claim swallowed this one whole, from the days when claims
+     * carved each other. Never written now, and cleared by `MIGRATION_13_14` —
+     * the column stays only because removing one means rebuilding the table.
+     */
     val conqueredAtEpochMs: Long? = null,
-    /** The territory that took this one. */
+    /** The claim that swallowed this one. Never written now; see [conqueredAtEpochMs]. */
     val conqueredById: String? = null,
     /** Road-matched boundary, JSON of [{lat,lng}, ...]. Blank until matched. */
     val snappedJson: String = "",
     /** When matching was last attempted; null means never. */
     val snappedAtEpochMs: Long? = null,
-    /** When a later claim last carved this one; null while it stands as walked. */
+    /** When a later claim last carved this one. Never written now; see [conqueredAtEpochMs]. */
     val carvedAtEpochMs: Long? = null,
     val syncStatus: SyncStatus,
 ) {
@@ -52,17 +56,36 @@ data class TerritoryEntity(
         notes = notes,
         city = city,
         country = country,
-        conqueredAtEpochMs = conqueredAtEpochMs,
-        conqueredById = conqueredById,
         // Guarded, not passed straight in: `JSONArray("")` throws, and every row
         // written before this column existed holds "". Without this, the first
         // read after upgrading would throw inside a Flow collector — for every
         // user, on every territory they have ever walked.
         snappedRing = if (snappedJson.isBlank()) emptyList() else ringFromJson(snappedJson),
         snappedAtEpochMs = snappedAtEpochMs,
-        carvedAtEpochMs = carvedAtEpochMs,
         syncStatus = syncStatus,
     )
+
+    /**
+     * This row with the shape it was walked with, or this row unchanged when it
+     * already has it. What a backup restore writes, so a file saved while claims
+     * still carved each other can't bring a cut claim back (see [WalkedShape]).
+     */
+    fun asWalked(): TerritoryEntity {
+        val cut = conqueredAtEpochMs != null || conqueredById != null || carvedAtEpochMs != null
+        val walked = walkedColumns(ringJson, geometryJson, cut) ?: return this
+        return copy(
+            geometryJson = walked.geometryJson,
+            areaSqMeters = walked.areaSqMeters,
+            conqueredAtEpochMs = null,
+            conqueredById = null,
+            carvedAtEpochMs = null,
+            // What the claim covers has changed, which a backend would need to hear.
+            syncStatus = SyncStatus.PENDING,
+        )
+    }
+
+    /** The two columns carving derived from the ring, as they are written back. */
+    data class WalkedColumns(val geometryJson: String, val areaSqMeters: Double)
 
     companion object {
         /** The old default territory color, before the purple rebrand. */
@@ -80,17 +103,35 @@ data class TerritoryEntity(
             notes = t.notes,
             city = t.city,
             country = t.country,
-            conqueredAtEpochMs = t.conqueredAtEpochMs,
-            conqueredById = t.conqueredById,
             // Carried through here as well as in toDomain(), and both matter:
             // `upsert` is a whole-row REPLACE, so a field missing from this
             // mapping is silently reset by the next rename, recolor or notes
             // edit — with no compile error to catch it.
             snappedJson = if (t.snappedRing.isEmpty()) "" else ringToJson(t.snappedRing),
             snappedAtEpochMs = t.snappedAtEpochMs,
-            carvedAtEpochMs = t.carvedAtEpochMs,
             syncStatus = t.syncStatus,
         )
+
+        /**
+         * The derived columns that put a claim back to the shape it was walked
+         * with, or null when it already has that shape. The codec half of
+         * [WalkedShape], shared by `MIGRATION_13_14` and [asWalked].
+         *
+         * Null as well when the ring can't be read. A row this can't parse is
+         * left exactly as it is rather than allowed to throw: a migration that
+         * throws fails every launch, and a restore that throws restores nothing.
+         * An unreadable shape is not a reason to skip, though — the ring is what
+         * the shape is rebuilt from.
+         */
+        fun walkedColumns(ringJson: String, geometryJson: String, cut: Boolean): WalkedColumns? {
+            val ring = runCatching { ringFromJson(ringJson) }.getOrNull() ?: return null
+            val polygons = runCatching { polygonsFromJson(geometryJson) }.getOrDefault(emptyList())
+            val shape = WalkedShape.restore(ring, polygons, cut) ?: return null
+            return WalkedColumns(
+                geometryJson = polygonsToJson(shape.polygons),
+                areaSqMeters = shape.areaSqMeters,
+            )
+        }
 
         fun ringToJson(ring: List<LatLng>): String {
             val arr = JSONArray()

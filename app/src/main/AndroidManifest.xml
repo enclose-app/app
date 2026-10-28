@@ -132,9 +132,10 @@
             android:foregroundServiceType="location" />
 
         <!--
-          Stop from the watch. Exported because Play Services delivers it, and it
-          only hears messages from apps signed with the same key on paired
-          devices. Honoured only when the phone's own walk is ready to close.
+          Stop, and the steps it counted, from the watch. Exported because Play
+          Services delivers it, and it only hears messages from apps signed with
+          the same key on paired devices. Stop is honoured only when the phone's
+          own walk is ready to close.
         -->
         <service
             android:name=".watch.WatchCommandService"
@@ -145,6 +146,14 @@
                     android:scheme="wear"
                     android:host="*"
                     android:path="/enclose/stop" />
+            </intent-filter>
+            <!-- The steps the watch counted: evidence for the walk, see WatchSteps. -->
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:path="/enclose/steps" />
             </intent-filter>
         </service>
 

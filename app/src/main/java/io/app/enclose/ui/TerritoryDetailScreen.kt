@@ -1,6 +1,7 @@
 package io.app.enclose.ui
 
 import io.app.enclose.R
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import android.content.Context
 import android.content.Intent
@@ -396,7 +397,8 @@ private fun WalkCard(walk: Walk?) {
     val moving = walk.movingMs?.takeIf { it > 0 }
     val pacing = walk.pacingMs
     val hasClimb = walk.elevationGainMeters > 0.0
-    if (duration == null && !hasClimb) return
+    val steps = stepsLine(walk)
+    if (duration == null && !hasClimb && steps == null) return
 
     SectionCard(title = stringResource(R.string.territory_walk_title)) {
         if (duration != null) {
@@ -413,6 +415,25 @@ private fun WalkCard(walk: Walk?) {
         if (hasClimb) {
             DetailRow(stringResource(R.string.territory_walk_climb), res.formatClimb(walk.elevationGainMeters))
         }
+        if (steps != null) DetailRow(stringResource(R.string.territory_walk_steps), steps)
+    }
+}
+
+/**
+ * The steps behind the claim, from each witness that counted them. Null when
+ * neither did — a phone without the sensor or the permission, or a walk from
+ * before steps were kept — rather than a zero nobody counted.
+ */
+@Composable
+private fun stepsLine(walk: Walk): String? {
+    val phone = walk.phoneSteps
+    val watch = walk.watchSteps
+    return when {
+        phone != null && watch != null ->
+            pluralStringResource(R.plurals.territory_walk_steps_both, phone, phone, watch)
+        phone != null -> pluralStringResource(R.plurals.territory_walk_steps_phone, phone, phone)
+        watch != null -> pluralStringResource(R.plurals.territory_walk_steps_watch, watch, watch)
+        else -> null
     }
 }
 

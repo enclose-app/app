@@ -10,10 +10,9 @@ import io.app.enclose.BuildConfig
 import io.app.enclose.EncloseApp
 import io.app.enclose.export.Backup
 import io.app.enclose.export.GpxImporter
-import io.app.enclose.export.ImportClosure
 import io.app.enclose.data.BackupReport
-import io.app.enclose.data.Conquest
 import io.app.enclose.data.MapCamera
+import io.app.enclose.data.Footprint
 import io.app.enclose.data.SyncStatus
 import io.app.enclose.data.Territory
 import io.app.enclose.data.Walk
@@ -23,9 +22,10 @@ import io.app.enclose.offline.OfflineTilesScheduler
 import io.app.enclose.sync.SyncScheduler
 import io.app.enclose.tracking.ActivityType
 import io.app.enclose.tracking.RecordingFailure
-import io.app.enclose.tracking.VoidReason
 import io.app.enclose.tracking.LocationService
+import io.app.enclose.tracking.LoopClosure
 import io.app.enclose.tracking.TrackingManager
+import io.app.enclose.watch.WatchStepRequests
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.stateIn
@@ -62,15 +63,15 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     private val settings = (app as EncloseApp).settings
 
     init {
-        // Saving each closed loop and stopping the GPS on a void are done in
-        // EncloseApp, not here: both have to happen with no screen open (a walk
-        // stopped from the watch, a void while the phone is pocketed). What stays
-        // here is what only matters to a screen.
+        // Saving each closed loop and keeping each walk stopped without a claim
+        // are done in EncloseApp, not here: both have to happen with no screen
+        // open (a walk stopped from the watch). What stays here is what only
+        // matters to a screen.
         //
-        // A walk voided for vehicle movement: hand the reason to the UI to explain.
+        // A walk kept without a claim: say where it went, and why.
         viewModelScope.launch {
-            TrackingManager.voidEvents.collect { reason ->
-                _voidedWalk.value = reason
+            TrackingManager.unclaimedWalks.collect { walk ->
+                _unclaimedWalk.value = walk
             }
         }
         // The recorder couldn't start (or couldn't carry on). The service has
@@ -93,6 +94,25 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = emptyList(),
         )
+
+    /**
+     * The ground every claim covers between them, shared ground counted once —
+     * the total the map's summary and the claims list show. Claims are layers
+     * and can overlap, so adding up their areas would count a park walked twice
+     * as two parks.
+     *
+     * Measured here rather than in composition: it is JTS work (see
+     * [Footprint]), far too slow for the frame clock once the map fills up.
+     */
+    val claimedGroundSqMeters: StateFlow<Double> =
+        repository.territories
+            .map { Footprint.areaSqMeters(it) }
+            .flowOn(Dispatchers.Default)
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = 0.0,
+            )
 
     /**
      * The recorded walks, keyed by id. A claim shares its id with the walk that
@@ -274,21 +294,23 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     val testMode: StateFlow<Boolean> = _testMode.asStateFlow()
 
     /**
-     * Set when a walk was discarded because the movement wasn't human-powered.
-     * The UI shows an explanation and calls [dismissVoidedWalk].
+     * The walk just stopped without a claim — kept, under "Walks that didn't
+     * count", never lost. The UI says where it went, and why it couldn't be
+     * claimed when that wasn't the user's own choice, then calls
+     * [dismissUnclaimedWalk].
      */
-    private val _voidedWalk = MutableStateFlow<VoidReason?>(null)
-    val voidedWalk: StateFlow<VoidReason?> = _voidedWalk.asStateFlow()
+    private val _unclaimedWalk = MutableStateFlow<TrackingManager.UnclaimedRecording?>(null)
+    val unclaimedWalk: StateFlow<TrackingManager.UnclaimedRecording?> = _unclaimedWalk.asStateFlow()
 
-    fun dismissVoidedWalk() {
-        _voidedWalk.value = null
+    fun dismissUnclaimedWalk() {
+        _unclaimedWalk.value = null
     }
 
     /**
      * Set when the recorder couldn't run at all. The UI explains it and calls
      * [dismissRecordingFailure].
      *
-     * Distinct from [voidedWalk]: nothing was walked and nothing was thrown away.
+     * Distinct from [unclaimedWalk]: nothing was walked and nothing was kept.
      * This is the app admitting it can't do the thing it just said it was doing,
      * which it previously did by stopping the location service in silence and
      * leaving a walk on screen that could never record a metre.
@@ -336,19 +358,13 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
             colorHex = colorHex,
             syncStatus = SyncStatus.PENDING,
         )
-        val existing = territories.value
         TrackingManager.clearPending()
         viewModelScope.launch {
             // Mark the already-recorded walk as claimed (race-safe upsert).
             walkRepository.saveClaimed(pending.toWalk(claimed = true))
-            // JTS boolean geometry runs once per existing claim and gets slower
-            // as the map fills up — far too much to put on the frame clock.
-            val carved = withContext(Dispatchers.Default) {
-                Conquest.carve(existing, territory, territory.claimedAtEpochMs)
-            }
-            // One transaction: carving is justified by the new claim, so the two
-            // must never be able to land apart.
-            repository.applyClaim(territory, carved)
+            // The claim on its own. Claims are layers: one that overlaps older
+            // claims is drawn over them and takes nothing from any of them.
+            repository.claim(territory)
             SyncScheduler.requestSync(getApplication())
             _claimEvents.tryEmit(territory)
             // Name the city afterwards: it needs a network, and the claim — the
@@ -391,6 +407,9 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     private val _injectedWalk = MutableStateFlow(false)
     val injectedWalk: StateFlow<Boolean> = _injectedWalk.asStateFlow()
 
+    /** Stop is waiting for the watch's last steps; the panel says so in place of its buttons. */
+    val askingWatch: StateFlow<Boolean> = WatchStepRequests.asking
+
     fun startWalk() = beginWalk(injected = _testMode.value)
 
     /**
@@ -409,16 +428,45 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
         if (!injected) LocationService.start(getApplication())
     }
 
-    fun stopWalk() {
-        if (!_injectedWalk.value) LocationService.stop(getApplication())
-        // Claims the loop if it's ready to close; otherwise abandons the walk.
-        TrackingManager.finishWalk()
+    /**
+     * Stop, and let the verdict decide: claim the loop — closed here, or the
+     * last one closed if the walker is somewhere else — or keep the walk without
+     * a claim. Never throws a walk away; only [cancelWalk] does that.
+     */
+    fun stopWalk() = endWalk(askWatch = true) { TrackingManager.finishWalk() }
+
+    /** Stop and keep the walk as a record, claiming nothing: Save in the Stop dialog. */
+    fun saveWalk() = endWalk(askWatch = false) { TrackingManager.saveWalk() }
+
+    /**
+     * The loop this walk closed earlier, or null — what the Stop dialog offers to
+     * claim when the walker is away from the start. Asked when the dialog opens:
+     * it is a scan of the whole path, too much to run on every fix.
+     */
+    fun earlierLoop(): TrackingManager.EarlierLoop? = TrackingManager.earlierLoop()
+
+    /**
+     * @param askWatch wait for the watch's last steps when a stretch is in doubt
+     *   — worth it for a claim, which they can change, and not for Save, which
+     *   claims nothing either way.
+     */
+    private fun endWalk(askWatch: Boolean, finish: () -> Unit) {
+        val injected = _injectedWalk.value
+        // The application's scope, on the main thread every fix arrives on: the
+        // walk has to end even if this screen is torn down while waiting for the
+        // last steps, or it would carry on recording with nobody to stop it.
+        (getApplication() as EncloseApp).applicationScope.launch(Dispatchers.Main.immediate) {
+            // The last few seconds of steps are still in the sensor, and the last
+            // stretch is judged on them. No wait at all when nothing is counting.
+            if (!injected) WatchStepRequests.gatherLastSteps(getApplication(), askWatch)
+            finish()
+            if (!injected) LocationService.stop(getApplication())
+        }
     }
 
     /**
-     * Abandon the walk in progress without claiming. Distinct from [stopWalk],
-     * which claims when the loop is closable — the UI asks for confirmation
-     * before calling this so an unfinished route is never silently thrown away.
+     * Abandon the walk in progress, keeping nothing — Discard, which the UI puts
+     * behind a confirmation. The only way a walk is ever thrown away.
      */
     fun cancelWalk() {
         if (!_injectedWalk.value) LocationService.stop(getApplication())
@@ -577,9 +625,9 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
             // thresholds have to be the relaxed ones.
             beginWalk(injected = true)
             // End on the walker's last return to the start, not wherever the
-            // recorder was finally switched off — see ImportClosure. Asked after
+            // recorder was finally switched off — see LoopClosure. Asked after
             // beginWalk, which is what puts the relaxed thresholds in force.
-            val endIndex = ImportClosure.endIndex(
+            val endIndex = LoopClosure.endIndex(
                 points.map { it.position },
                 closeRadiusMeters = TrackingManager.closureRadiusMeters,
                 leaveRadiusMeters = TrackingManager.leaveStartRadiusMeters,
@@ -593,8 +641,8 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
             }
             _gpxImport.value = GpxImport.Replaying(done = 0, total = replayed.size)
             replayed.forEachIndexed { index, point ->
-                // No timestamp: the motion gate is bypassed, as with map taps.
-                // An imported track jumps between fixes by design and would
+                // No timestamp, so — as with map taps — no stretch is judged. An
+                // imported track jumps between fixes by design and would
                 // otherwise read as a vehicle on its very first segment.
                 TrackingManager.onLocation(
                     point = point.position,
@@ -647,7 +695,7 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
                             // few metres or a few kilometres were missing.
                         res.getString(
                             R.string.import_never_closes,
-                            res.formatDistance(ImportClosure.endGapMeters(points.map { it.position })),
+                            res.formatDistance(LoopClosure.endGapMeters(points.map { it.position })),
                             res.formatDistance(TrackingManager.closureRadiusMeters),
                         )
                     },
@@ -1044,4 +1092,9 @@ internal fun TrackingManager.PendingClaim.toWalk(claimed: Boolean) = Walk(
     movingMs = movingMs,
     claimed = claimed,
     syncStatus = SyncStatus.PENDING,
+    onFootMeters = onFootMeters,
+    bridgedMeters = bridgedMeters,
+    phoneSteps = phoneSteps,
+    watchSteps = watchSteps,
+    track = recordedTrack,
 )

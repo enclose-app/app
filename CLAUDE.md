@@ -5,8 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this app is
 
 Enclose is an Android app (Kotlin, Compose, MapLibre). You walk a
-loop; when the loop closes you claim the enclosed area as a "territory". A new
-claim **conquers** overlapping older claims — their geometry is carved away.
+loop; when the loop closes you claim the enclosed area as a "territory". Claims
+are **layers**: a new one that overlaps older claims is drawn on top of them,
+and every claim keeps the whole shape and area it was walked with.
 Everything works fully offline; sync to a backend is an unimplemented seam.
 
 Three modules: `:app` is the phone app and nearly all of the code; `:wear` is the
@@ -30,8 +31,8 @@ get wrong. Prefer them over improvising:
 ./gradlew testDebugUnitTest :watchlink:test assembleDebug   # the everyday check
 ./gradlew :app:installDebug                 # phone app (installDebug alone hits every device, watch included)
 ./gradlew :wear:installDebug                # watch app — target the watch with ANDROID_SERIAL
-./gradlew testDebugUnitTest --tests "io.app.enclose.data.ConquestTest"
-./gradlew testDebugUnitTest --tests "*.ConquestTest.a claim never conquers itself"
+./gradlew :app:testDebugUnitTest --tests "io.app.enclose.data.FootprintTest"   # one module: a filter that matches nothing in :wear fails it
+./gradlew :app:testDebugUnitTest --tests "*.FootprintTest.the same loop claimed twice counts once"
 ./gradlew lintDebug                         # Android lint (no ktlint/detekt configured)
 ./gradlew connectedDebugAndroidTest         # instrumented tests (needs a device)
 ```
@@ -58,12 +59,20 @@ test that*, leaving the Android shell thin:
 
 | Pure unit | Tested by | Kept testable by |
 |---|---|---|
-| `MotionGate` | `MotionGateTest` | normalising Play Services types into `MotionSample` |
-| `Conquest` | `ConquestTest` | taking domain objects, returning what changed |
+| `StretchJudge` | `StretchJudgeTest` | a path, its `TrackPoint`s and a `StepLog` in, labels out |
+| `StepLog` | `StepLogTest` | step intervals in, a count or null out |
+| `StepCounterIntervals` | `StepCounterIntervalsTest` | sensor totals as plain Longs, split from `PhoneStepCounter` |
+| `LoopVerdict` | `LoopVerdictTest` | points, times and steps in, a claim or a record out |
+| `LoopClosure` | `LoopClosureTest` | points in, the index of the last return out |
+| `MotionEvidence.of` | `MotionEvidenceTest` | takes the normalised `MotionSample` |
+| `Footprint` | `FootprintTest` | territories in, square metres out |
+| `WalkedShape` | `WalkedShapeTest` | a ring and a stored shape in, the walked shape out |
 | `Coverage` | `CoverageTest` | no Android or DB types |
 | `Place` | `PlaceTest` | separated from the `Geocoder` call |
 | `WalkProgressRecorder` | `WalkProgressRecorderTest` | the `WalkProgressStore` interface seam |
 | `TrackingManager.restore` | `TrackingManagerRestoreTest` | manager has no Android/DB deps |
+| `TrackingManager.finishWalk`, `saveWalk` | `TrackingManagerStopTest` | manager has no Android/DB deps |
+| `TrackingManager.onSteps`, `hasDoubt` | `TrackingManagerStepsTest` | manager has no Android/DB deps |
 | `ElevationAccumulator` | `ElevationAccumulatorTest` | altitude in, metres out — no Location |
 | `PauseTracker` | `PauseTrackerTest` | takes the normalised `MotionSample` |
 | `Passport` | `PassportTest` | takes domain objects only |
@@ -88,11 +97,14 @@ test that*, leaving the Android shell thin:
 | `Json` | `JsonTest` | hand-rolled, so no `org.json` |
 | `Backup` | `BackupTest` | entities are plain data classes |
 | `watchStatusOf`, `shouldStartFromWatch` | `WatchStatusOfTest` | walk state in, `WatchStatus` out |
+| `stepsFromWatch` | `StepsFromWatchTest` | walk state and `WatchSteps` in, intervals out |
 | `WatchStatus` (`:watchlink`) | `WatchStatusTest` | the field codec, as plain maps |
 | `WatchFormat` (`:watchlink`) | `WatchFormatTest` | numbers in, strings out |
 | `watchMapOf`, `watchClaimsNear`, `argbOf` | `WatchMapOfTest` | walk and territories in, protocol out |
 | `WatchMap`, `WatchClaims`, `WatchGeo` (`:watchlink`) | `WatchMapTest` | the coordinate codecs, as plain maps |
+| `WatchSteps` (`:watchlink`) | `WatchStepsTest` | the packed step codec, as plain maps |
 | `ReadyAlert` (`:wear`) | `ReadyAlertTest` | a boolean and a status, no vibrator |
+| `StepWitness` (`:wear`) | `StepWitnessTest` | a status in, what to register and hold out |
 
 JTS is pure Java and works fine in JVM tests. `TrackingManager` is a singleton
 `object`, so tests touching it must reset state in `@After`.
@@ -130,24 +142,44 @@ This is the core flow and it spans four files:
 
 1. `LocationService` (foreground service, `FOREGROUND_SERVICE_TYPE_LOCATION`)
    streams fused-location fixes and forwards each one — with accuracy, speed,
-   monotonic timestamp, and the latest `ActivityMonitor` sample — to
-   `TrackingManager.onLocation`.
+   monotonic and wall-clock timestamps, and the latest `ActivityMonitor` sample —
+   to `TrackingManager.onLocation`. Beside it, `PhoneStepCounter` reads the
+   hardware step counter and hands an interval to `TrackingManager.onSteps` every
+   10 s, zero-step ones included. Both are timed off one epoch base per service
+   (`System.currentTimeMillis() - SystemClock.elapsedRealtime()`), so a fix and
+   the steps taken reaching it are on the same clock.
 2. `TrackingManager` is a stateful `object` holding the in-progress walk. It has
    **no Android or DB dependencies by design**, so it can be reasoned about and
    tested in isolation. It exposes `walk: StateFlow<WalkState>`,
-   `pendingClaim: StateFlow<PendingClaim?>` and `voidEvents: SharedFlow<VoidReason>`.
-3. Loops never close automatically. `WalkState.readyToClose` says whether
-   stopping *now* would produce a valid loop (left the start zone, walked past
-   the minimum perimeter, currently within the closing radius); pressing Stop
-   calls `finishWalk()`, which either claims or abandons.
+   `pendingClaim: StateFlow<PendingClaim?>` and
+   `unclaimedWalks: SharedFlow<UnclaimedRecording>`.
+3. Loops never close automatically, and **the app never ends a walk** — see
+   "Anti-cheat" below. `WalkState.readyToClose` says whether stopping *now* would
+   close the loop here (left the start zone, walked the minimum perimeter on foot,
+   currently within the closing radius). Only the walker ends a walk:
+   - **Stop** calls `finishWalk()`, which hands everything recorded to
+     `LoopVerdict`. It claims the loop that closed here or — stopped away from the
+     start — the one that closed at the last return to it, or keeps the walk
+     without a claim on `unclaimedWalks`. Away from the start the panel opens
+     `StopDialog` first: claim that earlier loop (`earlierLoop()` says whether
+     there is one, and when it closed), Save, Keep walking, or Discard.
+   - **Save** (`saveWalk()`) keeps it without a claim, and is what the dialog
+     leads with when no loop closed.
+   - **Discard** (`cancelWalk()`, behind a confirmation) is the one way a walk is
+     lost.
+
+   Stop flushes the step counter first (`LocationService.flushSteps`, capped at
+   1 s) so the last stretch is judged on its steps, and never hangs on a sensor —
+   and, when a stretch is in doubt, asks the watch for its last ones too
+   (`WatchStepRequests.gatherLastSteps`; see "Watch companion").
 4. What `TrackingManager` deliberately can't do is split by whether it needs a
    screen. `EncloseApp` (on `applicationScope`, for the life of the process)
-   **persists every closed loop** and **stops `LocationService` on a void** —
-   a walk can end with the map screen gone (Stop on the watch, a void while the
-   phone is pocketed), and these two used to live in the view model, where such
-   a loop was never saved and the GPS stayed on. `EncloseViewModel` keeps the
-   rest: starting/stopping the service from the UI, the claim itself, and
-   explaining a void.
+   **persists every closed loop** and **keeps every walk stopped without a
+   claim** — a walk can end with the map screen gone (Stop on the watch), and
+   these used to live in the view model, where such a walk was never saved.
+   `EncloseViewModel` keeps the rest: starting and stopping the service from the
+   UI (ending a walk runs on `applicationScope`, so it survives the screen going),
+   the claim itself, and explaining a walk kept without one.
 
 **Starting a walk is checked, not assumed.** `startWalk()` used to flip
 `isTracking` and hope: if the service then couldn't subscribe to location it
@@ -188,12 +220,12 @@ Two consequences to preserve when editing:
   Not the view model: it must run with no screen open.
   `confirmClaim` then re-saves it with `claimed = true` using the *same id*,
   which is also the `Territory` id — walks and territories are linked by id.
-- **`confirmClaim` carves overlaps** via `Conquest.carve` (pure, tested): a
-  partly-covered territory is re-saved with reduced geometry and recomputed area;
-  a completely covered one is marked **conquered**, not deleted. The whole result
-  is written with `repository.applyClaim`, which is one Room `@Transaction` —
-  carving is justified by the new claim, so the two must never land apart. The
-  JTS work runs on `Dispatchers.Default`; it is far too slow for the frame clock.
+- **`confirmClaim` saves the claim and nothing else.** Claims are layers: one
+  that overlaps older claims is drawn over them and takes nothing from any of
+  them, so no other row is written. (Claims used to carve each other —
+  `Conquest.carve` cut the shared ground out of older claims and marked one
+  covered whole as conquered. `MIGRATION_13_14` put every cut claim back to its
+  walked shape; see "Nothing the user walked for is ever destroyed".)
 
 ### Watch companion
 
@@ -213,14 +245,19 @@ apps compile against one definition.
     the tolerance doubled until it fits `WatchMap.MAX_POINTS` — coarsened, never
     truncated), start, position and closing radius, at most every 5 s.
   - `/enclose/claims` — `WatchClaims`: the nearest `MAX_CLAIMS` within 6 km of
-    the walk's start, as `SnapDisplay` draws them. Only queried while a walk has
-    a start, so an idle process holds no Room observer open.
+    the walk's start, as `SnapDisplay` draws them, sent oldest first — the
+    watch draws them in arrival order, so that stacks the newest on top, as on
+    the phone. Only queried while a walk has a start, so an idle process holds
+    no Room observer open.
   Coordinates travel as `Long` 1e-7° (about 1 cm, exact both ways), not floats.
-- **Stop:** the watch sends `/enclose/stop`; `WatchCommandService` honours it
-  **only if the phone's live walk is `readyToClose`** (`canStopFromWatch`). Stop
-  on a walk that isn't ready discards it, and that stays a phone decision behind
-  its confirmation dialog. The watch only shows Stop when ready, but the phone
-  re-checks, since the watch's status can be seconds old.
+- **Stop:** the watch sends `/enclose/stop`, and offers it **at any point of a
+  walk** (`canStopFromWatch`). Stop claims the loop that closed, here or at the
+  last return to the start, and keeps a walk with none, so it throws nothing
+  away. Ready to close it is *Stop & claim*; until then it is *End walk*, behind
+  a second tap, because a sleeve brushing a wrist shouldn't end an hour's walk.
+  `WatchCommandService` re-checks the phone's live walk before acting, since the
+  watch's status can be seconds old. (It used to be offered only when ready,
+  because Stop on a walk that wasn't ready discarded it.)
 - **Start:** not a message. Android refuses to start location tracking from the
   background, so the watch opens the phone app at `enclose://walk/start` and
   `MainActivity` starts the walk behind the same checks as the Start button
@@ -229,7 +266,37 @@ apps compile against one definition.
   `trackUriFrom` ignores the `enclose` scheme so neither is mistaken for a GPX.
 - **Ready-to-close buzz:** `StatusListenerService` on the watch buzzes once on
   the step into the closing radius (`ReadyAlert`), app open or not, with a
-  tap-to-stop notification that clears when Stop would no longer work.
+  tap-to-stop notification that clears when stopping would no longer claim. It
+  also buzzes **once per loop** when a stretch turns doubtful after that loop
+  closed (`ReadyAlert.shouldWarnDoubt`, `WatchStatus.loopClosedAtEpochMs`):
+  "Looks like a vehicle. Your loop closed at 14:32." Once per loop, because a bus
+  slows at every stop and a buzz each time it pulls away is a watch that won't
+  stop vibrating.
+- **Steps, the walk's second witness.** The watch counts with Health Services'
+  *passive* STEPS (`StepRecorder`), registered only while the status says
+  WALKING and cleared when it doesn't; the platform batches deliveries to
+  `StepListenerService`, so nothing runs between batches. After each batch the
+  watch sends `/enclose/steps` (`WatchSteps`) carrying **every interval it holds
+  for the walk**, not only the new ones, so a lost message is repaired by the
+  next; the phone drops repeats and overlaps (`TrackingManager.onSteps`). They
+  match a walk by its `startedAtEpochMs` (`stepsFromWatch`), and steps counted
+  before the first fix are adopted by it (`StepWitness.follow`). **They can only
+  help**: `StretchJudge` takes the watch's verdict only where it beats the
+  phone's, so a flat, absent or unpermitted watch costs a walk nothing.
+  Two details are load-bearing. Intervals travel **packed into one byte array**
+  (24 bytes each; `MAX_INTERVALS` is 48 KB), because how the Data Layer encodes an
+  array of longs is unknown and a message over 100 KB is not sent at all. And a
+  registration is tagged with the boot count and `versionCode` and **made again
+  under any other**: Health Services forgets one across a reboot, and the watch
+  would otherwise believe it was counting for the rest of the walk.
+- **Stop waits for the watch — briefly, and only when it can matter.**
+  `WatchStepRequests.gatherLastSteps` (both Stop paths: the panel and
+  `WatchCommandService`) flushes the phone's counter, then, if `hasDoubt()` says a
+  stretch would be bridged or set aside and a watch is connected, sends
+  `/enclose/steps/flush` naming the walk and waits up to 10 s for the answer marked
+  `flushed`. The panel shows "Asking your watch…" in place of its buttons. Save
+  doesn't wait — it claims nothing either way — and a watch that isn't counting
+  answers at once.
 - **The watch map** (`WalkMap`) is MapLibre on the watch with the phone's dark
   OpenFreeMap style. It uses **`android-sdk-opengl`**, not the phone's default
   artifact: that one renders with Vulkan, which the Wear emulator lacks
@@ -246,29 +313,38 @@ apps compile against one definition.
   is in the encoded fields; bump it when a field changes meaning, and a
   mismatched watch shows "Update Enclose" instead of misreading the walk.
 
-What tests can't reach: the Data Layer itself, `RemoteActivityHelper`, and the
-listener services. Testing those needs a phone and watch paired through the
+What tests can't reach: the Data Layer itself, `RemoteActivityHelper`, Health
+Services, and the listener services. Testing those needs a phone and watch paired through the
 Wear OS app (for emulators: Android Studio's Wear OS pairing assistant).
 
 ### Nothing the user walked for is ever destroyed
 
-Three separate paths used to lose territories, and all three are now closed.
-Treat this as a standing constraint rather than a past fix:
+Several paths used to lose territories, and all of them are now closed. Treat
+this as a standing constraint rather than a past fix:
 
-- **Conquest archives, never deletes.** A swallowed claim keeps its `ring` and
-  the geometry it held when it fell, plus `conqueredAtEpochMs`/`conqueredById`.
-  `observeActive()` hides it from the map; `observeConquered()` feeds the
-  "Fallen claims" history on the profile screen. Only an explicit user delete
-  (which has an undo) removes a row.
-- **The claim write is atomic** — see `applyClaim` above.
+- **No claim takes ground from another.** Claims are layers: a newer one is
+  drawn on top, the older keeps its whole shape and area, and one lying
+  entirely under a newer claim is still on the map and reached from the claims
+  list. Claims used to carve each other, and `MIGRATION_13_14` restored every
+  claim that was cut — found by its carve/conquest stamp *or* by a shape that
+  differs from its ring, since claims cut before version 12 carry no stamp.
+  `WalkedShape` (pure, tested) is the rule, and backup restore goes through it
+  too (`TerritoryEntity.asWalked`), so a file saved before the change can't bring
+  a cut claim back. The three stamp columns stay in the table, never written
+  again, because removing a column means rebuilding the table. Only an explicit
+  user delete (which has an undo) removes a row.
 - **The walk in progress is on disk** — see below.
-- **A voided walk keeps its path.** The void stands (nothing is claimed), but
-  `TrackingManager.voidWalk` hands the path to `voidedRecordings` before it
-  resets, and `EncloseApp` saves it to `voided_walks` (`VoidedWalk`). It is kept
-  apart from `walks` on purpose — everything reading `walks` assumes a closed
-  loop. Profile lists them under "Walks that didn't count", with Share as GPX and
-  a confirmed Delete. `VoidedWalk.Reason` mirrors `VoidReason` by name, since
-  `data` doesn't import `tracking`; `TrackingManagerVoidTest` pins the mapping.
+- **A walk is never voided.** Nothing the app decides ends a walk — see
+  "Anti-cheat" below. A walk stopped without a claim (Save; Stop away from the
+  start with no loop behind it; a loop with too much of it bridged) is handed
+  over on `unclaimedWalks` with its route, times, steps and the split that
+  decided it, and `EncloseApp` keeps it in `voided_walks` (`VoidedWalk`). It is
+  kept apart from `walks` on purpose — everything reading `walks` assumes a
+  closed loop. Profile lists them under "Walks that didn't count", with Share as
+  GPX and a confirmed Delete. Rows the old motion gate voided (`VEHICLE`,
+  `TOO_FAST`, `UNVERIFIED_GAP`) are left as they were and still read back.
+  `VoidedWalk.Reason` mirrors `UnclaimedReason` by name, since `data` doesn't
+  import `tracking`; `TrackingManagerStopTest` pins the mapping.
 
 A walked territory can't be re-created from the couch, which is what makes these
 different from ordinary state. Weigh any change here accordingly.
@@ -280,29 +356,104 @@ low-memory kill — but `TrackingManager` is an in-memory `object`, so it comes
 back empty and its `isTracking` guard silently drops every subsequent fix while
 the notification still claims to be recording.
 
-`WalkProgressRecorder` therefore mirrors the path to `walk_progress` /
-`walk_progress_points` as it is walked (append-only: one small insert per fix,
-so cost doesn't grow with the length of the walk). It watches `TrackingManager`
-from the outside, which is what keeps the manager free of Android and DB types.
-On restart `LocationService.beginRecording` rehydrates via
-`TrackingManager.restore` and calls `recorder.adopt(...)` so the restored path
-isn't written twice; with nothing to restore it stops itself rather than burning
+`WalkProgressRecorder` therefore mirrors the walk to `walk_progress` /
+`walk_progress_points` / `walk_progress_steps` as it is walked — each point with
+its time, gap flag and motion evidence, and each step report (append-only: one
+small insert per fix or report, so cost doesn't grow with the length of the
+walk). It watches `TrackingManager` from the outside, which is what keeps the
+manager free of Android and DB types. On restart
+`LocationService.beginRecording` rehydrates via `TrackingManager.restore` and
+calls `recorder.adopt(...)` so neither the restored path nor its step reports
+are written twice; with nothing to restore it stops itself rather than burning
 battery on fixes nobody will keep.
 
-`restore` recomputes distance, `hasLeftStart` and `canCloseLoop` from the path
-rather than storing them, so restored state can't disagree with its own points.
+`restore` recomputes distance, `hasLeftStart`, `canCloseLoop` and every
+stretch's label from the stored points and steps rather than storing them, so
+restored state can't disagree with its own points — and a restored walk gets the
+verdict the same walk would have got uninterrupted (`TrackingManagerStopTest`).
 `readyToClose` deliberately starts false — the last stored point says where the
 walker *was*, not where they are.
 
-### Anti-cheat: `MotionGate`
+### Anti-cheat: judged at Stop, never mid-walk
 
-A drive must not be able to enclose territory. `MotionGate` is plain testable
-Kotlin (no Play Services types) combining two independent signals: the activity
-classifier (via `ActivityMonitor`, which normalises Play Services
-`DetectedActivity` into `MotionSample` and degrades to null when the permission
-is denied) and sustained speed averaged over a window. The user's declared
-`ActivityType` sets the speed ceiling; a confident classification may *raise* it
-but never lower it, and nothing exceeds `ABSOLUTE_MAX_SPEED_MPS`.
+A drive must not be able to enclose territory — and an honest walk must never be
+thrown away for looking like one. The old `MotionGate` got the second wrong: it
+judged every fix, stopped recording what it disliked and voided the walk after
+three strikes, which is how four minutes of a wrong guess from the activity
+classifier cost more than an hour on foot. It is gone, and the rule that replaced
+it is the one to keep: **nothing during a walk ends it or stops it recording.**
+Movement is labelled live; the walk is judged once, at Stop, over everything it
+recorded. The worst outcome is a record without a claim.
+
+**`StretchJudge`** (pure, tested) labels the walk in `STRETCH_MS` (30 s)
+stretches, each judged on its **net displacement over its time** — GPS wander
+between tall buildings zig-zags in place and can't add speed the way a
+fix-to-fix average let it. A stretch is `ON_FOOT`, `UNOBSERVED` (a signal gap
+nothing contradicts: it counts, and the claim says part of its outline is a
+straight line) or `DOUBTFUL`. Slowest first:
+
+- **Walking pace needs no proof.** At or below `FREE_SPEED_MPS` (2.5 m/s ≈
+  9 km/h) a stretch counts whatever the classifier says. This band is where the
+  gate's mistakes ended real walks, and a car at walking pace gains nothing.
+- **Steps are the proof for anything faster**, up to the walk's ceiling — the
+  declared `ActivityType`'s, raised (never lowered) by a confident run or ride.
+  Steps covering the displacement at `MAX_STEP_LENGTH_M` (2 m) each count it,
+  from the phone or the watch, whichever helps; with **no step data at all** it
+  counts unless the classifier confidently said vehicle. A confirmed ride needs
+  no steps — a bike takes none.
+- **Past the ceiling, or past `ABSOLUTE_MAX_SPEED_MPS` (22 m/s) whatever anyone
+  says,** it is doubtful.
+
+The classifier reaches it as `MotionEvidence`, stored per point: `ActivityMonitor`
+normalises Play Services `DetectedActivity` into `MotionSample` (null without the
+permission), and `MotionEvidence.of` keeps only a confident, fresh reading that
+could change a verdict. A stretch reads as a vehicle when half its fixes said so.
+
+**Missing evidence is never zero.** `StepLog` (pure, tested) answers "how many
+steps between these two times" — or null, when the source wasn't counting across
+all of it (`COVERAGE_SLACK_MS` aside). Zero steps across a fast stretch is
+evidence of a vehicle; no count is no evidence either way, the rule the tracker
+already follows for location. That distinction is why `PhoneStepCounter` reports
+on a 10 s heartbeat, **zero-step intervals included** (`StepCounterIntervals`,
+pure, tested): the hardware counter only reports changes, so without the
+heartbeat a car journey looks exactly like a counter that stopped. No sensor, no
+`ACTIVITY_RECOGNITION` permission or a process restart leaves a hole, which
+reads as no evidence.
+
+**`LoopVerdict`** (pure, tested) is the one place a walk is judged:
+
+1. **Drop a leading drive.** A walk begun in a car begins where the walking did
+   (`StretchJudge.walkStart`), but only past a drive longer than
+   `LEAVE_START_RADIUS_METERS` — a wobble in the first fixes is no drive.
+   `TrackingManager` applies it live too (`WalkState.startIndex`), so "back to
+   start" points where the walker actually started.
+2. **Find the loop.** At the start it ends here; anywhere else at the last
+   return to the start (`LoopClosure`, the rule GPX imports use).
+3. **Bridge.** Each run of doubtful stretches becomes one straight line between
+   its ends, so a detour by car or tram adds no area. What a bridge measures is
+   the point: a winding tram ride that ends near where it began makes a short
+   bridge and costs almost nothing; a straight drive across town makes a long one.
+4. **Apply the limit.** Up to `MAX_BRIDGED_SHARE` (20%) of the boundary may be
+   bridged — about 1.5 km of a 10k-step loop; at 10% one tram stop sinks a short
+   loop, at 30% driving starts to pay. Past it, or with nothing walked at all,
+   the walk is kept without a claim (`UnclaimedReason.TOO_MUCH_BRIDGED`).
+
+`Territory.ring` is the boundary as claimed, bridges included. The claim dialog
+shows the split — on foot, each bridge with its times and share, the steps — and
+the `Walk` row keeps it (`onFootMeters`, `bridgedMeters`, `phoneSteps`,
+`watchSteps`, and `trackJson`: everything recorded, when it differs from the
+ring).
+
+Live, the panel says a stretch is doubtful while it is (`WalkState.doubtReason`,
+`PanelStatus.DOUBTFUL`, a dotted line on the map) and how much is bridged so far
+against the limit, so nobody finds out at Stop. Away from the start after a
+loop closed, it also says when that loop closed (`WalkState.earlierLoopClosedAtMs`,
+looked for only while a stretch is in doubt), so nobody rides on believing the
+walk is lost. `READY` outranks `DOUBTFUL`:
+someone standing at the start can claim, and at worst the stretch is bridged.
+Doubtful time isn't moving time (`PauseTracker`'s `credit`). Steps that arrive
+late — the watch batches — judge the walk again, so they can still vouch for
+ground already recorded.
 
 **RUN and BIKE are currently turned off** (`ActivityType.available`): their chips
 show greyed, and `ActivityType.resolve` sends a stored-but-unavailable choice
@@ -310,52 +461,42 @@ back to WALK so nobody walks under a ceiling they can't see. Everything else
 about them is intact — including the classifier's ability to *detect* a run or a
 ride and raise the ceiling — so re-enabling is that one flag.
 
-**Three strikes, not one.** Blocking is not fatal, and neither is staying
-blocked. Movement rejected for longer than `GRACE_MS` (90 s) costs the walk a
-**strike** (`Verdict.Strike`); only the `MAX_STRIKES`th returns `Verdict.Void`.
-`bankStrike()` clears the speed window and the countdown, so carrying on costs
-another full window rather than a strike per fix — roughly four and a half
-minutes of sustained vehicle movement before a walk dies. The asymmetry is the
-reason: a driver caught on the third strike still claims nothing, while a walker
-caught wrongly on the first loses hours that can't be re-walked. `WalkState.strikes`
-drives the count the panel shows; the gate keeps one counter, so the resume-gap
-check below spends from the same three.
-
-Resuming from a blocked stretch is graded rather than fatal: under
-`MAX_RESUME_GAP_METERS` (150 m) costs nothing, beyond it costs a strike and flags
-`hadSignalGap`, and past `MAX_UNVERIFIED_GAP_METERS` (1 km) still voids outright —
-that isn't a walk with a hole in it, it's two walks with a drive between them.
-
-`clearSpeedWindow()` exists so the signal-gap path can drop the speed history
-without wiping strikes: silence is not evidence of speed, but it is not an
-amnesty either.
-
-The extensive KDoc in `MotionGate.kt` explains why each threshold has the value
-it does — including why the ceilings were raised once and why
-`ABSOLUTE_MAX_SPEED_MPS` was raised least. Read it before touching the numbers.
+The KDoc in `StretchJudge.kt`, `LoopVerdict.kt` and `Motion.kt` explains why each
+threshold has the value it does — including why the ceilings stayed where they
+were when the gate went. Read it before touching the numbers.
 
 **Silence is not evidence of speed.** A backgrounded or dozing device stops
-delivering fixes and then hands the missed stretch over in a burst on wake. Three
-rules in `TrackingManager.onLocation` keep that from being mistaken for a drive,
-and they are load-bearing:
+delivering fixes and then hands the missed stretch over in a burst on wake. These
+rules in `TrackingManager.onLocation` keep that from being mistaken for a drive —
+or from hiding one — and they are load-bearing:
 
-- Fixes worse than `MAX_ACCURACY_METERS` return **before** the gate runs. A
-  reacquisition fix lands hundreds of metres out; feeding it to the speed window
-  was on its own enough to void an honest walk.
+- Fixes worse than `MAX_ACCURACY_METERS` return **before** anything is recorded
+  or judged. A reacquisition fix lands hundreds of metres out.
 - Losing the signal has **two shapes, and only one of them is silence.** More
   than `SIGNAL_GAP_MS` with no fix covers the dozing device. The commoner one is
   a *frozen* fix: the provider keeps reporting the last position it was sure of,
   at the normal interval, then snaps to the true one — nothing looks wrong until
   the snap, so the silence rule never sees it. That is caught instead by a
   segment faster than `REACQUISITION_SPEED_MPS` (55 m/s ≈ 200 km/h), which no
-  road vehicle reaches, so ordinary driving is still judged as driving. Both
-  shapes reset the speed window and the grace countdown, drop the speed baseline
-  so the jump never becomes a sample. Silence always flags
-  `WalkState.hadSignalGap`; a snap flags it only if the fix it snapped to is
-  kept (see the hold below).
-- Neither clears `blockedReason` — a walk already being rejected as a vehicle
-  when the signal went still has to answer for the ground in between, which is
-  what keeps the anti-cheat honest across a gap.
+  road vehicle reaches. Both drop the speed baseline, so the jump never becomes a
+  speed, and mark the point after it `afterGap`.
+- **A gap is judged whole.** The line across it is one stretch, judged on how
+  long it took and on the steps taken in it: a phone that dozed for ten minutes
+  is judged on ten minutes. Steps that cover it make it walked (the claim says
+  so); too fast, or zero steps past walking pace, and it is bridged and counted
+  against the 20% — so switching location off for a drive buys nothing. Silence
+  always flags `WalkState.hadSignalGap`; a snap flags it only if the fix it
+  snapped to is kept (see the hold below).
+- **A gap is held to the walker's own stride.** Once the walk has shown one
+  (`StretchJudge.learnedStepLength`: ground over steps, across walking-pace
+  stretches a count covers, from `MIN_LEARNING_STEPS` on), a gap's steps are
+  taken at up to `GAP_STEP_FACTOR` (2.2×) of it rather than at 2 m, floored at
+  `MIN_GAP_STEP_LENGTH_M` and never looser than before. At 2 m a step, a short
+  walk inside a gap could vouch for a ride inside the same silence. Gaps only:
+  a stretch with GPS behind it has a measured speed. It is learned along the
+  path, since GPS wander makes it err long and long only loosens, and from this
+  walk alone, so a restored walk learns the same stride. It is computed only
+  when the walk has a gap.
 - **A jump is held, not appended.** A fix no one could have reached from the
   path's last trusted point (`FixPlausibility`: `ABSOLUTE_MAX_SPEED_MPS` × time
   plus both accuracies) is held. A fix back near the path → it was a spike (a
@@ -363,10 +504,9 @@ and they are load-bearing:
   flagged. Fixes agreeing with it for `HOLD_CONFIRM_MS` (10 s, ≥3 fixes) → a
   real snap, appended with `hadSignalGap`. **One agreeing fix is not enough**:
   providers deliver the same bad fix repeatedly, and on a device that let every
-  spike confirm itself. The motion gate still sees every fix — the hold only
-  decides what reaches the path. `closeLoop` then runs `PathSpikes` over the
-  path for what got through (a bad fix repeated past the hold, or a restored
-  walk).
+  spike confirm itself. The hold decides only what reaches the path.
+  `LoopVerdict` then runs `PathSpikes` over the claimed points for what got
+  through (a bad fix repeated past the hold, or a restored walk).
 - The gap is **reported, not punished**: the live panel and the claim dialog say
   part of the route is a straight line across unobserved ground. Discarding an
   hour on foot because the device went to sleep is the worse error by a wide
@@ -382,41 +522,48 @@ taking only the newest throws the walked ground away.
 - **Rings are implicitly closed**: the last point is *not* a duplicate of the
   first. JTS conversion and GeoJSON export both add the closing point and strip
   it again on the way back. GPX/GeoJSON writers close explicitly per spec.
-- `Territory.ring` is the original as-walked boundary and never changes.
-  `Territory.polygons` (a `List<GeoPolygon>`, i.e. multipolygon with holes) is
-  the **effective** claimed geometry, which shrinks/splits/gains holes as later
-  claims carve into it. **Area, conquest and export use `polygons`; GPX uses
-  `ring`; rendering goes through `SnapDisplay`** — see "Snapping to real paths".
+- `Territory.ring` is the boundary as claimed — the walked points, with any
+  bridged stretch reduced to its two ends — and never changes. What was recorded
+  around it (a leading drive, a bridge, ground after the loop closed) stays on
+  the `Walk` row as `trackJson`.
+  `Territory.polygons` (a `List<GeoPolygon>`, i.e. a multipolygon) is the claimed
+  geometry, which is the ring as its only polygon — claims are layers, so nothing
+  cuts into it. **Area and export use `polygons`; GPX uses `ring`; rendering goes
+  through `SnapDisplay`** — see "Snapping to real paths".
+- **Totals count shared ground once.** Claims can overlap, so every figure that
+  adds claims up — the map's summary chip, the list, the profile total,
+  `Coverage`, `Passport` — comes from `Footprint` (pure, tested), never from a
+  `sumOf { it.areaSqMeters }`. It measures in clusters of claims whose bounding
+  boxes touch and takes the overlap JTS finds off the sum of their stored areas,
+  so claims that don't overlap total exactly what they did before. It is JTS
+  work, so the view models run it on `Dispatchers.Default`, never in composition.
 - `Geo` uses an equirectangular projection around the mean latitude plus the
   shoelace formula — accurate enough at city-walk scale, and `GeoClip` projects
   the same way before handing geometry to JTS (which is planar). `GeoClip` runs
-  `buffer(0)` to repair self-intersections from GPS noise and returns the
-  original input unchanged on any failure. `GeoClip.isSimpleRing` answers the
-  same question about geometry that came from somewhere else.
+  `buffer(0)` to repair self-intersections from GPS noise, and
+  `GeoClip.sharedSqMeters` answers zero rather than failing, which reads as every
+  claim counted whole. `GeoClip.isSimpleRing` answers whether a ring that came
+  from somewhere else crosses itself.
 
 ### Snapping to real paths
 
 A recorded loop wobbles across buildings and cuts corners it didn't cut, so a
-claim's outline can be matched onto real roads. Four constraints shape all of it,
-and none of them are incidental:
+claim's outline can be matched onto real roads. Three constraints shape all of
+it, and none of them are incidental:
 
 - **Display only.** `Territory.ring` stays the boundary of record, `areaSqMeters`
-  is measured from it, and `Conquest` carves with it. A footpath missing from the
-  map must never shrink what someone owns. `SnapDisplay` is a named object rather
-  than an extension property precisely so a leak into `Conquest`, `Coverage`,
-  `Passport` or `OfflineTilePlanner` is visible in a diff. **Export stays raw,
+  is measured from it, and `Footprint` measures shared ground with it. A footpath
+  missing from the map must never shrink what someone owns. `SnapDisplay` is a
+  named object rather than an extension property precisely so a leak into
+  `Footprint`, `Coverage`, `Passport` or `OfflineTilePlanner` is visible in a
+  diff. **Export stays raw,
   GeoJSON as well as GPX** — `toGeoJson` writes the area into `properties`
   beside the geometry, and shipping a shape whose stated area disagrees with it
   is worse than shipping the honest one.
 - **After the claim, never during the walk.** Live snapping is an anti-cheat
   hole: a drive down a road map-matches to that road perfectly, which is exactly
-  the signal `MotionGate` exists to reject. Do not "improve" this into a live
+  the signal the anti-cheat exists to reject. Do not "improve" this into a live
   feature.
-- **A carved claim stops using its matched outline** (`Territory.carvedAtEpochMs`,
-  stamped by `Conquest.carve`). The matched ring describes the *whole* loop as
-  walked, and matching is opt-in and needs a network, so it can arrive weeks after
-  a rival already took part of that loop — `Conquest` only revisits a claim when a
-  new walk overlaps it, so there would be nothing to correct it.
 - **Opt-in, and it never bulk-uploads by itself.** `UserSettings.snapToPaths` is
   off by default. This is the only feature that sends a precise record of where
   someone walked anywhere, so turning it on covers new claims only; existing ones
@@ -437,10 +584,10 @@ duplicated vertices).
 
 ### Persistence
 
-Room (KSP), database version 13, seven entities: `territories`, `walks`, `voided_walks`, a
+Room (KSP), database version 15, eight entities: `territories`, `walks`, `voided_walks`, a
 single-row `profile` (`id = "me"`, auto-created with a random guest name on
-first access), and the `walk_progress` / `walk_progress_points` pair backing the
-walk in progress, and `offline_regions`. Geometry is stored as **hand-rolled JSON strings** in
+first access), `walk_progress` / `walk_progress_points` / `walk_progress_steps`
+backing the walk in progress, and `offline_regions`. Geometry is stored as **hand-rolled JSON strings** in
 `ringJson`/`geometryJson`, converted in the entity companions — the only Room
 `TypeConverter` is for `SyncStatus`.
 
@@ -453,12 +600,16 @@ couch — so dropping tables to land a schema change is never an acceptable
 trade, pre-release included.
 
 The rule that follows: **every version bump ships a `Migration`.**
-`EncloseDatabase` has seven worked examples — `MIGRATION_5_6` (add a column),
+`EncloseDatabase` has eight worked examples — `MIGRATION_5_6` (add a column),
 `MIGRATION_6_7` (add nullable columns), `MIGRATION_7_8` (create tables, with the
 `CREATE TABLE` copied verbatim from the exported JSON so Room's validation
 passes), `MIGRATION_8_9` and `MIGRATION_9_10` (a `NOT NULL` column needs a SQL `DEFAULT`
 for existing rows even when the Kotlin property has one — a constructor default
-is not a column default). Without one, Room throws when opening the database instead of quietly
+is not a column default), `MIGRATION_13_14` (data only: rewrites derived
+columns row by row in Kotlin, and skips a row it can't parse rather than
+throwing, since a migration that throws fails every launch), and
+`MIGRATION_14_15` (nullable columns across three tables in a loop, plus a new
+table). Without one, Room throws when opening the database instead of quietly
 emptying it — loud in development, and impossible to silently lose data in the
 field. The `room-migration` skill has the full procedure.
 
@@ -487,8 +638,8 @@ card seeds from the stored `city` so an offline visit still says something, then
 only ever *adds* to it from the live lookup.
 
 The profile screen's headline percentage is **per city** (`Coverage.byCity`,
-pure and unit-tested in `CoverageTest`): claimed area over the bounding box of
-that city's claims. Measuring across all claims at once — as it did originally —
+pure and unit-tested in `CoverageTest`): claimed ground — shared ground counted
+once, by `Footprint` — over the bounding box of that city's claims. Measuring across all claims at once — as it did originally —
 collapses towards zero the moment someone walks in a second city, because the
 box between two cities is mostly countryside.
 
@@ -526,8 +677,8 @@ Room, so they are durable by construction.
 ### Backup and restore
 
 **One file, everything in it.** `BackupRepository.collect` reads every table in
-`EncloseDatabase` — territories (standing *and* fallen), walks, the profile, the
-walk in progress with its points, the cached-region rows — plus
+`EncloseDatabase` — territories, walks, voided walks, the profile, the
+walk in progress with its points and step reports, the cached-region rows — plus
 `UserSettings.snapshot()`, which mirrors the whole preferences file. The check
 for "is this complete?" is against the schema, not against memory: a new table or
 a new preference means a new field in `BackupData` and `SettingsSnapshot`, and
@@ -651,10 +802,14 @@ uploads walks.
   `SnapDisplay`, so a snapped outline is selected where the snapped outline is
   what the eye sees. A tap on open ground clears the selection, which is the
   same gesture read the other way round, and only a tap that *hit* something is
-  consumed, so nothing else on the map loses a gesture to this. Three details
+  consumed, so nothing else on the map loses a gesture to this. Claims are
+  layers, so a tap can land in several, and it takes **the one drawn on top**:
+  the selection if the tap is inside it (the selection layer draws above every
+  claim), otherwise the newest (`territoriesToFeatures` sends claims oldest
+  first). A claim lying entirely under a newer one is reached from the list,
+  whose *Show on map* selects it as well as framing it. Three details
   are load-bearing: the selection is held **by id**, since the territory flow
-  hands back a new `Territory` on a rename, a city resolving or a later claim
-  carving into this one — and holding the id is also what makes a delete take
+  hands back a new `Territory` on a rename or a city resolving — and holding the id is also what makes a delete take
   the card and the highlight with it. It lives in **`MainActivity`**, not in
   `MapScreen`, because opening a claim disposes the map screen and a selection
   remembered inside it would be gone on the way back, un-highlighting the claim
@@ -704,8 +859,9 @@ uploads walks.
   a read-out, not a control panel.
 - `EncloseMap` wraps MapLibre's `MapView` in an `AndroidView`, forwarding the
   Compose lifecycle. State reaches the map by updating named `GeoJsonSource`s
-  (claimed polygons, the selected claim, closing zone, live path, start anchor,
-  the saved home, and the kilometre markers). Camera actions
+  (claimed polygons, the selected claim, closing zone, live path — each doubtful
+  run its own dotted line — start anchor, the saved home, and the kilometre
+  markers). Camera actions
   go through the imperative `MapController` handle, which
   exposes `isStyleLoaded`/`canLocate` so the UI can disable controls that would
   otherwise silently no-op.
@@ -770,8 +926,8 @@ readers read them aloud), and the watch app. Read them with `stringResource` /
   languages need more.
 - **A short comment on any placeholder** saying what it holds and in what unit;
   a translator sees the string alone.
-- **Pure units stay text-free.** `PanelSummary`, `FixWatch`, `MotionGate` and
-  the rest return enums and numbers; the composable turns them into a resource.
+- **Pure units stay text-free.** `PanelSummary`, `FixWatch`, `StretchJudge`,
+  `LoopVerdict` and the rest return enums and numbers; the composable turns them into a resource.
   That keeps them JVM-testable (no `Context`) and keeps the wording in one place.
 - **Not user-facing, so stays literal:** log messages, file formats (GPX tags,
   GeoJSON keys, backup field names), Data Layer paths, intent URIs, preference
@@ -829,8 +985,9 @@ stays behind that one switch — don't re-introduce it into user-facing copy.
 
 A dev affordance on the map: taps inject points instead of GPS. It uses relaxed
 distance thresholds (`TrackingManager`'s `*_TEST_METERS` constants), skips
-starting `LocationService`, and bypasses `MotionGate` entirely — tapped points
-teleport and would always read as a vehicle.
+starting `LocationService`, and is never judged (`LoopVerdict`'s `judged =
+false`) — tapped points teleport, carry no clock, and would always read as a
+vehicle.
 
 **Start asks first while it's on.** `TestWalkWarningDialog` stands between the
 panel's Start button and `startWalk()`, because a test walk is indistinguishable
@@ -844,17 +1001,18 @@ the map *is* the unambiguous request for an injected point.
 
 **GPX import** (`EncloseViewModel.importGpx`) rides the same injection path, fed
 from a route recorded elsewhere rather than tapped out: same relaxed thresholds,
-same gate bypass, same rule that the loop is only closed when the user presses
+never judged, same rule that the loop is only closed when the user presses
 Stop.
 
-**An import ends at its last return to the start** (`ImportClosure`, pure,
-tested), not at its last point. A recorder is stopped whenever it's stopped —
+**An import ends at its last return to the start** (`LoopClosure`, pure,
+tested — the rule a live Stop away from the start uses too), not at its last
+point. A recorder is stopped whenever it's stopped —
 often after walking on to the car — and replayed as-is such a track "ends" out
 there and can't close. The replay is cut at the last pass within the closing
 radius (the *last*, so a second lap is kept), and the import summary says how
 much was left out. The relaxed closing radius is 75 m (was 40 m) for the same
 reason: tracks stopped a few dozen metres short. That costs no anti-cheat — the
-injected path bypasses `MotionGate` anyway. When a track still can't close, the
+injected path is never judged anyway. When a track still can't close, the
 summary gives the gap and the radius rather than just "doesn't end near".
 
 **Import is not test-mode-gated, and works in every build.** Recording with a

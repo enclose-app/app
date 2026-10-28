@@ -46,8 +46,8 @@ interface SnapStore {
  *
  * Write anything but `snappedJson`/`snappedAtEpochMs`. [Territory.ring] is the
  * boundary of record, [Territory.areaSqMeters] is measured from it, and
- * [Conquest] carves with it. A road matcher is a remote guess, and a guess does
- * not get to decide how much ground someone owns. The write goes through
+ * [Footprint] measures shared ground with it. A road matcher is a remote guess,
+ * and a guess does not get to decide how much ground someone owns. The write goes through
  * [TerritoryRepository.setSnappedRing], which is a targeted UPDATE for exactly
  * that reason.
  *

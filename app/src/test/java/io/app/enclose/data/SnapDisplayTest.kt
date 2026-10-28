@@ -8,11 +8,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The one place that decides which outline a claim is drawn with. The case that
- * matters most is the carved one: a matched outline describes the whole loop as
- * walked, so drawing it after a rival has taken part of that loop would show
- * ground the user no longer owns — permanently, since `Conquest` only revisits a
- * claim when a new walk overlaps it.
+ * The one place that decides which outline a claim is drawn with: the matched
+ * one when there is a usable one, and otherwise the claim's own geometry, with
+ * the as-walked ring behind that so a claim always draws as something.
  */
 class SnapDisplayTest {
 
@@ -25,46 +23,12 @@ class SnapDisplayTest {
     }
 
     @Test
-    fun `a matched, uncarved claim draws the matched outline`() {
+    fun `a matched claim draws the matched outline`() {
         val snapped = square(SNAPPED_ORIGIN, SIDE_DEG)
         val t = territory(snappedRing = snapped, snappedAtEpochMs = 1_000L)
 
         assertTrue(SnapDisplay.usesSnapped(t))
         assertEquals(Territory.polygonsFromRing(snapped), SnapDisplay.polygonsFor(t))
-    }
-
-    /** The whole reason the carve timestamp exists. */
-    @Test
-    fun `a carved claim goes back to its carved geometry`() {
-        val snapped = square(SNAPPED_ORIGIN, SIDE_DEG)
-        val carvedGeometry = Territory.polygonsFromRing(square(BERLIN, SIDE_DEG / 2))
-        val t = territory(
-            polygons = carvedGeometry,
-            snappedRing = snapped,
-            snappedAtEpochMs = 1_000L,
-            carvedAtEpochMs = 2_000L,
-        )
-
-        assertFalse(SnapDisplay.usesSnapped(t))
-        assertEquals(carvedGeometry, SnapDisplay.polygonsFor(t))
-    }
-
-    /**
-     * Order doesn't matter: a claim carved *before* it was ever matched must
-     * behave the same as one carved after. This is the sequence that actually
-     * happens — matching is opt-in and needs a network, so a backfill can arrive
-     * long after the carve.
-     */
-    @Test
-    fun `matching after a carve still does not draw the matched outline`() {
-        val t = territory(
-            polygons = Territory.polygonsFromRing(square(BERLIN, SIDE_DEG / 2)),
-            snappedRing = square(SNAPPED_ORIGIN, SIDE_DEG),
-            snappedAtEpochMs = 9_000L,
-            carvedAtEpochMs = 2_000L,
-        )
-
-        assertFalse(SnapDisplay.usesSnapped(t))
     }
 
     /**
@@ -129,7 +93,6 @@ class SnapDisplayTest {
         polygons: List<io.app.enclose.geo.GeoPolygon> = Territory.polygonsFromRing(ring),
         snappedRing: List<LatLng> = emptyList(),
         snappedAtEpochMs: Long? = null,
-        carvedAtEpochMs: Long? = null,
     ) = Territory(
         id = "t",
         name = "Claim",
@@ -140,7 +103,6 @@ class SnapDisplayTest {
         claimedAtEpochMs = 0L,
         snappedRing = snappedRing,
         snappedAtEpochMs = snappedAtEpochMs,
-        carvedAtEpochMs = carvedAtEpochMs,
     )
 
     private companion object {

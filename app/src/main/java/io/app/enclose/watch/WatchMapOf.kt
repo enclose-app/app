@@ -41,7 +41,9 @@ fun watchMapOf(walk: TrackingManager.WalkState, closeRadiusMeters: Double): Watc
  * [WatchClaims.MAX_CLAIMS] with any of their outline within [radiusMeters].
  *
  * Drawn from what the phone draws ([SnapDisplay]), so a claim matched onto real
- * paths has the same outline on both screens.
+ * paths has the same outline on both screens. Chosen nearest first, then sent
+ * oldest first: the watch draws them in the order they arrive, and claims are
+ * layers, so that order is what puts the newest on top — as it is on the phone.
  */
 fun watchClaimsNear(
     territories: List<Territory>,
@@ -56,6 +58,7 @@ fun watchClaimsNear(
         .sortedBy { (_, distance) -> distance }
         .take(WatchClaims.MAX_CLAIMS)
         .map { (territory, _) -> territory }
+        .sortedBy { it.claimedAtEpochMs }
     return WatchClaims(
         nearest.map { territory ->
             WatchClaims.Claim(

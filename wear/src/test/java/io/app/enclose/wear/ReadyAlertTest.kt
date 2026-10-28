@@ -32,4 +32,31 @@ class ReadyAlertTest {
         assertTrue(ReadyAlert.shouldClearPrompt(walking))
         assertTrue(ReadyAlert.shouldClearPrompt(WatchStatus(phase = Phase.CLOSED)))
     }
+
+    private val ridingOn = WatchStatus(phase = Phase.WALKING, doubtful = true, loopClosedAtEpochMs = 5_000L)
+
+    @Test
+    fun `stop being offered at any time doesn't make every walk ready`() {
+        // Stop is offered all walk long now; the buzz still waits for the loop.
+        assertFalse(ReadyAlert.shouldBuzz(wasReady = false, current = WatchStatus(phase = Phase.WALKING)))
+    }
+
+    @Test
+    fun `warns once when a stretch turns doubtful after the loop closed`() {
+        assertTrue(ReadyAlert.shouldWarnDoubt(warnedFor = null, current = ridingOn))
+        assertFalse("Not again for the same loop", ReadyAlert.shouldWarnDoubt(warnedFor = 5_000L, current = ridingOn))
+    }
+
+    @Test
+    fun `a later loop is a new warning`() {
+        val later = ridingOn.copy(loopClosedAtEpochMs = 9_000L)
+        assertTrue(ReadyAlert.shouldWarnDoubt(warnedFor = 5_000L, current = later))
+    }
+
+    @Test
+    fun `no warning without a doubt or without a loop`() {
+        assertFalse(ReadyAlert.shouldWarnDoubt(null, ridingOn.copy(doubtful = false)))
+        assertFalse(ReadyAlert.shouldWarnDoubt(null, ridingOn.copy(loopClosedAtEpochMs = null)))
+        assertFalse(ReadyAlert.shouldWarnDoubt(null, ridingOn.copy(phase = Phase.CLOSED)))
+    }
 }

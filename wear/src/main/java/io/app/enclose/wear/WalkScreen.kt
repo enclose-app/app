@@ -1,5 +1,6 @@
 package io.app.enclose.wear
 
+import android.text.format.DateFormat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -30,6 +32,7 @@ import androidx.wear.compose.material3.AppScaffold
 import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.ButtonDefaults
 import androidx.wear.compose.material3.ColorScheme
+import androidx.wear.compose.material3.CompactButton
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
@@ -41,6 +44,7 @@ import io.app.enclose.watchlink.WatchStatus
 import io.app.enclose.watchlink.WatchStatus.Phase
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.Date
 
 /** The icon's palette: neon violet on near-black. See play/icon.svg. */
 private val Violet = Color(0xFFAE4FF8)
@@ -133,7 +137,8 @@ private fun Idle(link: PhoneLink) {
 /**
  * The walk: the live map, full-screen, with the figures in a strip across the
  * lower part of the circle — the widest band a round screen has below the
- * clock — and Stop there once stopping would claim.
+ * clock — and Stop & claim there once stopping would claim. Until then the
+ * strip says what the walk needs next, with End beneath it.
  */
 @Composable
 private fun WalkingMap(status: WatchStatus, map: WatchMap?, claims: WatchClaims?, link: PhoneLink) {
@@ -172,7 +177,7 @@ private fun WalkingMap(status: WatchStatus, map: WatchMap?, claims: WatchClaims?
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
-            if (status.canStopFromWatch) {
+            if (status.readyToClose) {
                 Spacer(Modifier.height(4.dp))
                 StopButton(link)
             } else {
@@ -180,9 +185,12 @@ private fun WalkingMap(status: WatchStatus, map: WatchMap?, claims: WatchClaims?
                     walkingHint(status),
                     style = MaterialTheme.typography.bodySmall,
                     textAlign = TextAlign.Center,
-                    color = if (status.notRecording || status.blocked) MaterialTheme.colorScheme.error
+                    // A doubtful stretch is still being recorded, so only a phone
+                    // that isn't recording at all is an error.
+                    color = if (status.notRecording) MaterialTheme.colorScheme.error
                     else Color.Unspecified,
                 )
+                if (status.canStopFromWatch) EndButton(link)
             }
             // OpenStreetMap's data, OpenFreeMap's tiles: the licence asks for
             // this to be visible, and MapLibre's own button needs a corner.
@@ -202,7 +210,14 @@ private val Scrim = Color(0xD9000000)
 @Composable
 private fun walkingHint(status: WatchStatus): String = when {
     status.notRecording -> stringResource(R.string.watch_hint_not_recording)
-    status.blocked -> stringResource(R.string.watch_hint_vehicle)
+    status.doubtful -> status.loopClosedAtEpochMs
+        ?.let {
+            stringResource(
+                R.string.watch_hint_doubtful_after_loop,
+                DateFormat.getTimeFormat(LocalContext.current).format(Date(it)),
+            )
+        }
+        ?: stringResource(R.string.watch_hint_doubtful)
     status.startedAtEpochMs == null -> stringResource(R.string.watch_hint_finding_gps)
     status.readyToClose -> stringResource(R.string.watch_hint_ready)
     status.canCloseLoop -> status.toStartMeters
@@ -245,6 +260,62 @@ private fun StopButton(link: PhoneLink) {
         )
     }
 }
+
+/**
+ * Stop away from the start. The phone claims the loop that closed earlier, or
+ * keeps the walk without a claim, so nothing is lost — but the walk is over, so
+ * it takes a second tap: a sleeve brushing a wrist shouldn't end an hour's walk.
+ */
+@Composable
+private fun EndButton(link: PhoneLink) {
+    val scope = rememberCoroutineScope()
+    var armed by remember { mutableStateOf(false) }
+    var sending by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf(false) }
+    LaunchedEffect(armed) {
+        if (armed) {
+            delay(END_ARMED_MS)
+            armed = false
+        }
+    }
+    CompactButton(
+        onClick = {
+            if (!armed) {
+                armed = true
+                failed = false
+            } else {
+                armed = false
+                sending = true
+                scope.launch {
+                    failed = !link.requestStop()
+                    sending = false
+                }
+            }
+        },
+        enabled = !sending,
+        label = {
+            Text(
+                stringResource(
+                    when {
+                        sending -> R.string.watch_stopping
+                        armed -> R.string.watch_tap_again_to_end
+                        else -> R.string.watch_end_walk
+                    },
+                ),
+            )
+        },
+    )
+    if (failed) {
+        Text(
+            stringResource(R.string.watch_phone_unreachable),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+}
+
+/** How long End waits for its second tap. */
+private const val END_ARMED_MS = 3_000L
 
 @Composable
 private fun Closed(status: WatchStatus, link: PhoneLink) {

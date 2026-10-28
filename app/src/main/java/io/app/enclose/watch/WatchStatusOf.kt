@@ -22,13 +22,15 @@ fun watchStatusOf(
     walk.isTracking -> WatchStatus(
         phase = Phase.WALKING,
         startedAtEpochMs = walk.startedAtMs,
-        distanceMeters = WatchStatus.round(walk.distanceMeters, WatchStatus.DISTANCE_STEP_M),
+        // What counts towards the loop, as the phone's panel shows it.
+        distanceMeters = WatchStatus.round(walk.onFootMeters, WatchStatus.DISTANCE_STEP_M),
         toStartMeters = walk.distanceToStartMeters
             ?.let { WatchStatus.round(it, WatchStatus.TO_START_STEP_M) },
         canCloseLoop = walk.canCloseLoop,
         readyToClose = walk.readyToClose,
-        blocked = walk.motionBlocked,
+        doubtful = walk.doubtful,
         notRecording = walk.recordingFailure != null,
+        loopClosedAtEpochMs = walk.earlierLoopClosedAtMs,
     )
     else -> WatchStatus()
 }

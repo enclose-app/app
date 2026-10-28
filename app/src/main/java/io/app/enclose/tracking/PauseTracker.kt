@@ -10,7 +10,7 @@ package io.app.enclose.tracking
  * Standing still is decided from two signals, either of which is enough:
  * the activity classifier reporting STILL, and speed under [STILL_SPEED_MPS].
  * The speed rule is what makes this work with the physical-activity permission
- * denied, which is the same reason [MotionGate] never relies on the classifier
+ * denied, which is the same reason [StretchJudge] never relies on the classifier
  * alone.
  *
  * Time is only ever credited *between* two fixes, so a gap in recording — the
@@ -39,11 +39,13 @@ class PauseTracker {
      *
      * @param speedMps best available speed, or null when unknown.
      * @param motion latest classification, or null when unavailable.
+     * @param credit false while the walk's latest stretch is judged doubtful: the
+     *   clock moves on, but a tram ride is not walking time.
      */
-    fun update(nowElapsedMs: Long, speedMps: Double?, motion: MotionSample?): Long {
+    fun update(nowElapsedMs: Long, speedMps: Double?, motion: MotionSample?, credit: Boolean = true): Long {
         val previous = lastElapsedMs
         lastElapsedMs = nowElapsedMs
-        if (previous == null || nowElapsedMs <= previous) return movingMs
+        if (previous == null || nowElapsedMs <= previous || !credit) return movingMs
 
         val delta = nowElapsedMs - previous
         // A long gap means recording stopped, not that the walker stood still
@@ -74,7 +76,7 @@ class PauseTracker {
          */
         const val STILL_SPEED_MPS = 0.5
 
-        /** Play Services confidences are 0-100; matches [MotionGate]'s bar. */
+        /** Play Services confidences are 0-100; matches [MotionEvidence.HUMAN_CONFIDENCE]. */
         const val STILL_CONFIDENCE = 60
 
         /** Classifications older than this say nothing about right now. */

@@ -18,8 +18,8 @@ import org.junit.Test
  *
  * The rule these pin: silence is not evidence of speed. What the recording never
  * observed is reported, not punished. The anti-cheat cases at the bottom pin the
- * other side of it — a walk that really was *seen* moving in a vehicle still has
- * to answer for the ground it covered.
+ * other side of it — ground covered too fast for anything to explain is still
+ * set aside, gap or no gap — and that nothing, on either side, ends the walk.
  */
 class TrackingManagerSignalGapTest {
 
@@ -42,7 +42,8 @@ class TrackingManagerSignalGapTest {
 
         val state = TrackingManager.walk.value
         assertTrue("The walk must survive the gap", state.isTracking)
-        assertFalse("Silence is not a speeding offence", state.motionBlocked)
+        assertFalse("Silence is not a speeding offence", state.doubtful)
+        assertEquals("...and nothing is bridged over it", 0.0, state.bridgedMeters, 0.0)
         assertEquals("The fix after the gap belongs on the path", 3, state.path.size)
     }
 
@@ -60,7 +61,7 @@ class TrackingManagerSignalGapTest {
 
         val state = TrackingManager.walk.value
         assertTrue(state.isTracking)
-        assertFalse(state.motionBlocked)
+        assertFalse(state.doubtful)
         assertEquals(11, state.path.size)
     }
 
@@ -92,7 +93,9 @@ class TrackingManagerSignalGapTest {
 
         val state = TrackingManager.walk.value
         assertTrue("The walk must survive the snap", state.isTracking)
-        assertFalse(state.motionBlocked)
+        // Judged from the last point the path kept, a minute earlier: 307 m in
+        // 63 s is a brisk walk, not a jump.
+        assertFalse(state.doubtful)
         assertTrue("The snap skipped ground nobody recorded; say so", state.hadSignalGap)
     }
 
@@ -128,7 +131,7 @@ class TrackingManagerSignalGapTest {
     }
 
     @Test
-    fun `a wildly inaccurate fix cannot void the walk`() {
+    fun `a wildly inaccurate fix shapes nothing`() {
         startWalking()
         fix(at(0.0), atElapsedMs = 0L)
         fix(at(10.0), atElapsedMs = 3_000L)
@@ -139,7 +142,7 @@ class TrackingManagerSignalGapTest {
 
         val state = TrackingManager.walk.value
         assertTrue(state.isTracking)
-        assertFalse("A fix that vague judges nothing", state.motionBlocked)
+        assertFalse("A fix that vague judges nothing", state.doubtful)
         assertEquals("...and shapes nothing", 2, state.path.size)
     }
 
@@ -243,12 +246,12 @@ class TrackingManagerSignalGapTest {
     // --- the anti-cheat side, which must not have been loosened ---------------
 
     @Test
-    fun `sustained driving speed still blocks and then voids`() {
+    fun `sustained driving is recorded and set aside, never ended`() {
         startWalking()
         fix(at(0.0), atElapsedMs = 0L)
 
-        // 25 m/s ≈ 90 km/h, every 3 s: fast enough that no declared or detected
-        // activity justifies it, and sustained through every warning the walk has.
+        // 25 m/s ≈ 90 km/h for seven and a half minutes — long past every point
+        // at which the old gate ended walks.
         var metres = 0.0
         var t = 0L
         repeat(150) {
@@ -257,109 +260,124 @@ class TrackingManagerSignalGapTest {
             fix(at(metres), atElapsedMs = t)
         }
 
-        assertFalse(
-            "A drive must not be able to enclose territory",
-            TrackingManager.walk.value.isTracking,
-        )
+        val state = TrackingManager.walk.value
+        assertTrue("Only the walker ends a walk", state.isTracking)
+        assertEquals("Every fix is recorded", 151, state.path.size)
+        assertTrue("...and none of the drive counts", state.doubtful)
+        assertEquals(DoubtReason.TOO_FAST, state.doubtReason)
+        assertTrue("A drive must not be able to enclose territory", state.onFootMeters < 100.0)
+    }
+
+    @Test
+    fun `a drive in the middle of a walk is bridged, and the walk carries on`() {
+        startWalking()
+        var t = 0L
+        var metres = 0.0
+        // Ten minutes on foot...
+        repeat(200) {
+            fix(at(metres), atElapsedMs = t)
+            metres += 4.2
+            t += 3_000L
+        }
+        // ...two minutes at 15 m/s...
+        repeat(40) {
+            fix(at(metres), atElapsedMs = t)
+            metres += 45.0
+            t += 3_000L
+        }
+        // ...and walking again.
+        repeat(40) {
+            fix(at(metres), atElapsedMs = t)
+            metres += 4.2
+            t += 3_000L
+        }
+
+        val state = TrackingManager.walk.value
+        assertTrue(state.isTracking)
+        assertFalse("Walking again is walking", state.doubtful)
+        assertEquals("One run of doubt, one bridge", 1, state.doubtfulRuns.size)
+        assertTrue("The drive is bridged", state.bridgedMeters > 1_500.0)
+        assertTrue("The walking either side still counts", state.onFootMeters > 900.0)
     }
 
     /**
-     * The loosening, from the other side: a minute of movement the gate doesn't
-     * like is a warning, not the end of the outing. Three of those is roughly
-     * four and a half minutes, which is why the test above has to drive so far.
+     * The hole the old rules left open: switch location off, drive, switch it
+     * back on. The silence used to be forgiven whole. It is now judged whole —
+     * five kilometres in ten minutes is no walk, so the line across it is
+     * bridged and counts against the loop.
      */
     @Test
-    fun `a short blocked stretch no longer ends the walk`() {
+    fun `location off, a drive, location on is bridged, not forgiven`() {
         startWalking()
-        fix(at(0.0), atElapsedMs = 0L)
-
-        var metres = 0.0
         var t = 0L
-        repeat(20) { // 60 s at vehicle speed — inside the first grace window
-            metres += 75.0
-            t += 3_000L
+        var metres = 0.0
+        repeat(40) {
             fix(at(metres), atElapsedMs = t)
+            metres += 4.2
+            t += 3_000L
+        }
+        // Silence, and five kilometres further on.
+        t += 600_000L
+        metres += 5_000.0
+        repeat(20) {
+            fix(at(metres), atElapsedMs = t)
+            metres += 4.2
+            t += 3_000L
         }
 
         val state = TrackingManager.walk.value
-        assertTrue("A minute of bad movement must not cost the walk", state.isTracking)
-        assertTrue("...but it must be visibly not recording", state.motionBlocked)
-        assertEquals("...and it hasn't cost a warning yet", 0, state.strikes)
+        assertTrue("Still only the walker ends a walk", state.isTracking)
+        assertTrue("The gap is reported", state.hadSignalGap)
+        assertTrue("...and bridged", state.bridgedMeters > 4_900.0)
     }
 
+    /** A dozing phone in a runner's pocket: the gap is fast for a walk, and the steps say it was run. */
     @Test
-    fun `the walk counts its warnings`() {
+    fun `steps that cover a fast gap count it as walked`() {
+        val gapMeters = 2_000.0
+        val gapMs = 600_000L // 3.3 m/s: past walking pace, so it needs evidence
         startWalking()
         fix(at(0.0), atElapsedMs = 0L)
-
-        var metres = 0.0
-        var t = 0L
-        repeat(40) { // past the first grace window, not past the second
-            metres += 75.0
-            t += 3_000L
-            fix(at(metres), atElapsedMs = t)
-        }
+        fix(at(4.2), atElapsedMs = 3_000L)
+        TrackingManager.onSteps(StepInterval(StepSource.PHONE, epoch(0L), epoch(3_000L + gapMs), 1_800))
+        fix(at(4.2 + gapMeters), atElapsedMs = 3_000L + gapMs)
 
         val state = TrackingManager.walk.value
-        assertTrue("One warning is survivable", state.isTracking)
-        assertEquals(1, state.strikes)
-        assertEquals(2, state.strikesRemaining)
+        assertFalse(state.doubtful)
+        assertEquals(0.0, state.bridgedMeters, 0.0)
+        assertEquals(1_800, state.phoneSteps)
     }
 
+    /** The same gap with the counter running and counting nothing: that is evidence, and it says vehicle. */
     @Test
-    fun `losing the signal mid-block costs a warning`() {
+    fun `a counter that counted nothing across a fast gap sets it aside`() {
+        val gapMs = 600_000L
         startWalking()
         fix(at(0.0), atElapsedMs = 0L)
-
-        // Blocked: seen moving at vehicle speed, but not yet past the grace.
-        var metres = 0.0
-        var t = 0L
-        repeat(3) {
-            metres += 75.0
-            t += 3_000L
-            fix(at(metres), atElapsedMs = t)
-        }
-        assertTrue("Should be blocked, not yet void", TrackingManager.walk.value.motionBlocked)
-
-        // Now the signal drops, and recording picks up far from where it stopped.
-        // The gap reset clears the *speed window*, so this fix reads as slow —
-        // but the ground covered while blocked is still unaccounted for.
-        fix(at(metres + 500.0), atElapsedMs = t + 120_000L)
+        fix(at(4.2), atElapsedMs = 3_000L)
+        TrackingManager.onSteps(StepInterval(StepSource.PHONE, epoch(0L), epoch(3_000L + gapMs), 0))
+        fix(at(2_004.2), atElapsedMs = 3_000L + gapMs)
 
         val state = TrackingManager.walk.value
-        assertTrue("Half a kilometre is a warning, not an ending", state.isTracking)
-        assertEquals("...and it has to cost one", 1, state.strikes)
-        assertTrue(
-            "The route now bridges ground nobody recorded; say so",
-            state.hadSignalGap,
-        )
+        assertTrue(state.isTracking)
+        assertTrue(state.doubtful)
+        assertTrue(state.bridgedMeters > 1_900.0)
     }
 
-    /**
-     * The other side of the loosening. A warning covers a gap the recording could
-     * plausibly have missed; it does not cover a drive across town, because the
-     * loop drawn round it would enclose ground nobody walked.
-     */
+    /** Steps that arrive late — the watch batches — still vouch for ground already judged. */
     @Test
-    fun `a gap too big for any warning still voids the walk`() {
+    fun `steps arriving after a stretch is judged change its verdict`() {
+        val gapMs = 600_000L
         startWalking()
         fix(at(0.0), atElapsedMs = 0L)
+        fix(at(4.2), atElapsedMs = 3_000L)
+        TrackingManager.onSteps(StepInterval(StepSource.PHONE, epoch(0L), epoch(3_000L), 4))
+        // The counter's report for the gap hasn't landed yet: no evidence, judged
+        // on speed alone, and 3.3 m/s with nothing against it counts.
+        fix(at(2_004.2), atElapsedMs = 3_000L + gapMs)
+        TrackingManager.onSteps(StepInterval(StepSource.PHONE, epoch(3_000L), epoch(3_000L + gapMs), 0))
 
-        var metres = 0.0
-        var t = 0L
-        repeat(3) {
-            metres += 75.0
-            t += 3_000L
-            fix(at(metres), atElapsedMs = t)
-        }
-        assertTrue(TrackingManager.walk.value.motionBlocked)
-
-        fix(at(metres + 4_000.0), atElapsedMs = t + 120_000L)
-
-        assertFalse(
-            "Four kilometres of unrecorded ground is a drive, whatever the warnings say",
-            TrackingManager.walk.value.isTracking,
-        )
+        assertTrue("Zero steps across it, once known, sets it aside", TrackingManager.walk.value.doubtful)
     }
 
     // --- helpers -------------------------------------------------------------
@@ -381,6 +399,14 @@ class TrackingManagerSignalGapTest {
         motion = null,
         altitudeMeters = null,
     )
+
+    /**
+     * The wall-clock time the manager gives a fix taken at [elapsedMs]: fixes
+     * here carry no epoch of their own, so it carries the monotonic clock onto
+     * the wall clock from the first one. Steps have to be on the same clock.
+     */
+    private fun epoch(elapsedMs: Long): Long =
+        TrackingManager.walk.value.track.first().atEpochMs!! + elapsedMs
 
     /** [meters] north of the fixed origin. */
     private fun at(meters: Double) = north(ATHENS, meters)

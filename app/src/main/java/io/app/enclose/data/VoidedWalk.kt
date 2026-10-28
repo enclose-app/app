@@ -13,33 +13,48 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * A walk the anti-cheat ended — kept, not thrown away.
+ * A walk that ended without a claim — kept, not thrown away.
  *
- * The void itself stands: a walk that read as a drive must not claim anything,
- * so this is a record, never a claim, and is held apart from [Walk] (which every
- * claim, sync and passport path reads as a closed loop) on purpose. What changed
- * is that the ground covered is no longer erased with it. Most voids are honest
- * walks the classifier got wrong, and "Nothing the user walked for is ever
- * destroyed" (see `CLAUDE.md`) applies to them as much as to a claim.
+ * Two kinds live here. Walks stopped without a claim: Stop pressed away from the
+ * start and Save chosen, or a loop with too much of its boundary bridged over
+ * stretches nothing vouched for. And walks the old anti-cheat ended, from before
+ * it stopped ending walks at all; they have no times or steps, so the new rules
+ * have nothing to judge them by, and they stay as they were.
+ *
+ * Either way this is a record, never a claim, and is held apart from [Walk]
+ * (which every claim, sync and passport path reads as a closed loop) on purpose.
+ * "Nothing the user walked for is ever destroyed" (see `CLAUDE.md`) applies to
+ * these as much as to a claim.
  */
 data class VoidedWalk(
     val id: String,
     /** The recorded path, in walked order. */
     val path: List<LatLng>,
-    /** First fix; null when the walk was voided before one landed. */
+    /** First fix; null when the walk ended before one landed. */
     val startedAtEpochMs: Long?,
+    /** When it ended. Named for the voids it was first made for. */
     val voidedAtEpochMs: Long,
     val distanceMeters: Double,
     val reason: Reason,
+    /** Walked on foot, and bridged; null for walks from before stretches were judged. */
+    val onFootMeters: Double? = null,
+    val bridgedMeters: Double? = null,
+    /** Steps counted, per source; null where none were. */
+    val phoneSteps: Int? = null,
+    val watchSteps: Int? = null,
 ) {
     /**
-     * Why it was voided. Mirrors `tracking.VoidReason` by name rather than
-     * importing it: `tracking` depends on `data`, never the reverse.
+     * Why it was kept without a claim. The last two mirror
+     * `tracking.UnclaimedReason` by name rather than importing it: `tracking`
+     * depends on `data`, never the reverse. The first three are the old
+     * anti-cheat's, kept so the walks it ended still say why.
      */
     enum class Reason {
         VEHICLE,
         TOO_FAST,
         UNVERIFIED_GAP,
+        NOT_CLOSED,
+        TOO_MUCH_BRIDGED,
         ;
 
         companion object {
@@ -59,6 +74,10 @@ data class VoidedWalkEntity(
     val distanceMeters: Double,
     /** A [VoidedWalk.Reason] name. Text, so a reason added later still reads back. */
     val reason: String,
+    val onFootMeters: Double? = null,
+    val bridgedMeters: Double? = null,
+    val phoneSteps: Int? = null,
+    val watchSteps: Int? = null,
 ) {
     fun toDomain(): VoidedWalk = VoidedWalk(
         id = id,
@@ -67,6 +86,10 @@ data class VoidedWalkEntity(
         voidedAtEpochMs = voidedAtEpochMs,
         distanceMeters = distanceMeters,
         reason = VoidedWalk.Reason.of(reason),
+        onFootMeters = onFootMeters,
+        bridgedMeters = bridgedMeters,
+        phoneSteps = phoneSteps,
+        watchSteps = watchSteps,
     )
 
     companion object {
@@ -77,6 +100,10 @@ data class VoidedWalkEntity(
             voidedAtEpochMs = w.voidedAtEpochMs,
             distanceMeters = w.distanceMeters,
             reason = w.reason.name,
+            onFootMeters = w.onFootMeters,
+            bridgedMeters = w.bridgedMeters,
+            phoneSteps = w.phoneSteps,
+            watchSteps = w.watchSteps,
         )
 
         private fun pathToJson(path: List<LatLng>): String {

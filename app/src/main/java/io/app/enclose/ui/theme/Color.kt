@@ -154,6 +154,13 @@ data class EncloseAccents(
     val gpsFair: Color,
     val gpsPoor: Color,
     val success: Color,
+    /**
+     * Stretches nothing vouched for as walked: the dotted line on the map and
+     * the notice in the panel that explains it. A muted grey rather than a
+     * warning colour — the walk is still recording and nothing is wrong with it;
+     * the claim will just cross that ground in a straight line.
+     */
+    val doubt: Color,
 )
 
 internal val LightAccents = EncloseAccents(
@@ -168,6 +175,7 @@ internal val LightAccents = EncloseAccents(
     gpsFair = Color(0xFFB06A16),
     gpsPoor = Color(0xFFB3261E),
     success = Color(0xFF2E7D32),
+    doubt = Color(0xFF6B6F7B),
 )
 
 internal val DarkAccents = EncloseAccents(
@@ -182,6 +190,7 @@ internal val DarkAccents = EncloseAccents(
     gpsFair = BrandAmber,
     gpsPoor = Color(0xFFFFB4AB),
     success = Color(0xFF7ED18A),
+    doubt = Color(0xFFA9ADB8),
 )
 
 val LocalEncloseAccents = staticCompositionLocalOf { LightAccents }

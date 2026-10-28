@@ -78,6 +78,33 @@ class CoverageTest {
         assertEquals(2, coverage[0].territoryCount)
     }
 
+    /**
+     * Claims are layers. Two that share ground cover it once, so the figure is
+     * their union — and a city can never read as more than fully covered.
+     */
+    @Test
+    fun `overlapping claims count shared ground once`() {
+        val a = square("Athens", ATHENS, sizeDeg = 0.004)
+        val b = square("Athens", ATHENS.offset(0.0, 0.002), sizeDeg = 0.004)
+
+        val coverage = Coverage.byCity(listOf(a, b)).single()
+
+        // Half of b lies over a: the pair covers one and a half squares.
+        assertEquals(a.areaSqMeters * 1.5, coverage.claimedAreaSqMeters, a.areaSqMeters * 0.01)
+        assertEquals(100.0, coverage.percent, 0.5)
+    }
+
+    @Test
+    fun `a claim walked twice covers no more than once`() {
+        val first = square("Athens", ATHENS, sizeDeg = 0.004)
+        val again = first.copy(id = "again")
+
+        val coverage = Coverage.byCity(listOf(first, again)).single()
+
+        assertEquals(first.areaSqMeters, coverage.claimedAreaSqMeters, first.areaSqMeters * 0.01)
+        assertTrue("Never past full", coverage.percent <= 100.0)
+    }
+
     @Test
     fun `no claims yields no cities`() {
         assertTrue(Coverage.byCity(emptyList()).isEmpty())

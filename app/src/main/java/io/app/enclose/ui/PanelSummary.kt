@@ -28,15 +28,19 @@ internal enum class PanelStatus {
     /** Recording normally. */
     TRACKING,
 
-    /** Recording, but movement is being rejected as not human-powered. */
-    BLOCKED,
+    /**
+     * Recording as normal, through a stretch nothing vouches for as walked: it
+     * will be a straight line in the claim unless steps turn up for it. Nothing
+     * is paused or at risk — this only says why part of the trail is dotted.
+     */
+    DOUBTFUL,
 
     /** Stopping right now would claim a valid loop. */
     READY,
     ;
 
     /** True for every state in which a walk is under way, however it's going. */
-    val isTracking: Boolean get() = this == TRACKING || this == BLOCKED || this == READY
+    val isTracking: Boolean get() = this == TRACKING || this == DOUBTFUL || this == READY
 }
 
 /** The one action the panel leads with, collapsed or not. */
@@ -71,10 +75,12 @@ internal data class PanelSummary(
         ): PanelSummary = when {
             walk.isTracking -> {
                 val status = when {
-                    // Blocked outranks ready: the loop can't close while movement
-                    // is being rejected, and readyToClose is already false then.
-                    walk.motionBlocked -> PanelStatus.BLOCKED
+                    // Ready outranks doubtful: someone standing at the start can
+                    // claim the loop now, and the claim dialog shows what was
+                    // bridged. Saying "doubtful" instead would hide the one
+                    // button they came back for.
                     walk.readyToClose -> PanelStatus.READY
+                    walk.doubtful -> PanelStatus.DOUBTFUL
                     else -> PanelStatus.TRACKING
                 }
                 PanelSummary(

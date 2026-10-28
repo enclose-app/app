@@ -100,6 +100,28 @@ class TrackingManagerRestoreTest {
         )
     }
 
+    /**
+     * What was stored with each point is what a restored walk is judged on, so
+     * a drive recorded before the process died is still a drive after it — and
+     * the steps counted before it are still counted.
+     */
+    @Test
+    fun `a restored walk is judged on what was stored with it`() {
+        // Thirty seconds walked, thirty driven, thirty walked: a fix every 3 s.
+        val metersPerFix = List(10) { 4.2 } + List(10) { 60.0 } + List(10) { 4.2 }
+        val path = metersPerFix.runningFold(ATHENS) { at, meters -> north(at, meters) }
+        val track = path.indices.map { TrackPoint(atEpochMs = 1_000_000L + it * 3_000L) }
+        val steps = listOf(StepInterval(StepSource.PHONE, 1_000_000L, 1_090_000L, 120))
+
+        TrackingManager.restore(path, startedAtMs = 1_000_000L, ActivityType.WALK, track = track, steps = steps)
+
+        val walk = TrackingManager.walk.value
+        assertEquals("The drive is the doubtful run", listOf(10..20), walk.doubtfulRuns)
+        assertEquals(84.0, walk.onFootMeters, 1.0)
+        assertEquals(684.0, walk.distanceMeters, 1.0)
+        assertEquals(120, walk.phoneSteps)
+    }
+
     // --- helpers -------------------------------------------------------------
 
     private fun line(pointCount: Int, spacingMeters: Double): List<LatLng> =

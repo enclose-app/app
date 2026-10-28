@@ -34,6 +34,22 @@ data class Walk(
     /** Whether this walk was claimed as a territory. */
     val claimed: Boolean,
     val syncStatus: SyncStatus = SyncStatus.PENDING,
+    /**
+     * How much of the boundary was walked under the walker's own power. Null
+     * for walks recorded before stretches were judged — distinct from zero.
+     */
+    val onFootMeters: Double? = null,
+    /** How much was bridged with straight lines over doubtful stretches; null as above. */
+    val bridgedMeters: Double? = null,
+    /** Steps counted over the loop, per source; null where none were. */
+    val phoneSteps: Int? = null,
+    val watchSteps: Int? = null,
+    /**
+     * Everything recorded, when it differs from [ring]: a drive before the
+     * walking began, a bridged stretch, or ground covered after the loop closed.
+     * What isn't claimed is still the walker's, so it is kept here.
+     */
+    val track: List<LatLng>? = null,
 ) {
     /** How long the walk took end to end, or null when the start wasn't recorded. */
     val durationMs: Long?

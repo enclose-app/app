@@ -80,7 +80,7 @@ fun FloatingWalkCard(
 
     val (dot, label) = when (summary.status) {
         PanelStatus.READY -> accents.success to stringResource(R.string.floating_ready)
-        PanelStatus.BLOCKED -> MaterialTheme.colorScheme.error to stringResource(R.string.stats_paused)
+        PanelStatus.DOUBTFUL -> accents.doubt to stringResource(walk.activityType.activeLabelRes)
         PanelStatus.TRACKING -> accents.trail to stringResource(walk.activityType.activeLabelRes)
         PanelStatus.IDLE, PanelStatus.NO_LOCATION ->
             MaterialTheme.colorScheme.onSurfaceVariant to stringResource(R.string.floating_idle)
@@ -129,7 +129,8 @@ fun FloatingWalkCard(
                         if (summary.status.isTracking) {
                             stringResource(
                                 R.string.panel_detail_stats,
-                                res.formatDistance(walk.distanceMeters),
+                                // What counts towards the loop, as the panel shows it.
+                                res.formatDistance(walk.onFootMeters),
                                 formatElapsed(elapsedMs),
                             )
                         } else {

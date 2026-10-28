@@ -74,7 +74,8 @@ class BackupRepository(
             walks = database.walkDao().all(),
             profile = database.profileDao().get(),
             walkProgress = progressDao.session(),
-            walkProgressPoints = progressDao.points().map { it.toLatLng() },
+            walkProgressPoints = progressDao.points().map { it.toProgressPoint() },
+            walkProgressSteps = progressDao.steps().map { it.toProgressSteps() },
             offlineRegions = database.offlineRegionDao().all(),
             voidedWalks = database.voidedWalkDao().all(),
             settings = settings.snapshot(),
@@ -103,7 +104,9 @@ class BackupRepository(
             val territoriesReplaced = data.territories.count { it.id in existingTerritories }
             val walksReplaced = data.walks.count { it.id in existingWalks }
 
-            territoryDao.upsertAll(data.territories)
+            // Through the walked shape: a file saved while claims still carved
+            // each other would otherwise bring the cut claims back.
+            territoryDao.upsertAll(data.territories.map(TerritoryEntity::asWalked))
             walkDao.upsertAll(data.walks)
             database.voidedWalkDao().upsertAll(data.voidedWalks)
             data.profile?.let { database.profileDao().upsert(it) }
@@ -118,6 +121,7 @@ class BackupRepository(
             if (adoptProgress) {
                 progressDao.begin(backedUpProgress)
                 progressDao.insertPoints(data.walkProgressPoints.map(WalkProgressPointEntity::of))
+                progressDao.insertSteps(data.walkProgressSteps.map(WalkProgressStepEntity::of))
             }
 
             BackupReport(

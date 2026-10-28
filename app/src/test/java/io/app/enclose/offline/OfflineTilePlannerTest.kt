@@ -72,13 +72,6 @@ class OfflineTilePlannerTest {
     }
 
     @Test
-    fun `conquered claims stop being cached`() {
-        val fallen = claim("a", "Athens", ATHENS).copy(conqueredAtEpochMs = 5L)
-
-        assertTrue(OfflineTilePlanner.plan(listOf(fallen)).isEmpty())
-    }
-
-    @Test
     fun `nothing is evicted while under budget`() {
         val cached = listOf(region("Athens", sizeMb = 50, visits = 1))
 

@@ -28,10 +28,20 @@ class WatchStatusTest {
             toStartMeters = 15,
             canCloseLoop = true,
             readyToClose = true,
-            blocked = false,
+            doubtful = true,
             notRecording = false,
+            loopClosedAtEpochMs = 1_790_000_900_000L,
         )
         assertEquals(status, roundTrip(status))
+    }
+
+    @Test
+    fun `a version 1 status is unreadable, because blocked meant the opposite of doubtful`() {
+        // Version 1's `blocked` said recording had stopped. A watch reading it as
+        // "still recording" — or a new watch shown an old phone's — would tell
+        // the walker the reverse of what the phone meant.
+        val v1 = WatchStatus(phase = Phase.WALKING).toFields() - "doubtful" + ("blocked" to true) + ("v" to 1)
+        assertNull(WatchStatus.fromFields { v1[it] })
     }
 
     @Test
@@ -40,6 +50,7 @@ class WatchStatusTest {
         val back = roundTrip(status)!!
         assertNull(back.startedAtEpochMs)
         assertNull(back.toStartMeters)
+        assertNull(back.loopClosedAtEpochMs)
         assertEquals(52_000, back.closedAreaSqMeters)
     }
 
@@ -67,9 +78,11 @@ class WatchStatusTest {
     }
 
     @Test
-    fun `stop is offered only on a walk that is ready to close`() {
+    fun `stop is offered at any point of a walk, and only of a walk`() {
+        // Stop keeps a walk it can't claim, so it no longer waits for the loop.
         assertTrue(WatchStatus(phase = Phase.WALKING, readyToClose = true).canStopFromWatch)
-        assertFalse(WatchStatus(phase = Phase.WALKING, canCloseLoop = true).canStopFromWatch)
+        assertTrue(WatchStatus(phase = Phase.WALKING, canCloseLoop = true).canStopFromWatch)
+        assertTrue(WatchStatus(phase = Phase.WALKING).canStopFromWatch)
         assertFalse(WatchStatus(phase = Phase.CLOSED, readyToClose = true).canStopFromWatch)
         assertFalse(WatchStatus(phase = Phase.IDLE).canStopFromWatch)
     }

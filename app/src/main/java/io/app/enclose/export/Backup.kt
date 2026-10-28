@@ -2,6 +2,8 @@ package io.app.enclose.export
 
 import io.app.enclose.data.OfflineRegionEntity
 import io.app.enclose.data.ProfileEntity
+import io.app.enclose.data.ProgressPoint
+import io.app.enclose.data.ProgressSteps
 import io.app.enclose.data.SettingsSnapshot
 import io.app.enclose.data.SyncStatus
 import io.app.enclose.data.TerritoryEntity
@@ -16,9 +18,9 @@ import java.util.Locale
 import java.util.TimeZone
 
 /**
- * Everything the app holds, in one value: every claim (standing and fallen),
- * every closed walk, the profile, the walk being recorded right now, the cached
- * map regions, and every remembered preference.
+ * Everything the app holds, in one value: every claim, every closed walk,
+ * every walk kept without a claim, the profile, the walk being recorded right
+ * now, the cached map regions, and every remembered preference.
  *
  * "All data" is the requirement, so this is checked against the database rather
  * than against memory: it carries one field per table in
@@ -36,16 +38,19 @@ data class BackupData(
     val profile: ProfileEntity? = null,
     val walkProgress: WalkProgressEntity? = null,
     /**
-     * The in-progress walk's path, in walked order.
+     * The in-progress walk's path, in walked order, with the evidence each point
+     * is judged on.
      *
-     * Positions only: the stored `seq` is an autoincrement rowid, local to the
-     * database it came from, and re-inserting one would collide with a sequence
-     * this device is still using. Order is the only thing about it that means
-     * anything, and a list keeps that.
+     * No `seq`: it is an autoincrement rowid, local to the database it came
+     * from, and re-inserting one would collide with a sequence this device is
+     * still using. Order is the only thing about it that means anything, and a
+     * list keeps that. The same goes for [walkProgressSteps].
      */
-    val walkProgressPoints: List<LatLng> = emptyList(),
+    val walkProgressPoints: List<ProgressPoint> = emptyList(),
+    /** The in-progress walk's step counts, in the order they were reported. */
+    val walkProgressSteps: List<ProgressSteps> = emptyList(),
     val offlineRegions: List<OfflineRegionEntity> = emptyList(),
-    /** Walks the anti-cheat ended, kept as records. */
+    /** Walks kept without a claim, including the ones the old anti-cheat ended. */
     val voidedWalks: List<VoidedWalkEntity> = emptyList(),
     val settings: SettingsSnapshot = SettingsSnapshot(),
 ) {
@@ -88,6 +93,7 @@ object Backup {
     private const val KEY_PROFILE = "profile"
     private const val KEY_PROGRESS = "walkInProgress"
     private const val KEY_PROGRESS_POINTS = "points"
+    private const val KEY_PROGRESS_STEPS = "steps"
     private const val KEY_OFFLINE = "offlineRegions"
     private const val KEY_VOIDED = "voidedWalks"
     private const val KEY_SETTINGS = "settings"
@@ -143,7 +149,9 @@ object Backup {
             KEY_TERRITORIES to data.territories.map(::territoryToMap),
             KEY_WALKS to data.walks.map(::walkToMap),
             KEY_PROFILE to data.profile?.let(::profileToMap),
-            KEY_PROGRESS to data.walkProgress?.let { progressToMap(it, data.walkProgressPoints) },
+            KEY_PROGRESS to data.walkProgress?.let {
+                progressToMap(it, data.walkProgressPoints, data.walkProgressSteps)
+            },
             KEY_OFFLINE to data.offlineRegions.map(::offlineRegionToMap),
             KEY_VOIDED to data.voidedWalks.map(::voidedWalkToMap),
             KEY_SETTINGS to settingsToMap(data.settings),
@@ -186,6 +194,7 @@ object Backup {
             profile = root[KEY_PROFILE].asObject()?.let(::profileFromMap),
             walkProgress = progress?.let(::progressFromMap),
             walkProgressPoints = progress?.let(::progressPointsFromMap).orEmpty(),
+            walkProgressSteps = progress?.let(::progressStepsFromMap).orEmpty(),
             offlineRegions = root.objects(KEY_OFFLINE).map(::offlineRegionFromMap),
             // Absent from files written before the table existed: reads as none.
             voidedWalks = root.objects(KEY_VOIDED).map(::voidedWalkFromMap),
@@ -258,6 +267,11 @@ object Backup {
         "movingMs" to w.movingMs,
         "claimed" to w.claimed,
         "syncStatus" to w.syncStatus.name,
+        "onFootMeters" to w.onFootMeters,
+        "bridgedMeters" to w.bridgedMeters,
+        "phoneSteps" to w.phoneSteps,
+        "watchSteps" to w.watchSteps,
+        "trackJson" to w.trackJson,
     )
 
     private fun walkFromMap(m: Map<String, Any?>): WalkEntity = WalkEntity(
@@ -274,6 +288,13 @@ object Backup {
         movingMs = m.longOrNull("movingMs"),
         claimed = m.bool("claimed"),
         syncStatus = syncStatus(m.strOrNull("syncStatus")),
+        // Null, like the columns: a walk from before stretches were judged has
+        // no split, and zero would say nothing was walked.
+        onFootMeters = m.doubleOrNull("onFootMeters"),
+        bridgedMeters = m.doubleOrNull("bridgedMeters"),
+        phoneSteps = m.longOrNull("phoneSteps")?.toInt(),
+        watchSteps = m.longOrNull("watchSteps")?.toInt(),
+        trackJson = m.strOrNull("trackJson"),
     )
 
     // --- voided walks --------------------------------------------------------
@@ -285,6 +306,10 @@ object Backup {
         "voidedAtEpochMs" to w.voidedAtEpochMs,
         "distanceMeters" to w.distanceMeters,
         "reason" to w.reason,
+        "onFootMeters" to w.onFootMeters,
+        "bridgedMeters" to w.bridgedMeters,
+        "phoneSteps" to w.phoneSteps,
+        "watchSteps" to w.watchSteps,
     )
 
     private fun voidedWalkFromMap(m: Map<String, Any?>): VoidedWalkEntity = VoidedWalkEntity(
@@ -294,6 +319,10 @@ object Backup {
         voidedAtEpochMs = m.long("voidedAtEpochMs"),
         distanceMeters = m.double("distanceMeters"),
         reason = m.str("reason"),
+        onFootMeters = m.doubleOrNull("onFootMeters"),
+        bridgedMeters = m.doubleOrNull("bridgedMeters"),
+        phoneSteps = m.longOrNull("phoneSteps")?.toInt(),
+        watchSteps = m.longOrNull("watchSteps")?.toInt(),
     )
 
     // --- profile -------------------------------------------------------------
@@ -318,17 +347,32 @@ object Backup {
 
     private fun progressToMap(
         session: WalkProgressEntity,
-        points: List<LatLng>,
+        points: List<ProgressPoint>,
+        steps: List<ProgressSteps>,
     ): Map<String, Any?> = linkedMapOf(
         "id" to session.id,
         "startedAtEpochMs" to session.startedAtEpochMs,
         "activityType" to session.activityType,
         "elevationGainMeters" to session.elevationGainMeters,
         "movingMs" to session.movingMs,
-        // Flat [lat,lng] pairs rather than objects: this is the longest list in
-        // the file by a wide margin (one entry per GPS fix), and the key names
-        // repeated a few thousand times are most of what it would weigh.
-        KEY_PROGRESS_POINTS to points.map { listOf(it.lat, it.lng) },
+        // Flat [lat, lng, time, gap, reading] arrays rather than objects: this is
+        // the longest list in the file by a wide margin (one entry per GPS fix),
+        // and the key names repeated a few thousand times are most of what it
+        // would weigh. Trailing defaults are left off — most points crossed no
+        // gap and carry no reading — and position comes first, so a reader that
+        // only knows [lat, lng] still reads the path.
+        KEY_PROGRESS_POINTS to points.map { p ->
+            listOf(p.position.lat, p.position.lng, p.atEpochMs, p.afterGap, p.motion)
+                .dropLastWhile { it == null || it == false }
+        },
+        KEY_PROGRESS_STEPS to steps.map {
+            linkedMapOf(
+                "source" to it.source,
+                "fromEpochMs" to it.fromEpochMs,
+                "toEpochMs" to it.toEpochMs,
+                "steps" to it.steps,
+            )
+        },
     )
 
     private fun progressFromMap(m: Map<String, Any?>): WalkProgressEntity = WalkProgressEntity(
@@ -339,13 +383,34 @@ object Backup {
         movingMs = m.long("movingMs"),
     )
 
-    private fun progressPointsFromMap(m: Map<String, Any?>): List<LatLng> =
+    private fun progressPointsFromMap(m: Map<String, Any?>): List<ProgressPoint> =
         m[KEY_PROGRESS_POINTS].asArray().mapNotNull { entry ->
-            val pair = entry.asArray()
-            if (pair.size < 2) return@mapNotNull null
-            val lat = pair[0].asDouble() ?: return@mapNotNull null
-            val lng = pair[1].asDouble() ?: return@mapNotNull null
-            LatLng(lat, lng)
+            val fields = entry.asArray()
+            if (fields.size < 2) return@mapNotNull null
+            val lat = fields[0].asDouble() ?: return@mapNotNull null
+            val lng = fields[1].asDouble() ?: return@mapNotNull null
+            // Files from before times were kept have pairs: those points read as
+            // having no clock, which is what the migration gave the same rows.
+            ProgressPoint(
+                position = LatLng(lat, lng),
+                atEpochMs = fields.getOrNull(2).asLong(),
+                afterGap = fields.getOrNull(3) as? Boolean ?: false,
+                motion = fields.getOrNull(4) as? String,
+            )
+        }
+
+    private fun progressStepsFromMap(m: Map<String, Any?>): List<ProgressSteps> =
+        m.objects(KEY_PROGRESS_STEPS).mapNotNull { s ->
+            // A report missing its span can't be placed on the walk, so it is
+            // left out rather than read as having been counted at 1970.
+            val from = s.longOrNull("fromEpochMs") ?: return@mapNotNull null
+            val to = s.longOrNull("toEpochMs") ?: return@mapNotNull null
+            ProgressSteps(
+                source = s.str("source", "PHONE"),
+                fromEpochMs = from,
+                toEpochMs = to,
+                steps = s.int("steps"),
+            )
         }
 
     // --- offline regions -----------------------------------------------------
@@ -443,6 +508,12 @@ object Backup {
     private fun Any?.asDouble(): Double? = when (this) {
         is Double -> this
         is Long -> toDouble()
+        else -> null
+    }
+
+    private fun Any?.asLong(): Long? = when (this) {
+        is Long -> this
+        is Double -> toLong()
         else -> null
     }
 }

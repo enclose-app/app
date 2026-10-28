@@ -53,7 +53,7 @@
         <item quantity="one">%1$d walk</item>
         <item quantity="other">%1$d walks</item>
     </plurals>
-    <string name="backup_export_detail">Saved. The file holds everything on this device — every claim standing and fallen, every walk, your profile, and your settings. Anyone who opens it can read where you walk, so keep it somewhere you\'d keep a diary.</string>
+    <string name="backup_export_detail">Saved. The file holds everything on this device — every claim, every walk, your profile, and your settings. Anyone who opens it can read where you walk, so keep it somewhere you\'d keep a diary.</string>
     <string name="backup_export_failed">Couldn\'t write the backup. The file wasn\'t saved.</string>
 
     <!-- Restore refused or failed. -->

@@ -18,6 +18,12 @@ abstract class WalkProgressDao {
     @Insert
     abstract suspend fun insertPoints(points: List<WalkProgressPointEntity>)
 
+    @Query("SELECT * FROM walk_progress_steps ORDER BY seq ASC")
+    abstract suspend fun steps(): List<WalkProgressStepEntity>
+
+    @Insert
+    abstract suspend fun insertSteps(steps: List<WalkProgressStepEntity>)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     abstract suspend fun upsertSession(session: WalkProgressEntity)
 
@@ -32,6 +38,9 @@ abstract class WalkProgressDao {
 
     @Query("DELETE FROM walk_progress_points")
     abstract suspend fun deletePoints()
+
+    @Query("DELETE FROM walk_progress_steps")
+    abstract suspend fun deleteSteps()
 
     /**
      * Open a new session, discarding anything left behind. A leftover session
@@ -48,5 +57,6 @@ abstract class WalkProgressDao {
     open suspend fun clear() {
         deleteSession()
         deletePoints()
+        deleteSteps()
     }
 }

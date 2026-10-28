@@ -6,6 +6,7 @@ data class CountryStamp(
     /** Distinct named cities claimed in this country, alphabetical. */
     val cities: List<String>,
     val territoryCount: Int,
+    /** Ground the country's claims cover, shared ground counted once — see [Footprint]. */
     val claimedAreaSqMeters: Double,
     /** When the first claim here was made — the date on the stamp. */
     val firstClaimedAtEpochMs: Long,
@@ -45,7 +46,7 @@ object Passport {
             .distinct()
             .sorted(),
         territoryCount = claims.size,
-        claimedAreaSqMeters = claims.sumOf { it.areaSqMeters },
+        claimedAreaSqMeters = Footprint.areaSqMeters(claims),
         firstClaimedAtEpochMs = claims.minOf { it.claimedAtEpochMs },
     )
 }

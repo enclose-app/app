@@ -109,6 +109,7 @@ private const val LYR_CLOSE_ZONE_FILL = "lyr-close-zone-fill"
 private const val LYR_CLOSE_ZONE_LINE = "lyr-close-zone-line"
 private const val LYR_PATH_CASING = "lyr-path-casing"
 private const val LYR_PATH = "lyr-path"
+private const val LYR_PATH_DOUBT = "lyr-path-doubt"
 private const val LYR_START = "lyr-start"
 private const val SRC_MILESTONES = "src-milestones"
 private const val LYR_MILESTONES = "lyr-milestones"
@@ -303,7 +304,8 @@ fun rememberMapController(): MapController {
  * MapLibre map with overlays driven by app state:
  *  - claimed territories (filled polygons),
  *  - the closing zone around the walk's start,
- *  - the live walk path (line, with a casing so it reads over any basemap),
+ *  - the live walk path (line, with a casing so it reads over any basemap,
+ *    dotted along stretches the claim won't follow),
  *  - the walk's start anchor (dot).
  * The user's own position is shown via MapLibre's LocationComponent.
  */
@@ -544,7 +546,7 @@ fun EncloseMap(
         o.claimed.setGeoJson(territoriesToFeatures(territories))
         o.selected.setGeoJson(territoriesToFeatures(listOfNotNull(selected)))
         o.closeZone.setGeoJson(closeZoneFeature(walk, accents))
-        o.path.setGeoJson(pathToFeature(walk.path))
+        o.path.setGeoJson(pathToFeatures(walk.path, walk.doubtfulRuns))
         o.start.setGeoJson(pointToFeature(walk.start))
 
         // Kilometre badges along the trail. Recomputed from the whole path on
@@ -705,7 +707,9 @@ private fun installOverlays(
         ),
     )
     // Casing under the trail: keeps the amber line legible over both pale
-    // pavement and dark parkland.
+    // pavement and dark parkland. Neither it nor the trail is drawn along a
+    // doubtful stretch — see pathToFeatures.
+    val counted = Expression.neq(Expression.get(PROP_DOUBTFUL), Expression.literal(true))
     style.addLayer(
         LineLayer(LYR_PATH_CASING, SRC_PATH).withProperties(
             PropertyFactory.lineColor(accents.trail.toHexString()),
@@ -713,7 +717,7 @@ private fun installOverlays(
             PropertyFactory.lineWidth(10f),
             PropertyFactory.lineCap("round"),
             PropertyFactory.lineJoin("round"),
-        ),
+        ).withFilter(counted),
     )
     style.addLayer(
         LineLayer(LYR_PATH, SRC_PATH).withProperties(
@@ -721,7 +725,18 @@ private fun installOverlays(
             PropertyFactory.lineWidth(4.5f),
             PropertyFactory.lineCap("round"),
             PropertyFactory.lineJoin("round"),
-        ),
+        ).withFilter(counted),
+    )
+    // Doubtful stretches as dots: a near-zero dash with round caps. Still drawn,
+    // because they were recorded and the walk goes on; never in the trail's
+    // colour, because the claim will cross them in a straight line.
+    style.addLayer(
+        LineLayer(LYR_PATH_DOUBT, SRC_PATH).withProperties(
+            PropertyFactory.lineColor(accents.doubt.toHexString()),
+            PropertyFactory.lineWidth(4.5f),
+            PropertyFactory.lineCap("round"),
+            PropertyFactory.lineDasharray(arrayOf(0.1f, 2f)),
+        ).withFilter(Expression.eq(Expression.get(PROP_DOUBTFUL), Expression.literal(true))),
     )
     // Kilometre badges, above the trail they mark and below the start anchor —
     // the anchor is the one point on the map that has to stay findable, and a
@@ -885,8 +900,13 @@ private fun closedRing(ring: List<LatLng>): List<Point> {
 }
 
 private fun territoriesToFeatures(territories: List<Territory>): FeatureCollection {
-    val features = territories.mapNotNull { t ->
-        // MultiPolygon: [ [ exterior, hole... ], ... ] — supports carved-out claims.
+    // Oldest first. Claims are layers, and MapLibre draws a layer's features in
+    // the order they are given, so this is what puts each new claim on top of
+    // the older ones it overlaps. The fill and outline are separate layers, so
+    // every outline still lands above every fill and the edge of a claim
+    // underneath stays visible through the one on top.
+    val features = territories.sortedBy { it.claimedAtEpochMs }.mapNotNull { t ->
+        // MultiPolygon: [ [ exterior, hole... ], ... ].
         // Via SnapDisplay, which is the one place that decides between the
         // as-walked outline and the road-matched one. Do not reach for
         // `t.polygons` directly here.
@@ -901,11 +921,34 @@ private fun territoriesToFeatures(territories: List<Territory>): FeatureCollecti
     return FeatureCollection.fromFeatures(features)
 }
 
-private fun pathToFeature(path: List<LatLng>): FeatureCollection {
+/**
+ * The walk's path as lines, split where a run of stretches is doubtful so the
+ * map can draw those dotted. Each run shares its end points with the trail on
+ * either side, so the line stays unbroken where one kind turns into the other.
+ */
+private fun pathToFeatures(path: List<LatLng>, doubtfulRuns: List<IntRange>): FeatureCollection {
     if (path.size < 2) return FeatureCollection.fromFeatures(emptyList())
-    val line = LineString.fromLngLats(path.map(::point))
-    return FeatureCollection.fromFeatures(listOf(Feature.fromGeometry(line)))
+    val features = mutableListOf<Feature>()
+    fun add(from: Int, to: Int, doubtful: Boolean) {
+        if (to <= from) return
+        val line = LineString.fromLngLats(path.subList(from, to + 1).map(::point))
+        features += Feature.fromGeometry(line).apply { addBooleanProperty(PROP_DOUBTFUL, doubtful) }
+    }
+    var at = 0
+    for (run in doubtfulRuns) {
+        val from = run.first.coerceIn(0, path.lastIndex)
+        val to = run.last.coerceIn(0, path.lastIndex)
+        if (from < at) continue
+        add(at, from, doubtful = false)
+        add(from, to, doubtful = true)
+        at = to
+    }
+    add(at, path.lastIndex, doubtful = false)
+    return FeatureCollection.fromFeatures(features)
 }
+
+/** Marks the parts of the path the claim won't follow. */
+private const val PROP_DOUBTFUL = "doubtful"
 
 /** One point per kilometre badge, each naming the image that draws it. */
 private fun milestonesToFeatures(markers: List<DistanceMarker>): FeatureCollection {

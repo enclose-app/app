@@ -1,5 +1,7 @@
 package io.app.enclose.tracking
 
+import io.app.enclose.data.ProgressPoint
+import io.app.enclose.data.ProgressSteps
 import io.app.enclose.data.WalkProgressStore
 import kotlinx.coroutines.flow.Flow
 
@@ -13,13 +15,18 @@ import kotlinx.coroutines.flow.Flow
  * notification still claimed to be recording. This watches the manager from the
  * outside and writes the points down, leaving it free of Android and DB types.
  *
- * Only new points are written — the path is append-only, so each fix costs one
- * small insert no matter how long the walk has been going.
+ * Only new points and new step reports are written — both are append-only, so
+ * each fix costs one small insert no matter how long the walk has been going.
+ * Each point goes down with its time and the evidence it was judged on, so a
+ * restored walk is judged on exactly what an uninterrupted one would have been.
  */
 class WalkProgressRecorder(private val repository: WalkProgressStore) {
 
     /** How many points of the current session are already on disk. */
     private var persisted = 0
+
+    /** How many step reports of the current session are already on disk. */
+    private var persistedSteps = 0
     private var sessionOpen = false
 
     /** Last totals written, so unchanged ones don't cost a write per fix. */
@@ -31,9 +38,15 @@ class WalkProgressRecorder(private val repository: WalkProgressStore) {
      * recorder would treat the restored path as brand new and write every point
      * a second time.
      */
-    fun adopt(pointCount: Int, elevationGainMeters: Double = 0.0, movingMs: Long = 0L) {
+    fun adopt(
+        pointCount: Int,
+        elevationGainMeters: Double = 0.0,
+        movingMs: Long = 0L,
+        stepCount: Int = 0,
+    ) {
         sessionOpen = true
         persisted = pointCount
+        persistedSteps = stepCount
         persistedGainMeters = elevationGainMeters
         persistedMovingMs = movingMs
     }
@@ -46,11 +59,12 @@ class WalkProgressRecorder(private val repository: WalkProgressStore) {
     /** Visible for tests: the whole decision, one state at a time. */
     internal suspend fun onState(state: TrackingManager.WalkState) {
         if (!state.isTracking) {
-            // Finished, abandoned, or voided — either way there is nothing left
+            // Finished, saved, or discarded — either way there is nothing left
             // to resume, and a stale session would be offered to the next walk.
             if (sessionOpen) {
                 sessionOpen = false
                 persisted = 0
+                persistedSteps = 0
                 persistedGainMeters = 0.0
                 persistedMovingMs = 0L
                 repository.clear()
@@ -69,13 +83,33 @@ class WalkProgressRecorder(private val repository: WalkProgressStore) {
             )
             sessionOpen = true
             persisted = 0
+            persistedSteps = 0
             persistedGainMeters = 0.0
             persistedMovingMs = 0L
         }
 
         if (state.path.size > persisted) {
-            repository.append(state.path.subList(persisted, state.path.size))
+            repository.append(
+                (persisted until state.path.size).map { i ->
+                    val info = state.track.getOrNull(i)
+                    ProgressPoint(
+                        position = state.path[i],
+                        atEpochMs = info?.atEpochMs,
+                        afterGap = info?.afterGap ?: false,
+                        motion = info?.motion?.name,
+                    )
+                },
+            )
             persisted = state.path.size
+        }
+
+        if (state.steps.size > persistedSteps) {
+            repository.appendSteps(
+                state.steps.subList(persistedSteps, state.steps.size).map {
+                    ProgressSteps(it.source.name, it.fromEpochMs, it.toEpochMs, it.steps)
+                },
+            )
+            persistedSteps = state.steps.size
         }
 
         // Only when something actually moves: the elevation noise gate leaves

@@ -79,6 +79,10 @@ dependencies {
     implementation(libs.play.services.wearable)
     implementation(libs.wear.remote.interactions)
 
+    // The watch's steps, the walk's second witness: passive, batched by the
+    // platform, so counting them costs next to nothing — see StepRecorder.
+    implementation(libs.health.services.client)
+
     // The live map: the same engine and tiles as the phone, drawn with OpenGL
     // ES rather than Vulkan — see libs.versions.toml.
     implementation(libs.maplibre.opengl)

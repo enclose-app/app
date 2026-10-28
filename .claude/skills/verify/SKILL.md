@@ -64,15 +64,15 @@ passing.
   you want.
 - Single test or single method:
   ```bash
-  ./gradlew testDebugUnitTest --tests "io.app.enclose.data.ConquestTest"
-  ./gradlew testDebugUnitTest --tests "*.ConquestTest.a claim never conquers itself"
+  ./gradlew :app:testDebugUnitTest --tests "io.app.enclose.data.FootprintTest"
+  ./gradlew :app:testDebugUnitTest --tests "*.FootprintTest.the same loop claimed twice counts once"
   ```
   Test names are backtick-quoted Kotlin sentences; quote them as-is.
 - Unit tests are plain JVM JUnit4 — **no Robolectric**, so nothing touching
   `Context`, `SharedPreferences`, or Room can be unit tested. The convention is to
-  extract the decision into pure Kotlin and test that: `Conquest`, `Coverage`,
-  `MotionGate`, `Place`, and `WalkProgressRecorder` (via the `WalkProgressStore`
-  interface) all exist in that shape. JTS is pure Java and works fine in tests.
+  extract the decision into pure Kotlin and test that: `Footprint`, `Coverage`,
+  `StretchJudge`, `LoopVerdict`, `Place`, and `WalkProgressRecorder` (via the
+  `WalkProgressStore` interface) all exist in that shape. JTS is pure Java and works fine in tests.
 - `TrackingManager` is a singleton `object`; tests that touch it must reset state
   in `@After` (see `TrackingManagerRestoreTest`).
 - Unit tests cannot reach the location service, the geocoder, the map, or the

@@ -18,12 +18,22 @@ data class WatchStatus(
     val toStartMeters: Int? = null,
     /** Walked far enough and left the start zone: getting back closes the loop. */
     val canCloseLoop: Boolean = false,
-    /** Stopping now would claim. The one state in which the watch offers Stop. */
+    /** Stopping now would claim the loop closing here. */
     val readyToClose: Boolean = false,
-    /** Movement is being rejected as not human-powered (a car, a bus). */
-    val blocked: Boolean = false,
+    /**
+     * The stretch just walked is one nothing vouches for — a car, a bus, or just
+     * faster than steps explain. Recording carries on; the claim will cross it in
+     * a straight line. Replaced `blocked`, which meant recording had stopped.
+     */
+    val doubtful: Boolean = false,
     /** Nothing is reaching the walk: the phone's recorder isn't running. */
     val notRecording: Boolean = false,
+    /**
+     * When the loop Stop would claim closed, while a stretch is in doubt away
+     * from the start — the walker has ridden on from a loop that is still theirs.
+     * Null at any other time.
+     */
+    val loopClosedAtEpochMs: Long? = null,
     /** Area of the loop just closed, while it waits to be claimed on the phone. */
     val closedAreaSqMeters: Int? = null,
 ) {
@@ -43,10 +53,11 @@ data class WatchStatus(
      * it was last sent, and the phone asks it again of its own live state before
      * doing anything, because the two can differ by a few seconds of walking.
      *
-     * Only a closable loop: Stop on a walk that isn't ready throws the walk
-     * away, and that decision stays on the phone, behind its confirmation.
+     * Any time a walk is on: Stop claims the loop that closed, here or earlier,
+     * and keeps a walk with none — it throws nothing away, so it no longer waits
+     * for the loop to be ready. A closed loop waiting on the phone is past Stop.
      */
-    val canStopFromWatch: Boolean get() = phase == Phase.WALKING && readyToClose
+    val canStopFromWatch: Boolean get() = phase == Phase.WALKING
 
     /**
      * Flat key → value fields for a Data Layer item. Only Int, Long, Boolean and
@@ -61,9 +72,10 @@ data class WatchStatus(
         toStartMeters?.let { put(K_TO_START, it) }
         put(K_CAN_CLOSE, canCloseLoop)
         put(K_READY, readyToClose)
-        put(K_BLOCKED, blocked)
+        put(K_DOUBTFUL, doubtful)
         put(K_NOT_RECORDING, notRecording)
         closedAreaSqMeters?.let { put(K_CLOSED_AREA, it) }
+        loopClosedAtEpochMs?.let { put(K_LOOP_CLOSED_AT, it) }
     }
 
     companion object {
@@ -76,8 +88,12 @@ data class WatchStatus(
         /**
          * Bumped when a field changes meaning. A watch app older than the phone
          * app (they update separately) shows "update" rather than misreading.
+         *
+         * 2: `blocked` ("not recording") became [doubtful] ("still recording"),
+         * [distanceMeters] became the ground on foot, and Stop is offered at any
+         * point of a walk ([canStopFromWatch]).
          */
-        const val VERSION = 1
+        const val VERSION = 2
 
         /**
          * Reads [toFields] back. [get] is the Data Layer lookup. Anything
@@ -97,9 +113,10 @@ data class WatchStatus(
                 toStartMeters = get(K_TO_START) as? Int,
                 canCloseLoop = get(K_CAN_CLOSE) as? Boolean ?: return null,
                 readyToClose = get(K_READY) as? Boolean ?: return null,
-                blocked = get(K_BLOCKED) as? Boolean ?: return null,
+                doubtful = get(K_DOUBTFUL) as? Boolean ?: return null,
                 notRecording = get(K_NOT_RECORDING) as? Boolean ?: return null,
                 closedAreaSqMeters = get(K_CLOSED_AREA) as? Int,
+                loopClosedAtEpochMs = get(K_LOOP_CLOSED_AT) as? Long,
             )
         }
 
@@ -114,8 +131,9 @@ data class WatchStatus(
         private const val K_TO_START = "toStart"
         private const val K_CAN_CLOSE = "canClose"
         private const val K_READY = "ready"
-        private const val K_BLOCKED = "blocked"
+        private const val K_DOUBTFUL = "doubtful"
         private const val K_NOT_RECORDING = "notRecording"
         private const val K_CLOSED_AREA = "closedArea"
+        private const val K_LOOP_CLOSED_AT = "loopClosedAt"
     }
 }
