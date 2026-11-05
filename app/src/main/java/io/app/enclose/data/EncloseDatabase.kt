@@ -291,7 +291,9 @@ abstract class EncloseDatabase : RoomDatabase() {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     EncloseDatabase::class.java,
-                    "enclose.db",
+                    // enclose-demo.db while demo mode is on: a separate file,
+                    // so the real one is never opened by it — see DemoMode.
+                    DemoMode.databaseName(context),
                 )
                     .addMigrations(
                         MIGRATION_5_6,

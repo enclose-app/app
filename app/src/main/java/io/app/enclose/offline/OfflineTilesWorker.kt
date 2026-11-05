@@ -1,5 +1,6 @@
 package io.app.enclose.offline
 
+import io.app.enclose.data.DemoMode
 import android.content.Context
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -26,6 +27,9 @@ class OfflineTilesWorker(
 
     override suspend fun doWork(): Result {
         val app = applicationContext as EncloseApp
+        // The tile store is shared between the real and demo databases; demo
+        // regions would be downloads the real app has no row for and never evicts.
+        if (DemoMode.isOn(app)) return Result.success()
         val styleUrl = inputData.getString(KEY_STYLE_URL) ?: return Result.success()
         val pixelRatio = inputData.getFloat(KEY_PIXEL_RATIO, 1f)
 
@@ -54,6 +58,7 @@ object OfflineTilesScheduler {
      * nothing they had before.
      */
     fun request(context: Context, styleUrl: String, pixelRatio: Float) {
+        if (DemoMode.isOn(context)) return
         val request = OneTimeWorkRequestBuilder<OfflineTilesWorker>()
             .setConstraints(
                 Constraints.Builder()

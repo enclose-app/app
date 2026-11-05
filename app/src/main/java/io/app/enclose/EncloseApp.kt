@@ -3,6 +3,7 @@ package io.app.enclose
 import android.app.Application
 import io.app.enclose.data.BackupRepository
 import io.app.enclose.data.CityTagger
+import io.app.enclose.data.DemoMode
 import io.app.enclose.data.EncloseDatabase
 import io.app.enclose.data.ProfileRepository
 import io.app.enclose.data.SnapTagger
@@ -163,6 +164,11 @@ class EncloseApp : Application() {
                     ),
                 )
             }
+        }
+
+        // Demo mode (debug builds): a separate database, filled on first open.
+        if (DemoMode.isOn(this)) {
+            applicationScope.launch { DemoMode.seedIfEmpty(database, System.currentTimeMillis()) }
         }
 
         // The Galaxy Watch companion's view of the walk.

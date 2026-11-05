@@ -11,6 +11,7 @@ import io.app.enclose.EncloseApp
 import io.app.enclose.export.Backup
 import io.app.enclose.export.GpxImporter
 import io.app.enclose.data.BackupReport
+import io.app.enclose.data.DemoMode
 import io.app.enclose.data.MapCamera
 import io.app.enclose.data.Footprint
 import io.app.enclose.data.SyncStatus
@@ -471,6 +472,32 @@ class EncloseViewModel(app: Application) : AndroidViewModel(app) {
     fun cancelWalk() {
         if (!_injectedWalk.value) LocationService.stop(getApplication())
         TrackingManager.cancelWalk()
+    }
+
+    /**
+     * Demo mode: sample claims in their own database, for screenshots — see
+     * [DemoMode]. Debug builds only, like test mode.
+     */
+    val demoMode: Boolean = DemoMode.isOn(app)
+
+    /**
+     * Switches to or from the demo database and restarts the app, since the
+     * database is opened once per process. Refused while a walk is running:
+     * the restart would end it, and a real walk must never be lost to a toggle.
+     * Returns whether it went ahead.
+     */
+    fun setDemoMode(enabled: Boolean): Boolean {
+        if (enabled && !devToolsAvailable) return false
+        if (walk.value.isTracking) return false
+        val context = getApplication<Application>()
+        DemoMode.set(context, enabled, settings)
+        context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
+            context.startActivity(
+                it.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK),
+            )
+        }
+        Runtime.getRuntime().exit(0)
+        return true
     }
 
     fun setTestMode(enabled: Boolean) {

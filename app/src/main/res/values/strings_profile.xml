@@ -94,6 +94,9 @@
     <string name="app_how_it_works_title">How Enclose works</string>
     <string name="app_how_it_works_subtitle">Walk a loop, come back, claim what\'s inside.</string>
     <string name="app_test_mode_title">Test mode</string>
+    <string name="app_demo_mode_title">Demo data</string>
+    <string name="app_demo_mode_body">Sample claims for screenshots, kept apart from your own. The app restarts to switch.</string>
+    <string name="app_demo_mode_walking">Stop the walk first — switching restarts the app.</string>
     <string name="app_test_mode_body">Tap the map to drop points instead of walking. Nothing is recorded from GPS while it\'s on.</string>
     <string name="app_snap_title">Snap routes to paths</string>
     <string name="app_snap_body">Draws claims along real roads instead of your raw GPS trace. Sends the route of each new claim to a map service to do it. Areas never change.</string>

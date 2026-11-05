@@ -41,6 +41,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.filled.Casino
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.CropSquare
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Edit
@@ -376,6 +377,39 @@ fun ProfileScreen(
                             )
                         }
                         Switch(checked = testMode, onCheckedChange = encloseViewModel::setTestMode)
+                    }
+
+                    HorizontalDivider(Modifier.padding(vertical = 12.dp))
+
+                    // Sample claims in a database of their own, for screenshots.
+                    // Flipping it restarts the app — see DemoMode.
+                    var demoRefused by remember { mutableStateOf(false) }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Filled.PhotoCamera,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(stringResource(R.string.app_demo_mode_title), style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                stringResource(
+                                    if (demoRefused) R.string.app_demo_mode_walking else R.string.app_demo_mode_body,
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (demoRefused) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = encloseViewModel.demoMode,
+                            onCheckedChange = { demoRefused = !encloseViewModel.setDemoMode(it) },
+                        )
                     }
                 }
 
