@@ -51,7 +51,7 @@ class PhoneLink(context: Context) : DataClient.OnDataChangedListener {
     /**
      * False until the first read of the phone's status has come back. Until
      * then [state] is [LinkState.Waiting] for want of an answer, not because
-     * there is no phone — the screen shows the launch logo rather than saying so.
+     * there is no phone — MainActivity holds the splash rather than saying so.
      */
     private val _ready = MutableStateFlow(false)
     val ready: StateFlow<Boolean> = _ready.asStateFlow()
@@ -76,7 +76,7 @@ class PhoneLink(context: Context) : DataClient.OnDataChangedListener {
                 items.release()
             }.addOnCompleteListener {
                 // Failed reads count too: "no answer" is an answer, and the
-                // logo must never be what stands between the user and the app.
+                // splash must never be what stands between the user and the app.
                 if (path == WatchLink.STATUS_PATH) _ready.value = true
             }
         }

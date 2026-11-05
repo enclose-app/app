@@ -4,10 +4,10 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- The launch logo (LaunchLogo): ic_launcher_foreground's mark, centred on
-         its own bounds and spanning 66 of the 108 units (radius 33), with no
-         background. LaunchLogo sizes it from that span, so keep the two in
-         step. Same paths as ic_launcher_foreground; change them together. -->
+    <!-- The system splash's icon (themes.xml): ic_launcher_foreground's mark,
+         centred on its own bounds and spanning 66 of the 108 units (radius
+         33) — inside the circle the splash masks an icon to — with no
+         background. Same paths as ic_launcher_foreground; change them together. -->
     <group
         android:scaleX="2.0122"
         android:scaleY="2.0122"
