@@ -72,7 +72,13 @@ fun EncloseWearTheme(content: @Composable () -> Unit) {
  * up between updates.
  */
 @Composable
-fun WalkScreen(state: LinkState, map: WatchMap?, claims: WatchClaims?, link: PhoneLink) {
+fun WalkScreen(
+    state: LinkState,
+    phoneApp: PhoneApp,
+    map: WatchMap?,
+    claims: WatchClaims?,
+    link: PhoneLink,
+) {
     AppScaffold {
         val walking = (state as? LinkState.Known)?.status?.takeIf { it.phase == Phase.WALKING }
         if (walking != null) {
@@ -96,7 +102,7 @@ fun WalkScreen(state: LinkState, map: WatchMap?, claims: WatchClaims?, link: Pho
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 when (state) {
-                    LinkState.Waiting -> NoPhone(link)
+                    LinkState.Waiting -> NoPhone(phoneApp, link)
                     LinkState.Unreadable -> Message(
                         title = stringResource(R.string.watch_update_title),
                         body = stringResource(R.string.watch_update_body),
@@ -112,11 +118,27 @@ fun WalkScreen(state: LinkState, map: WatchMap?, claims: WatchClaims?, link: Pho
     }
 }
 
+/**
+ * Nothing heard from the phone yet. What's missing decides what to offer: the
+ * watch app does nothing without the phone's, so each case has to lead
+ * somewhere — installing it, connecting the phone, or opening it once.
+ */
 @Composable
-private fun NoPhone(link: PhoneLink) {
-    Message(title = stringResource(R.string.app_name), body = stringResource(R.string.watch_no_phone_body))
-    Spacer(Modifier.height(8.dp))
-    OpenOnPhoneButton(label = stringResource(R.string.watch_open_on_phone), uri = WatchLink.OPEN_URI, link = link)
+private fun NoPhone(phoneApp: PhoneApp, link: PhoneLink) {
+    val appName = stringResource(R.string.app_name)
+    when (phoneApp) {
+        PhoneApp.MISSING -> {
+            Message(title = appName, body = stringResource(R.string.watch_install_body))
+            Spacer(Modifier.height(8.dp))
+            OpenOnPhoneButton(label = stringResource(R.string.watch_install_on_phone), uri = link.storeUri, link = link)
+        }
+        PhoneApp.NOT_CONNECTED -> Message(title = appName, body = stringResource(R.string.watch_not_connected_body))
+        PhoneApp.INSTALLED, PhoneApp.UNKNOWN -> {
+            Message(title = appName, body = stringResource(R.string.watch_no_phone_body))
+            Spacer(Modifier.height(8.dp))
+            OpenOnPhoneButton(label = stringResource(R.string.watch_open_on_phone), uri = WatchLink.OPEN_URI, link = link)
+        }
+    }
 }
 
 @Composable

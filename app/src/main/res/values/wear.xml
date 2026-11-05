@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Tells the watch app Enclose is installed here (WatchLink.PHONE_CAPABILITY).
+  Without it the watch can't tell a phone missing the app from one that hasn't
+  opened it yet, and can't offer to install it.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@array/android_wear_capabilities">
+    <string-array name="android_wear_capabilities" translatable="false">
+        <item>enclose_phone</item>
+    </string-array>
+</resources>

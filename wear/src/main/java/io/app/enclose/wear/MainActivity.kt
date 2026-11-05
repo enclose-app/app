@@ -39,8 +39,9 @@ class MainActivity : ComponentActivity() {
             val state by link.state.collectAsStateWithLifecycle()
             val map by link.map.collectAsStateWithLifecycle()
             val claims by link.claims.collectAsStateWithLifecycle()
+            val phoneApp by link.phoneApp.collectAsStateWithLifecycle()
             EncloseWearTheme {
-                WalkScreen(state = state, map = map, claims = claims, link = link)
+                WalkScreen(state = state, phoneApp = phoneApp, map = map, claims = claims, link = link)
             }
         }
     }

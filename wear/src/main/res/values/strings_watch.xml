@@ -14,6 +14,10 @@
     <string name="watch_update_body">The phone and watch apps are different versions.</string>
     <string name="watch_no_phone_body">Open Enclose on your phone once to connect.</string>
     <string name="watch_open_on_phone">Open on phone</string>
+    <!-- A phone is connected but Enclose isn't installed on it. -->
+    <string name="watch_install_body">Enclose records walks on your phone. Install it there to use your watch.</string>
+    <string name="watch_install_on_phone">Install on phone</string>
+    <string name="watch_not_connected_body">Connect your phone to use Enclose on your watch.</string>
     <string name="watch_start_walk">Start walk</string>
     <string name="watch_starts_on_phone">Starts on your phone</string>
     <!-- The live strip: %1$s elapsed time, %2$s distance with its unit. -->

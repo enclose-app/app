@@ -58,6 +58,16 @@ object WatchLink {
      */
     const val OPEN_URI = "enclose://walk/open"
 
+    /**
+     * The Wear capability the phone app declares (`app/.../values/wear.xml`).
+     * It is how the watch tells "the phone app isn't installed" — where it
+     * offers the Play Store on the phone — from "installed, not yet opened".
+     */
+    const val PHONE_CAPABILITY = "enclose_phone"
+
+    /** The same, declared by the watch app (`wear/.../values/wear.xml`). */
+    const val WATCH_CAPABILITY = "enclose_watch"
+
     const val SCHEME = "enclose"
     const val START_PATH = "/start"
 }

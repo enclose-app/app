@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.core.content.ContextCompat
 import androidx.wear.remote.interactions.RemoteActivityHelper
 import com.google.android.gms.tasks.Task
+import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.DataClient
 import com.google.android.gms.wearable.DataEvent
 import com.google.android.gms.wearable.DataEventBuffer
@@ -35,6 +36,21 @@ sealed interface LinkState {
     data class Known(val status: WatchStatus) : LinkState
 }
 
+/** Whether Enclose is on the phone — what the watch offers while it has no status. */
+enum class PhoneApp {
+    /** Not asked yet, or the question failed: say what was always said. */
+    UNKNOWN,
+
+    /** No phone connected at all. */
+    NOT_CONNECTED,
+
+    /** A phone is connected and Enclose isn't on it: offer the Play Store there. */
+    MISSING,
+
+    /** Enclose is on the phone; it may not have been opened yet. */
+    INSTALLED,
+}
+
 /**
  * The watch's half of the Data Layer. Lives as long as the activity is
  * started — [attach]/[detach] — since a listener with no screen to update is
@@ -44,6 +60,16 @@ class PhoneLink(context: Context) : DataClient.OnDataChangedListener {
 
     private val context = context.applicationContext
     private val dataClient = Wearable.getDataClient(this.context)
+    private val capabilityClient = Wearable.getCapabilityClient(this.context)
+
+    private val _phoneApp = MutableStateFlow(PhoneApp.UNKNOWN)
+    val phoneApp: StateFlow<PhoneApp> = _phoneApp.asStateFlow()
+
+    /** Hears the phone app being installed or removed while the screen is up. */
+    private val capabilityListener = CapabilityClient.OnCapabilityChangedListener { checkPhoneApp() }
+
+    /** Enclose's Play Store page, opened on the phone when it isn't there. */
+    val storeUri: String = "market://details?id=${this.context.packageName}"
 
     private val _state = MutableStateFlow<LinkState>(LinkState.Waiting)
     val state: StateFlow<LinkState> = _state.asStateFlow()
@@ -66,6 +92,8 @@ class PhoneLink(context: Context) : DataClient.OnDataChangedListener {
 
     fun attach() {
         dataClient.addListener(this)
+        capabilityClient.addListener(capabilityListener, WatchLink.PHONE_CAPABILITY)
+        checkPhoneApp()
         // The listener hears changes only; what the phone said before the app
         // opened is read once here. Any node: there is one phone.
         for (path in listOf(WatchLink.STATUS_PATH, WatchLink.MAP_PATH, WatchLink.CLAIMS_PATH)) {
@@ -96,6 +124,28 @@ class PhoneLink(context: Context) : DataClient.OnDataChangedListener {
 
     fun detach() {
         dataClient.removeListener(this)
+        capabilityClient.removeListener(capabilityListener)
+    }
+
+    /**
+     * Is Enclose on a connected phone? A phone with the app declares
+     * [WatchLink.PHONE_CAPABILITY]; one connected without it needs the app
+     * installed, and saying "open Enclose on your phone" there is a dead end.
+     */
+    private fun checkPhoneApp() {
+        capabilityClient.getCapability(WatchLink.PHONE_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
+            .addOnSuccessListener { info ->
+                if (info.nodes.isNotEmpty()) {
+                    _phoneApp.value = PhoneApp.INSTALLED
+                    return@addOnSuccessListener
+                }
+                Wearable.getNodeClient(context).connectedNodes
+                    .addOnSuccessListener { nodes ->
+                        _phoneApp.value = if (nodes.isEmpty()) PhoneApp.NOT_CONNECTED else PhoneApp.MISSING
+                    }
+                    .addOnFailureListener { _phoneApp.value = PhoneApp.UNKNOWN }
+            }
+            .addOnFailureListener { _phoneApp.value = PhoneApp.UNKNOWN }
     }
 
     override fun onDataChanged(events: DataEventBuffer) {
@@ -127,8 +177,9 @@ class PhoneLink(context: Context) : DataClient.OnDataChangedListener {
     }
 
     /**
-     * Open Enclose on the phone at [uri] — [WatchLink.START_URI] or
-     * [WatchLink.OPEN_URI]. [onResult] hears whether the request reached it.
+     * Open [uri] on the phone — Enclose at [WatchLink.START_URI] or
+     * [WatchLink.OPEN_URI], or its Play Store page at [storeUri]. [onResult]
+     * hears whether the request reached it.
      */
     fun openOnPhone(uri: String, onResult: (Boolean) -> Unit) {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
