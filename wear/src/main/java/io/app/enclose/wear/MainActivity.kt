@@ -11,6 +11,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 class MainActivity : ComponentActivity() {
@@ -27,9 +30,10 @@ class MainActivity : ComponentActivity() {
             // either moment would be asking mid-walk. Both are optional — the
             // buzz comes without the prompt, and the phone judges on its own
             // steps without the watch's.
+            var notificationsAllowed by remember { mutableStateOf(false) }
             val permissions = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestMultiplePermissions(),
-            ) { }
+            ) { notificationsAllowed = it[Manifest.permission.POST_NOTIFICATIONS] == true }
             LaunchedEffect(Unit) {
                 permissions.launch(
                     arrayOf(Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.ACTIVITY_RECOGNITION),
@@ -37,6 +41,14 @@ class MainActivity : ComponentActivity() {
             }
 
             val state by link.state.collectAsStateWithLifecycle()
+            // The listener service posts the walk's indicator as statuses
+            // arrive, but one that arrived before notifications were allowed
+            // posted nothing. Granting them mid-walk shouldn't have to wait for
+            // the next ten metres.
+            val known = (state as? LinkState.Known)?.status
+            LaunchedEffect(known, notificationsAllowed) {
+                if (known != null) WalkIndicator.show(this@MainActivity, known)
+            }
             val map by link.map.collectAsStateWithLifecycle()
             val claims by link.claims.collectAsStateWithLifecycle()
             val phoneApp by link.phoneApp.collectAsStateWithLifecycle()

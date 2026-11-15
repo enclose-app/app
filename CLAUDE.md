@@ -272,6 +272,17 @@ apps compile against one definition.
   "Looks like a vehicle. Your loop closed at 14:32." Once per loop, because a bus
   slows at every stop and a buzz each time it pulls away is a watch that won't
   stop vibrating.
+- **Ongoing activity:** while the status says WALKING, `WalkIndicator` keeps an
+  ongoing notification carrying a Wear `OngoingActivity` — the icon on the watch
+  face and the chip in Recents and the launcher, each a tap back to the walk.
+  **Play rejects the watch app without it** ("Missing ongoing activity"). There
+  is no foreground service behind it: nothing runs on the watch between the
+  phone's statuses, so it is posted from `StatusListenerService` on each one
+  and cancelled by any other phase (the IDLE written on every phone process
+  start clears a stale one). It needs `POST_NOTIFICATIONS`; `MainActivity`
+  re-posts when that is granted mid-walk. `MainActivity`'s `taskAffinity=""` is
+  what makes the Recents chip replace the app's entry rather than sit beside it.
+  If a tile is ever added, it has to reference the ongoing activity too.
 - **Steps, the walk's second witness.** The watch counts with Health Services'
   *passive* STEPS (`StepRecorder`), registered only while the status says
   WALKING and cleared when it doesn't; the platform batches deliveries to

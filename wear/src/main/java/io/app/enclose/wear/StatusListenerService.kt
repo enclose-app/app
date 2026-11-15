@@ -58,6 +58,9 @@ class StatusListenerService : WearableListenerService() {
             if (loopClosedAt != null) putLong(KEY_WARNED_FOR, loopClosedAt)
         }
 
+        // First: it is what the watch face and Recents show for the whole walk.
+        WalkIndicator.show(this, status)
+
         if (ReadyAlert.shouldBuzz(wasReady, status)) {
             buzz()
             promptToStop()

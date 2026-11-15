@@ -78,6 +78,9 @@ dependencies {
 
     implementation(libs.play.services.wearable)
     implementation(libs.wear.remote.interactions)
+    // The walk on the watch face and in Recents while one is on, which Wear's
+    // quality guidelines require — see WalkIndicator.
+    implementation(libs.wear.ongoing)
 
     // The watch's steps, the walk's second witness: passive, batched by the
     // platform, so counting them costs next to nothing — see StepRecorder.

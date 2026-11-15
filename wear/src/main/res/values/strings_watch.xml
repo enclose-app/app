@@ -48,6 +48,10 @@
     <string name="watch_loop_closed">Loop closed</string>
     <string name="watch_claim_on_phone">Name and claim it on your phone</string>
 
+    <!-- The walk shown on the watch face and in recent apps while one is being recorded. -->
+    <string name="watch_ongoing_channel">Walk in progress</string>
+    <string name="watch_ongoing_title">Walk in progress</string>
+
     <!-- Notification when the walker steps into the closing radius. -->
     <string name="watch_ready_channel">Ready to close</string>
     <string name="watch_ready_title">Loop ready to close</string>
