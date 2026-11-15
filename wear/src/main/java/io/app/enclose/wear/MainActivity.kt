@@ -2,9 +2,6 @@ package io.app.enclose.wear
 
 import android.Manifest
 import android.os.Bundle
-import android.os.SystemClock
-import android.view.View
-import android.view.ViewTreeObserver
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -13,6 +10,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -22,8 +20,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // A recreated activity gets no splash, so there is nothing to hold.
-        if (savedInstanceState == null) holdSplashUntilReady()
+        // The system splash normally fades itself out over the app's first
+        // frame. That frame is LaunchLogo — the same icon in the same place —
+        // so the fade showed as the icon dimming and coming back. Taking the
+        // splash away in one step leaves nothing to see change.
+        splashScreen.setOnExitAnimationListener { it.remove() }
         setContent {
             // Asked once, up front: the ready-to-close prompt is the companion's
             // main job, the steps it counts vouch for the walk, and asking at
@@ -34,10 +35,16 @@ class MainActivity : ComponentActivity() {
             val permissions = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestMultiplePermissions(),
             ) { notificationsAllowed = it[Manifest.permission.POST_NOTIFICATIONS] == true }
-            LaunchedEffect(Unit) {
-                permissions.launch(
-                    arrayOf(Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.ACTIVITY_RECOGNITION),
-                )
+            // Not before the launch logo has gone: the prompt is a window of
+            // its own, and asked at once it covered the logo on a first run —
+            // the run a reviewer sees.
+            var launched by rememberSaveable { mutableStateOf(false) }
+            LaunchedEffect(launched) {
+                if (launched) {
+                    permissions.launch(
+                        arrayOf(Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.ACTIVITY_RECOGNITION),
+                    )
+                }
             }
 
             val state by link.state.collectAsStateWithLifecycle()
@@ -52,33 +59,13 @@ class MainActivity : ComponentActivity() {
             val map by link.map.collectAsStateWithLifecycle()
             val claims by link.claims.collectAsStateWithLifecycle()
             val phoneApp by link.phoneApp.collectAsStateWithLifecycle()
+            val ready by link.ready.collectAsStateWithLifecycle()
             EncloseWearTheme {
-                WalkScreen(state = state, phoneApp = phoneApp, map = map, claims = claims, link = link)
+                LaunchLogo(ready = ready, onDone = { launched = true }) {
+                    WalkScreen(state = state, phoneApp = phoneApp, map = map, claims = claims, link = link)
+                }
             }
         }
-    }
-
-    /**
-     * Keeps the system splash — the app's icon on black, which Wear's quality
-     * guidelines require at launch — up until the first read of the phone's
-     * status is back. Until then the link reads [LinkState.Waiting], which the
-     * screen would show as "open Enclose on your phone" to someone whose phone
-     * was connected all along. [PhoneLink] marks a failed read ready too, and
-     * [SPLASH_CAP_MS] covers a read that never answers: the splash must never
-     * be what stands between the user and the app.
-     */
-    private fun holdSplashUntilReady() {
-        val shownAt = SystemClock.uptimeMillis()
-        val content = findViewById<View>(android.R.id.content)
-        content.viewTreeObserver.addOnPreDrawListener(
-            object : ViewTreeObserver.OnPreDrawListener {
-                override fun onPreDraw(): Boolean {
-                    val go = link.ready.value || SystemClock.uptimeMillis() - shownAt >= SPLASH_CAP_MS
-                    if (go) content.viewTreeObserver.removeOnPreDrawListener(this)
-                    return go
-                }
-            },
-        )
     }
 
     override fun onStart() {
@@ -90,9 +77,6 @@ class MainActivity : ComponentActivity() {
     private companion object {
         /** `--ez demo true`: show [DemoWalk] — see there. */
         const val EXTRA_DEMO = "demo"
-
-        /** The longest the splash waits on the phone's status. */
-        const val SPLASH_CAP_MS = 3_000L
     }
 
     override fun onStop() {
