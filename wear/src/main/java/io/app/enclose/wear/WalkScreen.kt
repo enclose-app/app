@@ -9,7 +9,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -22,12 +25,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.wear.compose.foundation.rememberActiveFocusRequester
+import androidx.wear.compose.foundation.rotary.RotaryScrollableDefaults
+import androidx.wear.compose.foundation.rotary.rotaryScrollable
 import androidx.wear.compose.material3.AppScaffold
 import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.ButtonDefaults
@@ -93,11 +101,21 @@ fun WalkScreen(
             )
             return@AppScaffold
         }
-        ScreenScaffold {
+        // Scrolls, because the text follows the system font size and the
+        // longest of these screens (a title, three lines, a button and its
+        // answer) is taller than a small watch at the largest one. Shorter
+        // than the screen it sits centred, as it did when it couldn't scroll.
+        val scroll = rememberScrollState()
+        ScreenScaffold(scrollState = scroll) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 24.dp),
+                    .rotaryScrollable(
+                        behavior = RotaryScrollableDefaults.behavior(scroll),
+                        focusRequester = rememberActiveFocusRequester(),
+                    )
+                    .verticalScroll(scroll)
+                    .padding(roundSafeInset()),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
@@ -117,6 +135,28 @@ fun WalkScreen(
         }
     }
 }
+
+/**
+ * How far in from each edge a rectangle has to sit to lie wholly inside a
+ * round screen: (1 − 1/√2) / 2 of its width. Anything laid out inside it can
+ * grow with the system font size, wrap onto more lines and still not lose a
+ * corner to the curve — which a fixed dp padding only manages at the font size
+ * and the watch it was tuned on.
+ */
+@Composable
+private fun roundSafeInset(): Dp {
+    val config = LocalConfiguration.current
+    return if (config.isScreenRound) (config.screenWidthDp * ROUND_SAFE_FRACTION).dp else SQUARE_INSET
+}
+
+private const val ROUND_SAFE_FRACTION = 0.1465f
+private val SQUARE_INSET = 12.dp
+
+/** The most of the screen the walking strip may cover before it scrolls instead. */
+private const val STRIP_MAX_HEIGHT_FRACTION = 0.8f
+
+/** Side margin for the strip's top two lines, which sit clear of the curve. */
+private val STRIP_UPPER_MARGIN = 12.dp
 
 /**
  * Nothing heard from the phone yet. What's missing decides what to offer: the
@@ -182,14 +222,38 @@ private fun WalkingMap(status: WatchStatus, map: WatchMap?, claims: WatchClaims?
             readyToClose = status.readyToClose,
             modifier = Modifier.fillMaxSize(),
         )
+        // The strip grows upward with the system font size: a hint that wraps
+        // to three lines pushes the figures up, never the button off the
+        // bottom. The hint and the buttons are inset to the square the circle
+        // holds, so whatever ends up lowest keeps its corners; the two lines
+        // above them sit where the circle is wider and take a narrower
+        // margin, or the figures wrap on a small watch. Past
+        // STRIP_MAX_HEIGHT_FRACTION of the screen it scrolls rather than
+        // climbing over the clock — from the bottom (reverseScrolling), so
+        // what scrolls out of sight is never the button.
+        val inset = roundSafeInset()
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
+                .heightIn(max = (LocalConfiguration.current.screenHeightDp * STRIP_MAX_HEIGHT_FRACTION).dp)
                 .background(Brush.verticalGradient(listOf(Color.Transparent, Scrim, Scrim)))
-                .padding(start = 28.dp, end = 28.dp, top = 14.dp, bottom = 18.dp),
+                .verticalScroll(rememberScrollState(), reverseScrolling = true)
+                .padding(top = 14.dp, bottom = inset),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            // OpenStreetMap's data, OpenFreeMap's tiles: the licence asks for
+            // this to be visible, and MapLibre's own button needs a corner.
+            // At the top of the strip, where the circle is widest — along the
+            // bottom edge it was the first thing the curve cut at a larger
+            // font size.
+            Text(
+                stringResource(R.string.watch_osm_attribution),
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.55f),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = STRIP_UPPER_MARGIN),
+            )
             Text(
                 stringResource(
                     R.string.watch_walk_figures,
@@ -198,29 +262,29 @@ private fun WalkingMap(status: WatchStatus, map: WatchMap?, claims: WatchClaims?
                 ),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = STRIP_UPPER_MARGIN),
             )
-            if (status.readyToClose) {
-                Spacer(Modifier.height(4.dp))
-                StopButton(link)
-            } else {
-                Text(
-                    walkingHint(status),
-                    style = MaterialTheme.typography.bodySmall,
-                    textAlign = TextAlign.Center,
-                    // A doubtful stretch is still being recorded, so only a phone
-                    // that isn't recording at all is an error.
-                    color = if (status.notRecording) MaterialTheme.colorScheme.error
-                    else Color.Unspecified,
-                )
-                if (status.canStopFromWatch) EndButton(link)
+            Column(
+                modifier = Modifier.padding(horizontal = inset),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                if (status.readyToClose) {
+                    Spacer(Modifier.height(4.dp))
+                    StopButton(link)
+                } else {
+                    Text(
+                        walkingHint(status),
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center,
+                        // A doubtful stretch is still being recorded, so only a phone
+                        // that isn't recording at all is an error.
+                        color = if (status.notRecording) MaterialTheme.colorScheme.error
+                        else Color.Unspecified,
+                    )
+                    if (status.canStopFromWatch) EndButton(link)
+                }
             }
-            // OpenStreetMap's data, OpenFreeMap's tiles: the licence asks for
-            // this to be visible, and MapLibre's own button needs a corner.
-            Text(
-                stringResource(R.string.watch_osm_attribution),
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.55f),
-            )
         }
     }
 }
@@ -278,6 +342,7 @@ private fun StopButton(link: PhoneLink) {
         Text(
             stringResource(R.string.watch_phone_unreachable),
             style = MaterialTheme.typography.bodySmall,
+            textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.error,
         )
     }
@@ -331,6 +396,7 @@ private fun EndButton(link: PhoneLink) {
         Text(
             stringResource(R.string.watch_phone_unreachable),
             style = MaterialTheme.typography.bodySmall,
+            textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.error,
         )
     }
@@ -369,10 +435,15 @@ private fun OpenOnPhoneButton(label: String, uri: String, link: PhoneLink) {
         label = { Text(label) },
     )
     when (result) {
-        true -> Text(stringResource(R.string.watch_check_phone), style = MaterialTheme.typography.bodySmall)
+        true -> Text(
+            stringResource(R.string.watch_check_phone),
+            style = MaterialTheme.typography.bodySmall,
+            textAlign = TextAlign.Center,
+        )
         false -> Text(
             stringResource(R.string.watch_phone_unreachable),
             style = MaterialTheme.typography.bodySmall,
+            textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.error,
         )
         null -> Unit
