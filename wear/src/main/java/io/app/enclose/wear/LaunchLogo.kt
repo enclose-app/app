@@ -1,23 +1,22 @@
 package io.app.enclose.wear
 
 import androidx.compose.animation.Crossfade
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.platform.LocalResources
 import kotlinx.coroutines.delay
 
 /**
@@ -31,12 +30,16 @@ import kotlinx.coroutines.delay
  * usually first started, review included — it is the background colour alone.
  * Holding that splash while the phone answered, as this used to, made it three
  * seconds of plain black, and it was rejected at review for the missing icon
- * twice: once with the system's icon turned off, once with it on.
+ * twice: once with the system's icon turned off, once with it on. The theme now
+ * sets `windowSplashScreenBehavior="icon_preferred"`, which asks for the icon
+ * on every start, not only the launcher's.
  *
  * So both are kept, and made to look like one. The system splash shows the
- * icon when it will; this draws the same drawable at the same size in the same
- * place, so from the launcher the two run together, and from anywhere else
- * this is where the icon appears.
+ * icon; this draws the same drawable over the whole screen, as the system
+ * does, and splash_icon centres a 48dp launcher icon in whatever it is given —
+ * so the two run together, and where a caller forces a plain splash anyway
+ * this is where the icon appears. It goes through a Canvas because
+ * painterResource can't draw a layer-list or an adaptive icon.
  *
  * It stays until [ready] — the first read of the phone's status. Until then
  * the link reads [LinkState.Waiting], which the screen would show as "open
@@ -67,26 +70,19 @@ fun LaunchLogo(ready: Boolean, onDone: () -> Unit, content: @Composable () -> Un
         if (showContent) {
             content()
         } else {
-            Box(
-                modifier = Modifier.fillMaxSize().background(Color.Black),
-                contentAlignment = Alignment.Center,
-            ) {
-                Image(
-                    painter = painterResource(R.drawable.splash_icon),
-                    contentDescription = null,
-                    modifier = Modifier.size(SYSTEM_SPLASH_ICON),
-                )
+            val res = LocalResources.current
+            val icon = remember(res) { res.getDrawable(R.drawable.splash_icon, null) }
+            Canvas(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+                if (icon != null) {
+                    drawIntoCanvas { canvas ->
+                        icon.setBounds(0, 0, size.width.toInt(), size.height.toInt())
+                        icon.draw(canvas.nativeCanvas)
+                    }
+                }
             }
         }
     }
 }
-
-/**
- * The size the system splash draws splash_icon at, so the hand-over from one
- * to the other doesn't jump. The mark spans 66 of the drawable's 108 units,
- * which makes it the 48dp the guidelines ask of the icon.
- */
-private val SYSTEM_SPLASH_ICON = 90.dp
 
 private const val MIN_SHOWN_MS = 800L
 private const val MAX_SHOWN_MS = 3_000L
